@@ -118,207 +118,231 @@ void GameRule::Initialize(BaseScene* scene, bool editorOnly) {
         checkpointRule_ = std::make_unique<CheckpointRule>();
     checkpointRule_->Initialize(scene);
 
-    // 接触イベントでは対象の EventType を優先し、汎用 TargetID は個別処理の後に使う。
-    eventSubscriptions_[0] = EventManager::GetInstance()->Subscribe([this](const PlayerHitEvent& event) {
-        engine::Object3D* whoHit = event.me;           // プレイヤー
-        engine::Object3D* objectHit = event.hitObject; // 当たった物
+    auto* events = EventManager::GetInstance();
+    eventSubscriptions_[0] = events->Subscribe(
+        [this](const PlayerHitEvent& event) { OnPlayerContact(event); });
+    eventSubscriptions_[1] = events->Subscribe(
+        [this](const DamageEvent& event) { OnDamage(event); });
+    eventSubscriptions_[2] = events->Subscribe(
+        [this](const PlayerDeathEvent& event) { OnPlayerDeath(event); });
+}
 
-        // 実戦以外の接触や参照のないイベントから、ワープや進行通知を起こさないようにします。
-        if (editorOnly_ || !whoHit || !objectHit || whoHit->IsEditorInternal() || objectHit->IsEditorInternal())
-            return;
+// 接触イベントでは個別のEventTypeを優先し、汎用TargetIDはその後に使う。
+void GameRule::OnPlayerContact(const PlayerHitEvent& event) {
+    engine::Object3D* whoHit = event.me;           // プレイヤー
+    engine::Object3D* objectHit = event.hitObject; // 当たった物
 
-        EventType type = objectHit->GetEventType();
+    // 実戦以外の接触や参照のないイベントから、ワープや進行通知を起こさないようにします。
+    if (editorOnly_ || !whoHit || !objectHit || whoHit->IsEditorInternal() || objectHit->IsEditorInternal())
+        return;
 
-        switch (type) {
-        // ワープ先は接触物の配置位置ではなく、TargetIDが指す出口から取得します。
-        case EventType::Warp: {
-            int targetId = objectHit->GetTargetId();
-            if (scene_ && targetId != -1) {
-                engine::Object3D* exitPoint = scene_->FindObjectByEventId(targetId);
-                if (exitPoint) {
-                    engine::Vector3 destPos = exitPoint->GetTransform()->translate;
-                    whoHit->SetTranslate(destPos);
-                    DebugConsole::GetInstance()->AddLog("Warped to ID: " + std::to_string(targetId));
-                }
+    EventType type = objectHit->GetEventType();
+
+    switch (type) {
+    // ワープ先は接触物の配置位置ではなく、TargetIDが指す出口から取得します。
+    case EventType::Warp: {
+        int targetId = objectHit->GetTargetId();
+        // ワープ先を探すには現行シーンと有効なTargetIDの両方が必要になる。
+        if (scene_ && targetId != -1) {
+            engine::Object3D* exitPoint = scene_->FindObjectByEventId(targetId);
+            // IDに対応する出口を取得できたときだけ、プレイヤーを移す。
+        if (exitPoint) {
+                engine::Vector3 destPos = exitPoint->GetTransform()->translate;
+                whoHit->SetTranslate(destPos);
+                DebugConsole::GetInstance()->AddLog("Warped to ID: " + std::to_string(targetId));
             }
-        } break;
+        }
+    } break;
 
-        case EventType::Damage:
-            ApplyDamage(whoHit, 10.0f);
+    case EventType::Damage:
+        ApplyDamage(whoHit, 10.0f);
+        break;
+
+    // 橋の落下はゲーム用シーンだけが扱うため、実体を確認してから開始します。
+    case EventType::MovieBridge:
+        // シーンを取得できない状態では、橋の演出を起動できない。
+        if (scene_) {
+            if (GamePlayScene* gps = dynamic_cast<GamePlayScene*>(scene_)) {
+                gps->StartBridgeDropMovie();
+            }
+        }
+        break;
+
+    case EventType::Checkpoint: {
+        // 接触元がPlayerなら、復帰地点として旗を有効にする。
+        if (Player* player = dynamic_cast<Player*>(whoHit)) {
+            checkpointRule_->Activate(player, objectHit);
+        }
+    } break;
+
+    // ゴールを受け付けるかどうかは、現在のシーンの進行条件に委ねます。
+    case EventType::Goal: {
+        // 進行を扱えるシーンにだけ、ゴールへの接触を通知する。
+        if (auto* progress = dynamic_cast<IStageProgressScene*>(scene_)) {
+            if (!progress->TryStartGoalFromContact(whoHit, objectHit))
+                break;
+        }
+    } break;
+
+    case EventType::StarCoin: {
+        // 上昇中の再接触で取得アニメーションと粒子を繰り返し開始しない。
+        if (!objectHit->GetIsVisible() || objectHit->IsCollecting())
             break;
+        const int coinIdx = objectHit->GetTargetId();
 
-        // 橋の落下はゲーム用シーンだけが扱うため、実体を確認してから開始します。
-        case EventType::MovieBridge:
-            if (scene_) {
-                if (GamePlayScene* gps = dynamic_cast<GamePlayScene*>(scene_)) {
-                    gps->StartBridgeDropMovie();
-                }
-            }
-            break;
+        // 取得を扱えるシーンで、スターの記録と表示を更新する。
+        if (auto* progress = dynamic_cast<IStageProgressScene*>(scene_)) {
+            progress->CollectStarCoinFromContact(coinIdx, objectHit->GetWorldPosition());
+            objectHit->StartCollectionAnimation();
+            objectHit->SetCollisionAttribute(0);
+            objectHit->SetCollisionMask(0);
+            objectHit->SetGpuParticleName("");
+            const char* burst = StarCoinPresentation::IsSilver(*objectHit)
+                ? StarCoinPresentation::kSilverGet : "shared/star_sparkleGet";
+            GpuParticleManager::GetInstance()->Emit(burst, objectHit->GetWorldPosition());
+        }
+    } break;
 
-        case EventType::Checkpoint: {
-            if (Player* player = dynamic_cast<Player*>(whoHit)) {
-                checkpointRule_->Activate(player, objectHit);
-            }
-        } break;
-
-        // ゴールを受け付けるかどうかは、現在のシーンの進行条件に委ねます。
-        case EventType::Goal: {
-            if (auto* progress = dynamic_cast<IStageProgressScene*>(scene_)) {
-                if (!progress->TryStartGoalFromContact(whoHit, objectHit))
-                    break;
-            }
-        } break;
-
-        case EventType::StarCoin: {
-            // 上昇中の再接触で取得アニメーションと粒子を繰り返し開始しない。
-            if (!objectHit->GetIsVisible() || objectHit->IsCollecting())
-                break;
-            const int coinIdx = objectHit->GetTargetId();
-
-            if (auto* progress = dynamic_cast<IStageProgressScene*>(scene_)) {
-                progress->CollectStarCoinFromContact(coinIdx, objectHit->GetWorldPosition());
-                objectHit->StartCollectionAnimation();
-                objectHit->SetCollisionAttribute(0);
-                objectHit->SetCollisionMask(0);
-                objectHit->SetGpuParticleName("");
-                const char* burst = StarCoinPresentation::IsSilver(*objectHit)
-                    ? StarCoinPresentation::kSilverGet : "shared/star_sparkleGet";
-                GpuParticleManager::GetInstance()->Emit(burst, objectHit->GetWorldPosition());
-            }
-        } break;
-
-        case EventType::None:
-        default:
-            // 敵のTargetIDは接触時の汎用イベントではなく、撃破完了通知として使います。
-            // プレイヤーの攻撃が当たっただけでボス部屋の完了イベントを発火させません。
-            if (dynamic_cast<BaseEnemy*>(objectHit)) {
-                break;
-            }
-            // マグマ連動床のTarget IDは駆動元の参照であり、接触スイッチではない。
-            // 着地で噴出口を反転すると、乗った瞬間に上昇が停止してしまう。
-            if (objectHit->GetGimmickType() == "MovingFloor" && objectHit->GetParameters() &&
-                objectHit->GetParameters()->actionMode == 5) {
-                break;
-            }
-            // 回転棘のTarget IDは追従する床の参照であり、接触イベントではない。
-            if (objectHit->GetGimmickType() == "RotatingFloor" && objectHit->GetTargetId() >= 0) {
-                break;
-            }
-            int tId = objectHit->GetTargetId();
-            if (tId != -1 && scene_) {
-                scene_->TriggerEvent(tId);
-            }
+    case EventType::None:
+    default:
+        // 敵のTargetIDは接触時の汎用イベントではなく、撃破完了通知として使います。
+        // プレイヤーの攻撃が当たっただけでボス部屋の完了イベントを発火させません。
+        if (dynamic_cast<BaseEnemy*>(objectHit)) {
             break;
         }
-
-    });
-
-    // HP 減算が成立したときだけ、打撃演出・状態異常・ノックバックへ進む。
-    eventSubscriptions_[1] = EventManager::GetInstance()->Subscribe([this](const DamageEvent& event) {
-        // 実戦とエディター内部の対象を分け、異なる区画をまたぐ攻撃は無視します。
-        if (!event.target || event.target->IsEditorInternal() != editorOnly_ ||
-            (event.attacker && event.attacker->IsEditorInternal() != event.target->IsEditorInternal()))
-            return;
-        Player* playerTarget = dynamic_cast<Player*>(event.target);
-        if (playerTarget && playerTarget->IsCinematicLocked()) {
-            return;
+        // マグマ連動床のTarget IDは駆動元の参照であり、接触スイッチではない。
+        // 着地で噴出口を反転すると、乗った瞬間に上昇が停止してしまう。
+        if (objectHit->GetGimmickType() == "MovingFloor" && objectHit->GetParameters() &&
+            objectHit->GetParameters()->actionMode == 5) {
+            break;
         }
-        const DamageType damageType = ResolveDamageType(event);
-        const bool isElectricPlayerHit = playerTarget && damageType == DamageType::Electric;
-
-        float finalDamage = event.damageAmount;
-        if (event.attacker && event.attacker->GetParameters().has_value()) {
-            finalDamage *= (std::max)(0.0f, event.attacker->GetParameters()->attackPower);
+        // 回転棘のTarget IDは追従する床の参照であり、接触イベントではない。
+        if (objectHit->GetGimmickType() == "RotatingFloor" && objectHit->GetTargetId() >= 0) {
+            break;
         }
-
-        // 即死指定は通常倍率の計算後に適用し、攻撃力0でもHPを確実に0へ落とします。
-        if (event.lethalPlayerDamage && playerTarget)
-            finalDamage = (std::max)(0.0f, playerTarget->GetHp());
-
-        // ピンクガードは正面の通常攻撃だけを軽減する。即死・強制攻撃は対象外。
-        const bool guarded = playerTarget && event.attacker && !event.lethalPlayerDamage &&
-                             !event.bypassPlayerInvincibility &&
-                             playerTarget->CanGuardAttackFrom(event.attacker->GetWorldPosition());
-        if (guarded) {
-            finalDamage *= kPinkGuardDamageRate;
+        int tId = objectHit->GetTargetId();
+        // 汎用イベントを指すIDとシーンが両方揃った場合だけ、対象イベントを起動する。
+        if (tId != -1 && scene_) {
+            scene_->TriggerEvent(tId);
         }
+        break;
+    }
 
-        // 減算前のHPを記録し、無敵などで不成立なら演出や状態異常を開始しません。
-        const auto& before = event.target->GetParameters();
-        const float previousHp = before ? before->hp : 0.0f;
-        const bool damageApplied = ApplyDamage(event.target, finalDamage, event.bypassPlayerInvincibility);
-        if (!damageApplied) {
-            return;
-        }
+}
 
-        if (guarded) {
-            playerTarget->NotifyGuardedHit(event.attacker->GetWorldPosition());
-        } else {
-            HitEffectDirector::SpawnDamageEventHit(event.target, event.attacker, event.knockbackVelocity, damageType);
-        }
+// HP減算が成立した時点で、打撃演出・状態異常・ノックバックに進む。
+void GameRule::OnDamage(const DamageEvent& event) {
+    // 実戦とエディター内部の対象を分け、異なる区画をまたぐ攻撃は無視します。
+    if (!event.target || event.target->IsEditorInternal() != editorOnly_ ||
+        (event.attacker && event.attacker->IsEditorInternal() != event.target->IsEditorInternal()))
+        return;
+    Player* playerTarget = dynamic_cast<Player*>(event.target);
+    // 演出中に操作が固定されたプレイヤーには、被弾処理を開始しない。
+    if (playerTarget && playerTarget->IsCinematicLocked()) {
+        return;
+    }
+    const DamageType damageType = ResolveDamageType(event);
+    const bool isElectricPlayerHit = playerTarget && damageType == DamageType::Electric;
 
-        // 敵の被弾反応は、減算処理を通ったうえで実際にHPが下がったときだけ再生します。
-        const auto& after = event.target->GetParameters();
-        const bool hpDecreased = after && after->hp < previousHp;
-        if (auto* enemyTarget = dynamic_cast<BaseEnemy*>(event.target); enemyTarget && hpDecreased) {
-            enemyTarget->PlayDamageReaction(event.attacker, event.knockbackVelocity, event.damageAmount);
-        }
+    float finalDamage = event.damageAmount;
+    // 攻撃者のパラメーターがある場合は、その攻撃力を非負の倍率として掛ける。
+    if (event.attacker && event.attacker->GetParameters().has_value()) {
+        finalDamage *= (std::max)(0.0f, event.attacker->GetParameters()->attackPower);
+    }
 
-        // 継続ダメージには攻撃者の攻撃力を倍率として渡し、この一撃の最終ダメージは持ち越さない。
-        if (event.statusEffect.IsValid()) {
-            ApplyStatusEffect(event.target, event.statusEffect,
-                              event.attacker && event.attacker->GetParameters().has_value()
-                                  ? (std::max)(0.0f, event.attacker->GetParameters()->attackPower)
-                                  : 1.0f);
-        }
+    // 即死指定は通常倍率の計算後に適用し、攻撃力0でもHPを確実に0へ落とします。
+    if (event.lethalPlayerDamage && playerTarget)
+        finalDamage = (std::max)(0.0f, playerTarget->GetHp());
 
-        // 感電は専用の反応へ任せ、通常の被弾反応と二重に開始しないようにします。
-        if (isElectricPlayerHit) {
-            playerTarget->StartElectricShockFeedback(0.78f, 1.0f);
-        } else if (playerTarget && !guarded) {
-            const bool hasKnockback = std::abs(event.knockbackVelocity.x) > 0.001f ||
-                                      std::abs(event.knockbackVelocity.y) > 0.001f ||
-                                      std::abs(event.knockbackVelocity.z) > 0.001f;
-            if (hasKnockback || damageType != DamageType::Physical) {
-                engine::Vector3 reactionDirection = event.knockbackVelocity;
+    // ピンクガードは正面の通常攻撃だけを軽減する。即死・強制攻撃は対象外。
+    const bool guarded = playerTarget && event.attacker && !event.lethalPlayerDamage &&
+                         !event.bypassPlayerInvincibility &&
+                         playerTarget->CanGuardAttackFrom(event.attacker->GetWorldPosition());
+    // ガード成立時は、この一撃のHP減少量を抑える。
+    if (guarded) {
+        finalDamage *= kPinkGuardDamageRate;
+    }
+
+    // 減算前のHPを記録し、無敵などで不成立なら演出や状態異常を開始しません。
+    const auto& before = event.target->GetParameters();
+    const float previousHp = before ? before->hp : 0.0f;
+    const bool damageApplied = ApplyDamage(event.target, finalDamage, event.bypassPlayerInvincibility);
+    // 無敵などで共通ダメージ処理に通らなければ、反応や状態異常を通知しない。
+    if (!damageApplied) {
+        return;
+    }
+
+    // ガード成立時は、通常の被弾演出に代わる反応を知らせる。
+    if (guarded) {
+        playerTarget->NotifyGuardedHit(event.attacker->GetWorldPosition());
+    } else {
+        HitEffectDirector::SpawnDamageEventHit(event.target, event.attacker, event.knockbackVelocity, damageType);
+    }
+
+    // 敵の被弾反応は、減算処理を通ったうえで実際にHPが下がったときだけ再生します。
+    const auto& after = event.target->GetParameters();
+    const bool hpDecreased = after && after->hp < previousHp;
+    // 対象が敵で、HPが減ったことを確認できたときだけ、敵自身の被弾モーションを再生する。
+    if (auto* enemyTarget = dynamic_cast<BaseEnemy*>(event.target); enemyTarget && hpDecreased) {
+        enemyTarget->PlayDamageReaction(event.attacker, event.knockbackVelocity, event.damageAmount);
+    }
+
+    // 継続ダメージには攻撃者の攻撃力を倍率として渡し、この一撃の最終ダメージは持ち越さない。
+    if (event.statusEffect.IsValid()) {
+        ApplyStatusEffect(event.target, event.statusEffect,
+                          event.attacker && event.attacker->GetParameters().has_value()
+                              ? (std::max)(0.0f, event.attacker->GetParameters()->attackPower)
+                              : 1.0f);
+    }
+
+    // 感電は専用の反応へ任せ、通常の被弾反応と二重に開始しないようにします。
+    if (isElectricPlayerHit) {
+        playerTarget->StartElectricShockFeedback(0.78f, 1.0f);
+    // 感電以外の命中でガードしていないプレイヤーには、通常の被弾反応を検討する。
+    } else if (playerTarget && !guarded) {
+        const bool hasKnockback = std::abs(event.knockbackVelocity.x) > 0.001f ||
+                                  std::abs(event.knockbackVelocity.y) > 0.001f ||
+                                  std::abs(event.knockbackVelocity.z) > 0.001f;
+        // 吹き飛ばしが指定されたか物理以外の攻撃なら、被弾反応に渡す向きを作る。
+        if (hasKnockback || damageType != DamageType::Physical) {
+            engine::Vector3 reactionDirection = event.knockbackVelocity;
+            reactionDirection.y = 0.0f;
+            // 水平方向がほぼゼロで攻撃者が存在する場合は、攻撃者から被弾者への方向を使う。
+            if (engine::Math::Length(reactionDirection) <= 0.001f && event.attacker) {
+                reactionDirection = event.target->GetWorldPosition() - event.attacker->GetWorldPosition();
                 reactionDirection.y = 0.0f;
-                if (engine::Math::Length(reactionDirection) <= 0.001f && event.attacker) {
-                    reactionDirection = event.target->GetWorldPosition() - event.attacker->GetWorldPosition();
-                    reactionDirection.y = 0.0f;
-                }
-                playerTarget->StartDamageFeedback(reactionDirection, (std::max)(0.0f, event.invincibilityDuration));
             }
+            playerTarget->StartDamageFeedback(reactionDirection, (std::max)(0.0f, event.invincibilityDuration));
         }
+    }
 
-        // ノックバックや感電への遷移で、先にムチなどの表示を解除させる。
-        if (playerTarget && hpDecreased && !guarded) {
-            playerTarget->StartHurtFace();
+    // ノックバックや感電への遷移で、先にムチなどの表示を解除させる。
+    if (playerTarget && hpDecreased && !guarded) {
+        playerTarget->StartHurtFace();
+    }
+
+    // ノックバック（吹き飛ばし）があれば適用
+    if (!isElectricPlayerHit &&
+        (std::abs(event.knockbackVelocity.x) > 0.001f || std::abs(event.knockbackVelocity.y) > 0.001f ||
+         std::abs(event.knockbackVelocity.z) > 0.001f)) {
+        // 対象がノックバックを扱えるCharacterなら、ガード時の倍率も反映して吹き飛ばす。
+        if (Character* character = dynamic_cast<Character*>(event.target)) {
+            // ガード成功では押し出しも弱める。感電時の移動制御は上で始めた専用反応に任せる。
+            const float knockbackRate = guarded ? kPinkGuardKnockbackRate : 1.0f;
+            character->SetVelocity(event.knockbackVelocity * knockbackRate);
         }
+    }
+}
 
-        // ノックバック（吹き飛ばし）があれば適用
-        if (!isElectricPlayerHit &&
-            (std::abs(event.knockbackVelocity.x) > 0.001f || std::abs(event.knockbackVelocity.y) > 0.001f ||
-             std::abs(event.knockbackVelocity.z) > 0.001f)) {
-            if (Character* character = dynamic_cast<Character*>(event.target)) {
-                // ガード成功では押し出しも弱める。感電時の移動制御は上で始めた専用反応に任せる。
-                const float knockbackRate = guarded ? kPinkGuardKnockbackRate : 1.0f;
-                character->SetVelocity(event.knockbackVelocity * knockbackRate);
-            }
-        }
-    });
+// 実戦での死亡だけを進行中のセーブの残機に反映する。
+void GameRule::OnPlayerDeath(const PlayerDeathEvent& event) {
+    // 隔離プレビューでHPを0にしても、実セーブの残機は消費しません。
+    if (!event.player || event.player->IsEditorInternal())
+        return;
+    GameDataManager::GetInstance()->SubtractLife();
+    int lives = GameDataManager::GetInstance()->GetLives();
 
-    // プレイヤー死亡時の処理
-    // ========================================================
-    eventSubscriptions_[2] = EventManager::GetInstance()->Subscribe([this](const PlayerDeathEvent& event) {
-        // 隔離プレビューでHPを0にしても、実セーブの残機は消費しません。
-        if (!event.player || event.player->IsEditorInternal())
-            return;
-        GameDataManager::GetInstance()->SubtractLife();
-        int lives = GameDataManager::GetInstance()->GetLives();
-
-        DebugConsole::GetInstance()->AddLog("Player Died! Remaining Lives: " + std::to_string(lives));
-    });
+    DebugConsole::GetInstance()->AddLog("Player Died! Remaining Lives: " + std::to_string(lives));
 }
 
 // チェックポイント演出と継続効果を進め、死亡・消失した対象を解除します。

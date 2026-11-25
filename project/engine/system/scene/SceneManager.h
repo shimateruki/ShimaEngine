@@ -179,6 +179,9 @@ private:
     /// <summary>準備済みシーンを現在シーンへ差し替える。</summary>
     void SwapToPreparedScene();
 
+    // 旧シーンを終了した後に、渡された所有権を現在シーンへ移す。
+    void ReplaceCurrentScene(std::unique_ptr<BaseScene>&& incomingScene);
+
     /// <summary>ロード画面を経ない次シーンを現在シーンへ差し替える。</summary>
     void SwapToDirectNextScene();
 

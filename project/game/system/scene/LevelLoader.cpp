@@ -40,6 +40,39 @@
 using json = nlohmann::json;
 
 namespace {
+
+// 配置に書かれた項目だけを更新し、回転の基準はクォータニオンを優先する。
+Transform ReadLayoutTransform(const json& layout, Transform transform) {
+    // 位置の指定がない配置では、生成時に設定されたローカル座標を保持する。
+    if (layout.contains("position")) {
+        const auto& position = layout["position"];
+        transform.translate = {position[0], position[1], position[2]};
+    }
+
+    const bool hasQuaternion = layout.contains("quaternion");
+    // クォータニオンがある場合は、読み込み直後の行列をその姿勢から計算する。
+    if (hasQuaternion) {
+        const auto& rotation = layout["quaternion"];
+        transform.quaternion = {rotation[0], rotation[1], rotation[2], rotation[3]};
+        transform.isQuaternionMaster = true;
+    }
+
+    // オイラー角はインスペクターにも使う。旧形式でこの項目だけなら角度を行列計算の基準にする。
+    if (layout.contains("rotation")) {
+        const auto& rotation = layout["rotation"];
+        transform.rotate = {rotation[0], rotation[1], rotation[2]};
+        transform.isQuaternionMaster = hasQuaternion;
+    }
+
+    // 拡縮の指定がない配置では、モデルを生成したときの大きさを保つ。
+    if (layout.contains("scale")) {
+        const auto& scale = layout["scale"];
+        transform.scale = {scale[0], scale[1], scale[2]};
+    }
+
+    return transform;
+}
+
 constexpr int kSlimeSoftMaterialType = 25;
 constexpr int kPrismCrystalMaterialType = 27;
 
@@ -741,46 +774,8 @@ bool LevelLoader::LoadSingleJson(BaseScene* scene, const std::string& filename, 
                     }
                 }
 
-                // 4. Transform
-                Transform transformValue = *targetObject->GetTransform();
-                Transform* transform = &transformValue;
-
-                if (objData.contains("position")) {
-                    transform->translate.x = objData["position"][0];
-                    transform->translate.y = objData["position"][1];
-                    transform->translate.z = objData["position"][2];
-                }
-
-                if (objData.contains("quaternion")) {
-                    transform->quaternion.x = objData["quaternion"][0];
-                    transform->quaternion.y = objData["quaternion"][1];
-                    transform->quaternion.z = objData["quaternion"][2];
-                    transform->quaternion.w = objData["quaternion"][3];
-                    transform->isQuaternionMaster = true; // クォータニオン優先モード
-
-                    // インスペクター表示用などにオイラー角も読んでおく
-                    if (objData.contains("rotation")) {
-                        transform->rotate.x = objData["rotation"][0];
-                        transform->rotate.y = objData["rotation"][1];
-                        transform->rotate.z = objData["rotation"][2];
-                    }
-                }
-
-                // 古いセーブデータ（オイラー角しかない場合）の互換性対応
-                else if (objData.contains("rotation")) {
-                    transform->rotate.x = objData["rotation"][0];
-                    transform->rotate.y = objData["rotation"][1];
-                    transform->rotate.z = objData["rotation"][2];
-                    transform->isQuaternionMaster = false; // UpdateMatrix時にクォータニオンを作らせる
-                }
-
-                if (objData.contains("scale")) {
-                    transform->scale.x = objData["scale"][0];
-                    transform->scale.y = objData["scale"][1];
-                    transform->scale.z = objData["scale"][2];
-                }
-
-                targetObject->SetLocalTransform(transformValue);
+                // JSONに指定された姿勢だけを反映し、未指定項目は生成時の初期値を使う。
+                targetObject->SetLocalTransform(ReadLayoutTransform(objData, *targetObject->GetTransform()));
 
                 // ロード直後に行列更新
                 targetObject->UpdateLocalMatrix();

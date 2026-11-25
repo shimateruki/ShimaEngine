@@ -512,7 +512,7 @@ void GamePlayScene::Initialize() {
 void GamePlayScene::BeginLoadingInitialize() {
     // 再入場時にロード進捗と開始演出を両方戻します。演出側を残すと、
     // 新しい配置ができる前に前ステージの門・カメラを参照してしまいます。
-    loadingInitializePhase_ = 0;
+    loadingInitializePhase_ = LoadingPhase::kSelectStage;
     loadingInitializeItemIndex_ = 0;
     loadingInitializeCompletedUnits_ = 0;
     loadingStageObjectsStarted_ = false;
@@ -528,7 +528,7 @@ void GamePlayScene::BeginLoadingInitialize() {
     stageEntryPresentationRetryTimer_ = 0.0f;
     stageEntryGate_ = nullptr;
 
-    // 固定フェーズの完了通知13件と、実際に1件ずつ処理する素材数を足します。
+    // 固定フェーズの完了通知14件と、実際に1件ずつ処理する素材数を足します。
     // フェーズ追加時はInitializeLoadingStepのcompleteUnitとの対応も更新が必要です。
     loadingInitializeTotalUnits_ =
         14 + std::size(kGameplayGpuParticlePresetsToPreload) + std::size(kGameplayMeshEffectsToPreload) +
@@ -544,47 +544,48 @@ bool GamePlayScene::InitializeLoadingStep() {
     for (;;) {
         switch (loadingInitializePhase_) {
         // ステージの選択と描画基盤を先に確定します。後続のObject生成はこれらを借用します。
-        case 0:
+        case LoadingPhase::kSelectStage:
+            // エディターから開いたシーンを通常の選択より優先する。
             if (HasSceneAssetContext()) {
                 StageManager::GetInstance()->SetCurrentStageById(GetSceneLoadContext().sceneAssetId);
             }
 
             LoadGoalPresentationTuning();
-            ++loadingInitializePhase_;
+            loadingInitializePhase_ = LoadingPhase::kCoreSystems;
             completeUnit();
             return false;
 
-        case 1:
+        case LoadingPhase::kCoreSystems:
             // 選択したステージの設定から、後続の描画とオブジェクトに必要なシステムを準備する。
             InitializeCoreSystems(StageManager::GetInstance()->GetCurrentStage());
-            ++loadingInitializePhase_;
+            loadingInitializePhase_ = LoadingPhase::kSceneParticles;
             completeUnit();
             return false;
 
-        case 2:
+        case LoadingPhase::kSceneParticles:
             // 配置の生成前にシーンの粒子システムを作り、演出が同じ生成先を参照できるようにする。
             InitializeSceneParticles();
 
-            ++loadingInitializePhase_;
+            loadingInitializePhase_ = LoadingPhase::kObjectSystems;
             completeUnit();
             return false;
 
-        case 3:
+        case LoadingPhase::kObjectSystems:
             // プレイヤーやカメラが使うオブジェクト管理を、ステージ配置の復元より先に用意する。
             InitializeGameplayObjectSystems();
-            ++loadingInitializePhase_;
+            loadingInitializePhase_ = LoadingPhase::kGpuParticleRuntime;
             completeUnit();
             return false;
 
-        case 4:
+        case LoadingPhase::kGpuParticleRuntime:
             // 管理器本体を初期化してから、各素材を1件ずつ登録します。
             InitializeGameplayParticleRuntime();
-            ++loadingInitializePhase_;
+            loadingInitializePhase_ = LoadingPhase::kGpuParticlePresets;
             loadingInitializeItemIndex_ = 0;
             completeUnit();
             return false;
 
-        case 5:
+        case LoadingPhase::kGpuParticlePresets:
             // GPU粒子は通常のプリセットを1件ずつ準備し、リストが尽きたらマグマの技設定からも取り込む。
             if (loadingInitializeItemIndex_ < std::size(kGameplayGpuParticlePresetsToPreload)) {
                 GpuParticleManager::GetInstance()->PreloadPresetSystem(
@@ -593,13 +594,13 @@ bool GamePlayScene::InitializeLoadingStep() {
                 return false;
             }
 
-            ++loadingInitializePhase_;
+            loadingInitializePhase_ = LoadingPhase::kMeshEffects;
             loadingInitializeItemIndex_ = 0;
             GpuParticleManager::GetInstance()->PreloadPresetSystems(LoadMagmaAttackPresets());
             completeUnit();
             return false;
 
-        case 6:
+        case LoadingPhase::kMeshEffects:
             // メッシュエフェクトを1件ずつ先読みする。リスト終了時は作業件数を増やさず次の段階へ渡す。
             if (loadingInitializeItemIndex_ < std::size(kGameplayMeshEffectsToPreload)) {
                 MeshEffectManager::GetInstance()->PreloadEffect(
@@ -608,19 +609,19 @@ bool GamePlayScene::InitializeLoadingStep() {
                 return false;
             }
 
-            ++loadingInitializePhase_;
+            loadingInitializePhase_ = LoadingPhase::kDebrisRuntime;
             loadingInitializeItemIndex_ = 0;
             continue;
 
-        case 7:
+        case LoadingPhase::kDebrisRuntime:
             // 次の段階で破片の素材を先読みできるよう、先に破片の生成先を初期化する。
             InitializeGameplayDebrisRuntime();
-            ++loadingInitializePhase_;
+            loadingInitializePhase_ = LoadingPhase::kDebrisPresets;
             loadingInitializeItemIndex_ = 0;
             completeUnit();
             return false;
 
-        case 8:
+        case LoadingPhase::kDebrisPresets:
             // 破片のプリセットはウォームアップを1件ずつ進め、ロード画面の描画機会を保つ。
             if (loadingInitializeItemIndex_ < std::size(kGameplayDebrisPresetsToPreload)) {
                 DebrisEffectManager::GetInstance()->PrewarmPreset(
@@ -629,11 +630,11 @@ bool GamePlayScene::InitializeLoadingStep() {
                 return false;
             }
 
-            ++loadingInitializePhase_;
+            loadingInitializePhase_ = LoadingPhase::kVfxSequences;
             loadingInitializeItemIndex_ = 0;
             continue;
 
-        case 9:
+        case LoadingPhase::kVfxSequences:
             // VFXシーケンスを1件ずつロードし、発動時より前に参照素材を読めるようにする。
             if (loadingInitializeItemIndex_ < std::size(GameplayVfxSequencesToPreload())) {
                 VfxSequencer sequence;
@@ -642,18 +643,18 @@ bool GamePlayScene::InitializeLoadingStep() {
                 return false;
             }
 
-            ++loadingInitializePhase_;
+            loadingInitializePhase_ = LoadingPhase::kSkybox;
             loadingInitializeItemIndex_ = 0;
             continue;
 
-        case 10:
+        case LoadingPhase::kSkybox:
             // Skyboxと実配置は先読みが済んでから作ります。
             InitializeGameplaySkybox();
-            ++loadingInitializePhase_;
+            loadingInitializePhase_ = LoadingPhase::kStageObjects;
             completeUnit();
             return false;
 
-        case 11:
+        case LoadingPhase::kStageObjects:
             // 参照元となるランタイムと演出を準備してから、ステージの実オブジェクトを生成します。
             if (!loadingStageObjectsStarted_) {
                 levelLoader_ = std::make_unique<LevelLoader>();
@@ -670,37 +671,38 @@ bool GamePlayScene::InitializeLoadingStep() {
             // 配置をすべて復元してから、王冠とスターコインに取得状況を反映する。
             ApplyGoalCrownState();
             ApplyStageStarCoinState();
-            ++loadingInitializePhase_;
+            loadingInitializePhase_ = LoadingPhase::kSpritesAndView;
             completeUnit();
             return false;
 
-        case 12:
+        case LoadingPhase::kSpritesAndView:
             // Objectの生成完了後にSpriteとHUDを作ることで、Player参照とSceneの表示値を使えます。
             LoadCurrentStageSpritesAndView(StageManager::GetInstance()->GetCurrentStage());
-            ++loadingInitializePhase_;
+            loadingInitializePhase_ = LoadingPhase::kHud;
             completeUnit();
             return false;
 
-        case 13:
+        case LoadingPhase::kHud:
             // Spriteが読み込まれた後で、HUDの更新先を配置済みの部品に結び付ける。
             InitializeGameplayHUD();
-            ++loadingInitializePhase_;
+            loadingInitializePhase_ = LoadingPhase::kOverlays;
             completeUnit();
             return false;
 
-        case 14:
+        case LoadingPhase::kOverlays:
             // HUDに続いて、ポーズや操作ガイドのオーバーレイを作る。
             InitializeGameplayOverlays();
-            ++loadingInitializePhase_;
+            loadingInitializePhase_ = LoadingPhase::kSceneController;
             completeUnit();
             return false;
 
-        case 15: {
+        case LoadingPhase::kSceneController: {
             // Scene Asset側の任意Controllerが未登録なら、操作不能を避けるためDEFAULTへ戻します。
             const std::string controllerName =
                 GetSceneLoadContext().controllerName.empty() ? "DEFAULT" : GetSceneLoadContext().controllerName;
             sceneController_ = SceneControllerFactory::GetInstance()->Create(controllerName);
 
+            // 未登録の名前では標準操作を使えるようにする。
             if (!sceneController_) {
                 LOG("Scene Controller not registered: " + controllerName + ". Falling back to DEFAULT.");
                 sceneController_ = SceneControllerFactory::GetInstance()->Create("DEFAULT");
@@ -711,20 +713,20 @@ bool GamePlayScene::InitializeLoadingStep() {
                 sceneController_->OnInitialize(*this);
             }
 
-            ++loadingInitializePhase_;
+            loadingInitializePhase_ = LoadingPhase::kCinematicPreviews;
             completeUnit();
             return false;
         }
 
-        case 16:
+        case LoadingPhase::kCinematicPreviews:
             // 最後に演出タイムラインを接続し、完了をLoadingSceneへ返します。
             InitializeGoalCinematicTimeline();
             InitializeDebugAnimationPreview();
-            ++loadingInitializePhase_;
+            loadingInitializePhase_ = LoadingPhase::kComplete;
             completeUnit();
             return true;
 
-        default:
+        case LoadingPhase::kComplete:
             return true;
         }
     }
@@ -737,7 +739,7 @@ float GamePlayScene::GetLoadingInitializeProgress() const {
     }
 
     // 分割生成中のステージ配置だけは、1作業単位の途中経過として合算する。
-    const float stageProgress = loadingInitializePhase_ == 11 && loadingStageObjectsStarted_ && levelLoader_
+    const float stageProgress = loadingInitializePhase_ == LoadingPhase::kStageObjects && loadingStageObjectsStarted_ && levelLoader_
         ? levelLoader_->GetObjectLayoutLoadProgress()
         : 0.0f;
     return std::clamp((static_cast<float>(loadingInitializeCompletedUnits_) +
@@ -827,39 +829,6 @@ void GamePlayScene::InitializeSceneParticles() {
     LightEditor::GetInstance()->SetObject3DCommon(GetObject3DCommon());
 }
 
-void GamePlayScene::InitializeGameplaySystems() {
-    // ゲーム中に使う演出を事前生成し、初回攻撃時の読み込み待ちを抑える。
-    InitializeGameplayObjectSystems();
-    InitializeGameplayParticleRuntime();
-
-    // GPU 粒子は発生用のシステムを作ってから、技の個別設定も含めて登録する。
-    for (const char* presetName : kGameplayGpuParticlePresetsToPreload) {
-        GpuParticleManager::GetInstance()->PreloadPresetSystem(presetName);
-    }
-
-    GpuParticleManager::GetInstance()->PreloadPresetSystems(LoadMagmaAttackPresets());
-
-    // メッシュ演出は定義を先に読んでおき、初回発生時の処理を軽くする。
-    for (const char* path : kGameplayMeshEffectsToPreload) {
-        MeshEffectManager::GetInstance()->PreloadEffect(path);
-    }
-
-    // 破片だけは専用の管理器へ渡し、衝突で使うプリセットを予熱する。
-    InitializeGameplayDebrisRuntime();
-
-    for (const char* presetName : kGameplayDebrisPresetsToPreload) {
-        DebrisEffectManager::GetInstance()->PrewarmPreset(presetName);
-    }
-
-    // 単体の素材を準備した後、複数素材を時系列で発生させるシーケンスも読み込む。
-    for (const auto& sequenceName : GameplayVfxSequencesToPreload()) {
-        VfxSequencer sequence;
-        sequence.Load(sequenceName);
-    }
-
-    InitializeGameplaySkybox();
-}
-
 void GamePlayScene::InitializeGameplayObjectSystems() {
     // オブジェクト管理・ロックオン・弾管理が同じシーンの入力と描画器を参照する。
     objectManager_ = std::make_unique<ObjectManager>();
@@ -928,22 +897,6 @@ void GamePlayScene::ApplyGameplayRenderState(const StageData& currentStage) {
     if (skybox_) {
         skybox_->SetTextureHandle(skyboxTextureHandle_);
     }
-}
-
-void GamePlayScene::LoadCurrentStageContent(const StageData& currentStage) {
-    // 3D 配置を先に読み、プレイヤー参照を必要とする HUD と Overlay を後で作る。
-    LoadCurrentStageObjects(currentStage);
-    LoadCurrentStageSpritesAndView(currentStage);
-    InitializeGameplayHUD();
-    InitializeGameplayOverlays();
-}
-
-void GamePlayScene::LoadCurrentStageObjects(const StageData& currentStage) {
-    // 配置直後に進行記録を反映し、回収済みの王冠とスターを銀色へ切り替える。
-    levelLoader_ = std::make_unique<LevelLoader>();
-    levelLoader_->LoadObjectLayout(this, currentStage.levelPath);
-    ApplyGoalCrownState();
-    ApplyStageStarCoinState();
 }
 
 void GamePlayScene::LoadCurrentStageSpritesAndView(const StageData& currentStage) {

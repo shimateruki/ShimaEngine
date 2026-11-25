@@ -811,9 +811,6 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     /// <returns>描画基盤の準備が完了した段階でtrue。</returns>
     void InitializeSceneParticles();
 
-    /// <summary>ゲームロジック用のマネージャーとシーン内サービスを用意する。</summary>
-    void InitializeGameplaySystems();
-
     /// <summary>ObjectManagerとステージObjectの実行基盤を用意する。</summary>
     void InitializeGameplayObjectSystems();
 
@@ -829,12 +826,6 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     /// <summary>ステージ設定に応じた描画状態を適用します。</summary>
     /// <param name="currentStage">描画設定の元になるステージ。</param>
     void ApplyGameplayRenderState(const StageData& currentStage);
-
-    /// <summary>ステージのObjectとSpriteを読み込み、表示用の状態を整える。</summary>
-    void LoadCurrentStageContent(const StageData& currentStage);
-
-    /// <summary>現在のステージに置かれた3Dオブジェクトを読み込む。</summary>
-    void LoadCurrentStageObjects(const StageData& currentStage);
 
     /// <summary>Sprite配置とステージの視点設定を読み込む。</summary>
     void LoadCurrentStageSpritesAndView(const StageData& currentStage);
@@ -915,7 +906,28 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
 #endif
 
     // ロード画面を描きながら進める段階初期化の処理番号と進捗単位。
-    int loadingInitializePhase_ = 0; // 分割初期化で次に進める処理の段階番号。
+    // 分割初期化で次に実行する処理。素材一覧は同じ段階のまま複数フレームに分ける。
+    enum class LoadingPhase {
+        kSelectStage,
+        kCoreSystems,
+        kSceneParticles,
+        kObjectSystems,
+        kGpuParticleRuntime,
+        kGpuParticlePresets,
+        kMeshEffects,
+        kDebrisRuntime,
+        kDebrisPresets,
+        kVfxSequences,
+        kSkybox,
+        kStageObjects,
+        kSpritesAndView,
+        kHud,
+        kOverlays,
+        kSceneController,
+        kCinematicPreviews,
+        kComplete,
+    };
+    LoadingPhase loadingInitializePhase_ = LoadingPhase::kSelectStage;
     size_t loadingInitializeItemIndex_ = 0;
     size_t loadingInitializeCompletedUnits_ = 0;
     size_t loadingInitializeTotalUnits_ = 1;

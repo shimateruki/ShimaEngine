@@ -1337,25 +1337,35 @@ void BaseEnemy::Update(float deltaTime) {
         UpdateThrowRecovery(deltaTime);
     }
 
-    // Nav Agentを追加した敵だけ、既存AIが決めた速さを保ったままA*経路方向へ補正します。
-    // Component未追加の既存敵には一切影響しません。
-    if (target_) {
-        if (NavAgentComponent* navAgent = GetNavAgentComponent(); navAgent && navAgent->IsEnabled()) {
-            engine::Vector3 velocity = GetVelocity();
-            const float planarSpeed = std::sqrt(velocity.x * velocity.x + velocity.z * velocity.z);
-
-            if (planarSpeed > 0.01f) {
-                const engine::Vector3 direction =
-                    navAgent->CalculateDirection(this, GetWorldPosition(), target_->GetWorldPosition(), deltaTime);
-                velocity.x = direction.x * planarSpeed;
-                velocity.z = direction.z * planarSpeed;
-                SetVelocity(velocity);
-            }
-        }
-    }
-
+    ApplyNavigationSteering(deltaTime);
     Character::Update(deltaTime);
     UpdateDamageFeedbackTimers(deltaTime);
+}
+
+void BaseEnemy::ApplyNavigationSteering(float deltaTime) {
+    // 追従対象がいないときは、個別AIが設定した速度を使う。
+    if (!target_) {
+        return;
+    }
+
+    NavAgentComponent* navAgent = GetNavAgentComponent();
+    // 経路探索を設定した敵にだけ補正を掛ける。
+    if (!navAgent || !navAgent->IsEnabled()) {
+        return;
+    }
+
+    engine::Vector3 velocity = GetVelocity();
+    const float planarSpeed = std::sqrt(velocity.x * velocity.x + velocity.z * velocity.z);
+    // 水平速度がほぼゼロなら、新たに経路方向へ動かさない。
+    if (!(planarSpeed > 0.01f)) {
+        return;
+    }
+
+    const engine::Vector3 direction =
+        navAgent->CalculateDirection(this, GetWorldPosition(), target_->GetWorldPosition(), deltaTime);
+    velocity.x = direction.x * planarSpeed;
+    velocity.z = direction.z * planarSpeed;
+    SetVelocity(velocity);
 }
 
 void BaseEnemy::Draw(ID3D12Resource* pointLightResource, ID3D12Resource* spotLightResource) {

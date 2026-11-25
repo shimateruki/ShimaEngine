@@ -41,6 +41,15 @@ class GameRule {
   private:
     std::array<EventManager::SubscriptionId, 3> eventSubscriptions_{};
 
+    // 接触イベントでは個別のEventTypeを優先し、汎用TargetIDはその後に使う。
+    void OnPlayerContact(const PlayerHitEvent& event);
+
+    // HP減算が成立した時点で、打撃演出・状態異常・ノックバックに進む。
+    void OnDamage(const DamageEvent& event);
+
+    // 実戦での死亡だけを進行中のセーブの残機に反映する。
+    void OnPlayerDeath(const PlayerDeathEvent& event);
+
     /// <summary>指定対象へダメージを適用し、HP減少と撃破を判定する。</summary>
     /// <returns>ダメージを適用できた場合はtrue。</returns>
     bool ApplyDamage(engine::Object3D* target, float damage, bool bypassPlayerInvincibility = false);

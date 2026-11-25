@@ -82,7 +82,6 @@ SceneLoadManifest GameSelectScene::BuildAsyncLoadManifest() const {
     manifest.AddTexture("Resources/sprite/common/circle2.png");
     manifest.AddTexture("Resources/sprite/common/white.png");
     manifest.AddTexture("Resources/sprite/ui/hud/lockOn.png");
-    manifest.AddTexture("Resources/sprite/ui/gate/gate_prompt_player_e.png");
     manifest.AddTexture("Resources/sprite/ui/stage_select/stage1_gate_name.png");
     manifest.AddTexture("Resources/sprite/ui/stage_select/stage2_gate_name.png");
     manifest.AddTexture("Resources/sprite/ui/stage_select/stage3_gate_name.png");
@@ -184,11 +183,6 @@ bool GameSelectScene::InitializeLoadingStep() {
         lockOnSprite_->Initialize(GetSpriteCommon(), lockOnTex);
         lockOnSprite_->SetAnchorPoint({0.5f, 0.5f});
         lockOnSprite_->SetSize({64.0f, 64.0f});
-        gatePromptSprite_ = std::make_unique<engine::Sprite>();
-        gatePromptSprite_->Initialize(GetSpriteCommon(), "Resources/sprite/ui/gate/gate_prompt_player_e.png");
-        gatePromptSprite_->SetAnchorPoint({0.5f, 0.5f});
-        gatePromptSprite_->SetSize({192.0f, 64.0f});
-        gatePromptSprite_->SetVisible(false);
         BulletManager::GetInstance()->Initialize(GetObject3DCommon(), CollisionManager::GetInstance());
         ++loadingInitializePhase_;
         completeUnit();
@@ -490,30 +484,22 @@ bool GameSelectScene::HandlePauseOverlay(float deltaTime) {
     }
 
     if (pauseMenuOverlay_ && pauseMenuOverlay_->IsActive()) {
-        switch (pauseMenuOverlay_->Update(deltaTime)) {
-        case PauseMenuOverlay::Action::Resume:
+        const auto action = pauseMenuOverlay_->Update(deltaTime);
+
+        // 設定とタイトルへの操作は共有し、背面のステージ選択には入力を渡さない。
+        if (HandleSharedPauseAction(action, *pauseMenuOverlay_, settingsOverlay_.get())) {
+            return true;
+        }
+
+        // 選択画面から再開する場合は、ポーズを閉じて次のフレームに操作を戻す。
+        if (action == PauseMenuOverlay::Action::Resume) {
             pauseMenuOverlay_->SetActive(false);
-            break;
-
-        case PauseMenuOverlay::Action::OpenSettings:
-            if (settingsOverlay_) {
-                settingsOverlay_->SetActive(true);
-            }
-
-            break;
-
-        case PauseMenuOverlay::Action::ReturnTitle:
-            pauseMenuOverlay_->SetActive(false);
-            SceneManager::GetInstance()->ChangeScene("TITLE");
-            break;
-
-        default:
-            break;
         }
 
         return true;
     }
 
+    // 入力を捕捉できない場合やステージ遷移・各種演出が進行中の場合は、新規ポーズを受け付けません。
     if (!inputManager_ || isChangingStage_ || gateEntryCinematicActive_ || gateReturnPresentationActive_ ||
         crownCountPresentationActive_ || unlockingStageIndex_ >= 0) {
         return false;
@@ -537,19 +523,8 @@ bool GameSelectScene::HandlePauseOverlay(float deltaTime) {
 void GameSelectScene::Draw() {
     // ゲートとプレイヤーを通常の3Dパスに描き、半透明・霧・特殊材質を後段へ回します。
     // 各パスで近距離のプレイヤーと子パーツを同じ条件で除外します。
-    bool isFirstPerson = false;
     engine::Camera* camera = CameraManager::GetInstance()->GetActiveCamera();
-
-    // FollowModeとは別に、壁際でカメラが胸元に寄った場合も身体を隠します。
-    if (player_ && camera) {
-        engine::Vector3 pPos = player_->GetWorldPosition();
-        pPos.y += 1.0f;
-        engine::Vector3 cPos = camera->GetEye();
-        engine::Vector3 toCam = {cPos.x - pPos.x, cPos.y - pPos.y, cPos.z - pPos.z};
-        float distanceValue = std::sqrt(toCam.x * toCam.x + toCam.y * toCam.y + toCam.z * toCam.z);
-        if (distanceValue < 3.0f)
-            isFirstPerson = true;
-    }
+    const bool isFirstPerson = IsCameraNearViewActor(camera, player_);
 
     ID3D12Resource* pointLightRes = engine::LightManager::GetInstance()->GetPointLightResource();
     ID3D12Resource* spotLightRes = engine::LightManager::GetInstance()->GetSpotLightResource();
@@ -616,8 +591,6 @@ void GameSelectScene::DrawUi() {
         }
     }
 
-    if (gatePromptSprite_)
-        gatePromptSprite_->Draw();
     if (isDrawLockOn_ && lockOnSprite_)
         lockOnSprite_->Draw();
     if (settingsOverlay_ && settingsOverlay_->IsActive()) {
@@ -790,47 +763,22 @@ void GameSelectScene::UpdateStageGateSelection(float deltaTime) {
     UpdateStageClearRewardPresentation(deltaTime);
     UpdateUnlockPresentation(deltaTime);
 
-    // 突入演出中もゲートと装飾の表示は更新し、別の入口候補を選び直さない。
-    if (gateEntryCinematicActive_) {
-        ApplyStageGateStates();
-        UpdateStageSelectDecorations(deltaTime);
-        UpdateGatePrompt(nullptr, false, deltaTime);
-        return;
-    }
+    const bool blocksGateSelection = gateEntryCinematicActive_ || gateReturnPresentationActive_ ||
+                                     crownCountPresentationActive_ || unlockingStageIndex_ >= 0;
 
-    // 帰還時はプレイヤーを出口に移動中のため、途中でゲートに触れても入り直さない。
-    if (gateReturnPresentationActive_) {
-        ApplyStageGateStates();
-        UpdateStageSelectDecorations(deltaTime);
-        UpdateGatePrompt(nullptr, false, deltaTime);
-        return;
-    }
-
-    // 王冠報酬と解放の間も通常の自動入場を保留する。
-    if (crownCountPresentationActive_ || unlockingStageIndex_ >= 0) {
-        ApplyStageGateStates();
-        UpdateStageSelectDecorations(deltaTime);
-        UpdateGatePrompt(nullptr, false, deltaTime);
-        return;
-    }
-
-    // 最寄りのゲートは選択半径で絞り、進行条件による入場可否は別に求める。
-    float nearestDistance = std::numeric_limits<float>::max();
-    engine::Object3D* nearestGate = FindNearestStageGate(&nearestDistance);
-    bool canEnterGate = false;
-
-    if (nearestGate && nearestDistance <= gateSelectRadius_) {
-        int gateStageIndex = GetStageGateIndex(nearestGate);
-
-        if (gateStageIndex >= 0 && gateStageIndex < static_cast<int>(StageManager::GetInstance()->GetStages().size())) {
-            selectedStageIndex_ = gateStageIndex;
-            canEnterGate = IsStageUnlocked(gateStageIndex);
-        }
+    engine::Object3D* entryGate = nullptr;
+    // 演出中は新しい入口を選び直さず、演出が指定したゲートの見た目を維持する。
+    if (!blocksGateSelection) {
+        entryGate = UpdateNearestGateSelection();
     }
 
     ApplyStageGateStates();
     UpdateStageSelectDecorations(deltaTime);
-    UpdateGatePrompt(nullptr, false, deltaTime);
+
+    // 演出中も表示は更新するが、選択ログと新しい入場要求は発行しない。
+    if (blocksGateSelection) {
+        return;
+    }
 
     // 同じゲートに近付いたままのフレームで、選択ログを繰り返さない。
     if (selectedStageIndex_ != previousSelectedStageIndex_) {
@@ -845,74 +793,30 @@ void GameSelectScene::UpdateStageGateSelection(float deltaTime) {
     }
 
     // 候補に選ばれただけでは入場せず、実際に門の薄い判定面へ触れたときだけ決定する。
-    const bool decide = canEnterGate && IsPlayerTouchingStageGate(nearestGate);
-
-    if (decide) {
+    if (entryGate && IsPlayerTouchingStageGate(entryGate)) {
         EnterSelectedStage();
     }
 }
 
-void GameSelectScene::UpdateGatePrompt(engine::Object3D* nearestGate, bool canEnterGate, float deltaTime) {
-    // 入場可能なゲートが見えている時だけ、プレイヤー付近の画面内へ案内を置く。
-    if (!gatePromptSprite_) {
-        return;
+engine::Object3D* GameSelectScene::UpdateNearestGateSelection() {
+    float nearestDistance = std::numeric_limits<float>::max();
+    engine::Object3D* nearestGate = FindNearestStageGate(&nearestDistance);
+
+    // 選択半径の外からは選択中のステージを切り替えない。
+    if (!nearestGate || !(nearestDistance <= gateSelectRadius_)) {
+        return nullptr;
     }
 
-    if (!nearestGate || !canEnterGate || isChangingStage_ || !player_) {
-        gatePromptSprite_->SetVisible(false);
-        gatePromptSprite_->Update();
-        return;
+    const std::int32_t stageIndex = GetStageGateIndex(nearestGate);
+
+    // 有効なステージ番号を持つゲートだけを選択へ反映する。
+    if (stageIndex < 0 || stageIndex >= static_cast<std::int32_t>(StageManager::GetInstance()->GetStages().size())) {
+        return nullptr;
     }
 
-    engine::Camera* camera = CameraManager::GetInstance()->GetActiveCamera();
-
-    if (!camera) {
-        gatePromptSprite_->SetVisible(false);
-        gatePromptSprite_->Update();
-        return;
-    }
-
-    // ワールド上のプレイヤー頭上を基準に投影し、カメラ前後の範囲外なら案内を消す。
-    engine::Vector3 promptWorld = player_->GetWorldPosition();
-    promptWorld.y += 1.35f;
-
-    engine::Math math;
-    const engine::Matrix4x4 viewProj = math.Multiply(camera->GetViewMatrix(), camera->GetProjectionMatrix());
-    const engine::Vector3 ndc = engine::Math::Transform(promptWorld, viewProj);
-
-    if (ndc.z < 0.0f || ndc.z > 1.0f) {
-        gatePromptSprite_->SetVisible(false);
-        gatePromptSprite_->Update();
-        return;
-    }
-
-    // 投影結果をクライアント座標へ直し、案内をプレイヤーの右側へ寄せる。
-    const float screenWidth = static_cast<float>(WinApp::GetClientWidth());
-    const float screenHeight = static_cast<float>(WinApp::GetClientHeight());
-    const float playerScreenX = (ndc.x + 1.0f) * 0.5f * screenWidth;
-    const float playerScreenY = (1.0f - ndc.y) * 0.5f * screenHeight;
-    const float baseWidth = 192.0f;
-    const float baseHeight = 64.0f;
-    float screenX = playerScreenX + 104.0f;
-    float screenY = playerScreenY - 28.0f;
-
-    gatePromptTimer_ += deltaTime;
-    screenY += std::sin(gatePromptTimer_ * 4.0f) * 3.0f;
-
-    // 右側の余白が足りなければ左へ反転し、最後に案内の半幅と半高ぶんを画面内に収める。
-    if (screenX > screenWidth - baseWidth * 0.5f - 16.0f) {
-        screenX = playerScreenX - 104.0f;
-    }
-
-    screenX = engine::Math::Clamp(screenX, baseWidth * 0.5f + 12.0f, screenWidth - baseWidth * 0.5f - 12.0f);
-    screenY = engine::Math::Clamp(screenY, baseHeight * 0.5f + 12.0f, screenHeight - baseHeight * 0.5f - 18.0f);
-
-    const float pulse = 1.0f + std::sin(gatePromptTimer_ * 5.5f) * 0.025f;
-    gatePromptSprite_->SetVisible(true);
-    gatePromptSprite_->SetPosition({screenX, screenY});
-    gatePromptSprite_->SetSize({baseWidth * pulse, baseHeight * pulse});
-    gatePromptSprite_->SetColor({1.0f, 1.0f, 1.0f, 0.98f});
-    gatePromptSprite_->Update();
+    // 閉じたゲートも表示上は選択できるが、入場判定へは解放済みのゲートだけを渡す。
+    selectedStageIndex_ = stageIndex;
+    return IsStageUnlocked(stageIndex) ? nearestGate : nullptr;
 }
 
 void GameSelectScene::ApplyStageGateStates() {

@@ -553,6 +553,9 @@ class Player : public Character {
     // コピー能力中だけ表示する装飾Objectを所有する。
     std::unique_ptr<engine::Object3D> copyAdornment_;
 
+    // 攻撃接触のダメージと反応を処理する。normalはワールド座標系の接触法線。
+    void ApplyContactDamage(engine::Object3D& other, std::uint32_t attribute, const engine::Vector3& normal);
+
     /// <summary>現在のコピー能力に付随する表示物を更新します。</summary>
     void UpdateCopyAdornment();
     // 現在の通常モデルに対応する被弾素材を準備し、形態変更時に古い表示を解除する。

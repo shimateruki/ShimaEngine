@@ -2,6 +2,8 @@
 #include "Easing.h"
 #define NOMINMAX
 #include "PauseMenuOverlay.h"
+#include "SettingsMenuOverlay.h"
+#include "SceneManager.h"
 
 #include "InputManager.h"
 #include "Sprite.h"
@@ -16,6 +18,30 @@
 #include <fstream>
 
 using json = nlohmann::json;
+
+bool HandleSharedPauseAction(PauseMenuOverlay::Action action, PauseMenuOverlay& pauseMenu, SettingsMenuOverlay* settings) {
+    switch (action) {
+    // 設定を重ねる操作。ポーズメニューの状態は保つ。
+    case PauseMenuOverlay::Action::OpenSettings:
+        // 設定を閉じたときに戻れるよう、背面のポーズメニューは開いた状態にしておく。
+        // 設定画面の実体が渡されている場合だけ、設定を表示状態にする。
+        if (settings) {
+            settings->SetActive(true);
+        }
+        return true;
+
+    // タイトルへ戻る操作。現在のポーズを閉じてから遷移を要求する。
+    case PauseMenuOverlay::Action::ReturnTitle:
+        // タイトルへの切り替えを要求する前にポーズ画面を閉じる。
+        pauseMenu.SetActive(false);
+        SceneManager::GetInstance()->ChangeScene("TITLE");
+        return true;
+
+    // 再開やリトライなど、各シーンが担当する操作は処理済みにしない。
+    default:
+        return false;
+    }
+}
 
 void PauseMenuOverlay::Initialize(engine::SpriteCommon* spriteCommon, const std::string& layoutPath, Mode mode) {
     // 共通レイアウトを読み込み、使用するシーンのモードに応じて項目を制御する。

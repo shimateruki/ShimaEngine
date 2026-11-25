@@ -833,6 +833,13 @@ float SceneManager::CalculateLoadingProgress() const {
     return assetProgress;
 }
 
+void SceneManager::ReplaceCurrentScene(std::unique_ptr<BaseScene>&& incomingScene) {
+    // 旧シーンが終了処理を完了するまで、遷移先の所有権を元のスロットに残す。
+    FinalizeCurrentScene(currentScene_);
+    currentScene_ = std::move(incomingScene);
+    ++sceneGeneration_;
+}
+
 void SceneManager::SwapToPreparedScene() {
 #ifdef USE_IMGUI
     if (auto* session = SelectedActorSession::Current()) session->PrepareSceneChange();
@@ -843,10 +850,7 @@ void SceneManager::SwapToPreparedScene() {
     engine::DirectXCommon::GetInstance()->WaitForGpuAndReset();
     LogSlowLoadingStep("loading scene GPU synchronization", loadingTargetSceneName_, swapWaitStart);
 
-    FinalizeCurrentScene(currentScene_);
-
-    currentScene_ = std::move(preparedScene_);
-    ++sceneGeneration_;
+    ReplaceCurrentScene(std::move(preparedScene_));
 #ifdef USE_IMGUI
     CameraEditor* cameraEditor = CameraEditor::GetInstance();
     cameraEditor->InvalidatePreviewForSceneChange();
@@ -891,10 +895,7 @@ void SceneManager::SwapToDirectNextScene() {
     // ロード画面を挟まない遷移でも、旧シーンのGPU参照を待ってから交換する。
     engine::DirectXCommon::GetInstance()->WaitForGpuAndReset();
 
-    FinalizeCurrentScene(currentScene_);
-
-    currentScene_ = std::move(nextScene_);
-    ++sceneGeneration_;
+    ReplaceCurrentScene(std::move(nextScene_));
 #ifdef USE_IMGUI
     CameraEditor::GetInstance()->InvalidatePreviewForSceneChange();
 #endif

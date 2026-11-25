@@ -278,6 +278,9 @@ private:
     /// <summary>投げ後の回転復帰と待機時間を進める。</summary>
     void UpdateThrowRecovery(float deltaTime);
 
+    // NavAgentが利用できる敵の水平速度を、速さと鉛直成分を保って経路方向へ補正する。
+    void ApplyNavigationSteering(float deltaTime);
+
     /// <summary>高速で地面に当たった地点へ着地演出を出す。</summary>
     void SpawnSlamImpactEffect(const engine::Vector3& impactPosition, float impactSpeed);
 

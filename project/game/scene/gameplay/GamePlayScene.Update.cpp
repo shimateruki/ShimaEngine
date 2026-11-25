@@ -680,7 +680,12 @@ bool GamePlayScene::HandlePauseOverlay(float deltaTime) {
     }
 
     if (pauseMenuOverlay_ && pauseMenuOverlay_->IsActive()) {
-        PauseMenuOverlay::Action action = pauseMenuOverlay_->Update(deltaTime);
+        const auto action = pauseMenuOverlay_->Update(deltaTime);
+
+        // 設定とタイトルへの操作は共有し、このフレームのワールド更新を止めたままにする。
+        if (HandleSharedPauseAction(action, *pauseMenuOverlay_, settingsOverlay_.get())) {
+            return true;
+        }
 
         switch (action) {
         // ポーズのセッションを閉じ、次のフレームからゲーム操作を受け付ける。
@@ -710,20 +715,6 @@ bool GamePlayScene::HandlePauseOverlay(float deltaTime) {
         case PauseMenuOverlay::Action::StageSelect:
             pauseMenuOverlay_->SetActive(false);
             SceneManager::GetInstance()->ChangeScene("SELECT");
-            break;
-
-        // 戻り先のポーズ画面を保持したまま共通設定を重ねる。
-        case PauseMenuOverlay::Action::OpenSettings:
-            if (settingsOverlay_) {
-                settingsOverlay_->SetActive(true);
-            }
-
-            break;
-
-        // ポーズを閉じてタイトルへ移る。
-        case PauseMenuOverlay::Action::ReturnTitle:
-            pauseMenuOverlay_->SetActive(false);
-            SceneManager::GetInstance()->ChangeScene("TITLE");
             break;
 
         case PauseMenuOverlay::Action::None:

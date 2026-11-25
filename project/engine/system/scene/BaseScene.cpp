@@ -13,6 +13,7 @@
 #include "engine/graphics/3d/material/MaterialRenderPolicy.h"
 #include "engine/graphics/scene/SceneRenderCommands.h"
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -386,6 +387,21 @@ bool BaseScene::IsAlive(engine::Sprite* sprite) {
 bool BaseScene::IsSpecialMaterialType(int materialType) const {
     // Scene Color や深度を参照する材質を専用パスへ振り分けます。
     return MaterialRenderPolicy::IsSpecial(materialType);
+}
+
+bool BaseScene::IsCameraNearViewActor(const engine::Camera* camera, const engine::Object3D* viewActor) const {
+    // カメラか視点主体が未設定なら、距離を理由にモデルを隠さない。
+    if (!camera || !viewActor) {
+        return false;
+    }
+
+    // モデル原点から上へ1ワールド単位ずらし、視界を塞ぐ胸元までの距離を測る。
+    engine::Vector3 chest = viewActor->GetWorldPosition();
+    chest.y += 1.0f;
+    const engine::Vector3& eye = camera->GetEye();
+    const engine::Vector3 offset = {eye.x - chest.x, eye.y - chest.y, eye.z - chest.z};
+    const float distance = std::sqrt(offset.x * offset.x + offset.y * offset.y + offset.z * offset.z);
+    return distance < 3.0f;
 }
 
 bool BaseScene::IsHiddenByFirstPerson(engine::Object3D* object, engine::Object3D* viewActor, bool isFirstPerson) const {

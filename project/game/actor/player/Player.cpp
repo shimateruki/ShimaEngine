@@ -949,54 +949,8 @@ bool Player::OnCollision(engine::Object3D* other) {
         ApplyPhysicsCollision(info, attribute);
     }
 
-    // =======================================================
-    // 2. ダメージ処理 / 突進攻撃
-    // =======================================================
-    const BaseEnemy* bodyEnemy = (attribute & CollisionCategories::Get("enemy")) ? dynamic_cast<const BaseEnemy*>(other) : nullptr;
-    const float bodyAttackDamage = bodyEnemy ? bodyEnemy->GetActiveBodyAttackDamage() : 0.0f;
-
-    // 本体への接触と攻撃への命中は別。物理解決と下のギミック通知は常に維持します。
-    if ((attribute & CollisionCategories::Get("enemy_attack")) || bodyAttackDamage > 0.0f) {
-        if (damageCooldownTimer_ <= 0.0f && !IsInvincible()) {
-            const bool guarded = CanGuardAttackFrom(other->GetWorldPosition());
-            if (!guarded || guardContactCooldownTimer_ <= 0.0f) {
-                // 弾は持っている威力と状態異常を使い、敵本体は発動中の体当たり威力を使います。
-                const Bullet* attackBullet = dynamic_cast<const Bullet*>(other);
-                const bool isElectricHit = other->GetEnemyType() == "ThunderSlime" ||
-                                           (attackBullet && attackBullet->GetDamageType() == DamageType::Electric);
-
-                // ダメージイベントを発行 (GameRule で HP 減少が処理される)
-                DamageEvent dmgEvent;
-                dmgEvent.target = this;
-                dmgEvent.attacker = other;
-                dmgEvent.damageAmount =
-                    attackBullet ? attackBullet->GetDamage() : (bodyAttackDamage > 0.0f ? bodyAttackDamage : 1.0f);
-                if (attackBullet) {
-                    dmgEvent.damageType = attackBullet->GetDamageType();
-                    dmgEvent.statusEffect = attackBullet->GetStatusEffect();
-                }
-
-                // HP の軽減とガード反動は共通 DamageEvent 側で一度だけ処理する。
-                EventManager::GetInstance()->Dispatch(dmgEvent);
-
-                if (guarded) {
-                    // 常時接触する敵で毎フレーム HP が減らないよう、接触だけ短く間引く。
-                    constexpr float kGuardContactHitInterval = 0.22f;
-                    guardContactCooldownTimer_ = kGuardContactHitInterval;
-                // 感電後は専用の拘束演出を使うため、通常の吹き飛ばし状態へは移しません。
-                } else if (isElectricHit) {
-                    damageCooldownTimer_ = 0.8f;
-                } else {
-                    // 無敵時間をセット
-                    damageCooldownTimer_ = 1.0f;
-                    SetDamageInvincible(true);
-
-                    // ノックバック状態へ移行 (衝突法線を利用)
-                    ChangeState(std::make_unique<PlayerStateDamage>(info.normal));
-                }
-            }
-        }
-    }
+    // 無敵などで被弾を見送っても、下のギミックへの接触通知は続ける。
+    ApplyContactDamage(*other, attribute, info.normal);
 
     // =======================================================
     // 3. ギミック・汎用イベントの発行
@@ -1009,6 +963,66 @@ bool Player::OnCollision(engine::Object3D* other) {
     EventManager::GetInstance()->Dispatch(hitEvent);
 
     return true;
+}
+
+void Player::ApplyContactDamage(engine::Object3D& other, std::uint32_t attribute, const engine::Vector3& normal) {
+    const auto* bodyEnemy = (attribute & CollisionCategories::Get("enemy"))
+                                ? dynamic_cast<const BaseEnemy*>(&other)
+                                : nullptr;
+    const float bodyAttackDamage = bodyEnemy ? bodyEnemy->GetActiveBodyAttackDamage() : 0.0f;
+
+    // 敵本体との接触は、体当たりの威力が有効な間だけ攻撃として扱う。
+    if (!(attribute & CollisionCategories::Get("enemy_attack")) && !(bodyAttackDamage > 0.0f)) {
+        return;
+    }
+
+    // 被弾直後や無敵中はダメージを重ねない。床との物理解決は呼び出し元で済んでいる。
+    if (!(damageCooldownTimer_ <= 0.0f) || IsInvincible()) {
+        return;
+    }
+
+    const bool guarded = CanGuardAttackFrom(other.GetWorldPosition());
+
+    // ガード中に同じ攻撃と重なり続けても、連続接触の間隔内は再通知しない。
+    if (guarded && !(guardContactCooldownTimer_ <= 0.0f)) {
+        return;
+    }
+
+    const auto* attackBullet = dynamic_cast<const Bullet*>(&other);
+    const bool isElectricHit = other.GetEnemyType() == "ThunderSlime" ||
+                               (attackBullet && attackBullet->GetDamageType() == DamageType::Electric);
+
+    DamageEvent damageEvent;
+    damageEvent.target = this;
+    damageEvent.attacker = &other;
+    damageEvent.damageAmount = attackBullet ? attackBullet->GetDamage()
+                                            : (bodyAttackDamage > 0.0f ? bodyAttackDamage : 1.0f);
+
+    // 弾が持つ属性と状態異常を、HP計算とガード反動を担当する受信側へ渡す。
+    if (attackBullet) {
+        damageEvent.damageType = attackBullet->GetDamageType();
+        damageEvent.statusEffect = attackBullet->GetStatusEffect();
+    }
+
+    EventManager::GetInstance()->Dispatch(damageEvent);
+
+    // ガード成立時は連続接触の間隔だけを設定し、吹き飛ばしに移らない。
+    if (guarded) {
+        constexpr float kGuardContactHitInterval = 0.22f;
+        guardContactCooldownTimer_ = kGuardContactHitInterval;
+        return;
+    }
+
+    // 感電は専用の拘束処理を使うため、接触の間隔だけを確保する。
+    if (isElectricHit) {
+        damageCooldownTimer_ = 0.8f;
+        return;
+    }
+
+    // 通常被弾は1秒の間隔と無敵を設定し、接触面の法線方向へ吹き飛ばす。
+    damageCooldownTimer_ = 1.0f;
+    SetDamageInvincible(true);
+    ChangeState(std::make_unique<PlayerStateDamage>(normal));
 }
 
 // =================================================================

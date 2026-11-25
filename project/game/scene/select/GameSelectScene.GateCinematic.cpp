@@ -181,10 +181,6 @@ bool GameSelectScene::StartStageReturnPresentation(const GameDataManager::StageS
     gateReturnRecoveryImpulsePlayed_ = false;
     stageDecisionCooldown_ = kGateReturnTotalDuration;
 
-    if (gatePromptSprite_) {
-        gatePromptSprite_->SetVisible(false);
-        gatePromptSprite_->Update();
-    }
 
     DebugConsole::GetInstance()->AddLog("Stage Select: gate return presentation start.");
     return true;
@@ -314,10 +310,6 @@ void GameSelectScene::StartGateEntryCinematic(int stageIndex) {
     isChangingStage_ = true;
     stageDecisionCooldown_ = 0.35f;
     if (auto* stageGate = dynamic_cast<GimmickStageGate*>(gate)) stageGate->TriggerEntryReaction();
-    if (gatePromptSprite_) {
-        gatePromptSprite_->SetVisible(false);
-        gatePromptSprite_->Update();
-    }
     DebugConsole::GetInstance()->AddLog("Stage Select: gate entry cinematic start.");
 }
 

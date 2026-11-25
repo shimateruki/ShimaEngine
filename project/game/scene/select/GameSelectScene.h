@@ -158,8 +158,8 @@ class GameSelectScene : public BaseScene, public ISceneGameplayAccess {
     /// <summary>ゲート帰還演出を終了し、通常の選択画面へ戻す。</summary>
     void FinishStageReturnPresentation();
 
-    /// <summary>最寄りゲートの操作案内と入場可否を表示へ反映する。</summary>
-    void UpdateGatePrompt(engine::Object3D* nearestGate, bool canEnterGate, float deltaTime);
+    // 最寄りの有効なゲートを選択し、解放済みなら接触判定の対象として返す。
+    engine::Object3D* UpdateNearestGateSelection();
 
     /// <summary>指定オブジェクトがステージゲートか判定する。</summary>
     bool IsStageGateObject(const engine::Object3D* object) const;
@@ -294,12 +294,10 @@ class GameSelectScene : public BaseScene, public ISceneGameplayAccess {
     bool isBGMPlaying_ = false;
     uint32_t particleSEHandle_ = 0;
 
-    // GPU粒子画像と、ロックオン・ゲート操作案内の表示部品。
+    // GPU粒子画像とロックオンの表示部品。
     uint32_t gpuParticleTexHandle_ = 0;
     std::unique_ptr<engine::Sprite> lockOnSprite_;
-    std::unique_ptr<engine::Sprite> gatePromptSprite_;
     bool isDrawLockOn_ = false;
-    float gatePromptTimer_ = 0.0f;
 
     // ステージ選択の空と、TextureManagerから参照する画像ハンドル。
     std::unique_ptr<Skybox> skybox_;

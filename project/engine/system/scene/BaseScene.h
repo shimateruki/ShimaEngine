@@ -288,6 +288,9 @@ protected:
     /// <summary>一人称視点で視点Actorまたはその子として隠す対象か判定する。</summary>
     bool IsHiddenByFirstPerson(engine::Object3D* object, engine::Object3D* viewActor, bool isFirstPerson) const;
 
+    // カメラが視点主体の胸元から3ワールド単位未満に入ったかを返す。
+    bool IsCameraNearViewActor(const engine::Camera* camera, const engine::Object3D* viewActor) const;
+
     // 敵の予兆を不透明モデルの後、パーティクルや特殊材質の前に描画します。
 
     /// <summary>対象一覧からローカルフォグを描画し、描画したか返す。</summary>

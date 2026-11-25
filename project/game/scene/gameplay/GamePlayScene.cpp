@@ -78,18 +78,9 @@ void GamePlayScene::Draw() {
     }
 #endif
 
-    // FollowMode以外でも壁際などでカメラが胸元へ寄るため、距離で同じ扱いへ切り替えます。
-    if (!crownFinale_.active && !crownDefeat_.active && !crownDefeat_.completed && !isFirstPerson && player_ && camera) {
-        engine::Vector3 pPos = player_->GetWorldPosition();
-        pPos.y += 1.0f; // プレイヤーの胸の高さを基準にする
-        engine::Vector3 cPos = camera->GetEye();
-        engine::Vector3 toCam = {cPos.x - pPos.x, cPos.y - pPos.y, cPos.z - pPos.z};
-        float distance = std::sqrt(toCam.x * toCam.x + toCam.y * toCam.y + toCam.z * toCam.z);
-
-        // 距離が 3.0m 未満なら、プレイヤーを完全に消す判定フラグを立てる
-        if (distance < 3.0f) {
-            isFirstPerson = true;
-        }
+    // 王冠の演出カメラでは、胸元に近づいても距離による非表示を適用しない。
+    if (!crownFinale_.active && !crownDefeat_.active && !crownDefeat_.completed && !isFirstPerson) {
+        isFirstPerson = IsCameraNearViewActor(camera, player_);
     }
 
     // ワールド描画に使う光源バッファを先に取得し、通常時と残機喪失演出で共有します。
