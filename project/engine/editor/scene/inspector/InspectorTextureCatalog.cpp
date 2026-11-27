@@ -31,6 +31,7 @@ bool IsDdsTexture(const std::string &path) {
 
 // 変換済みDDSを優先し、同じ用途の候補を安定して一つに絞る。
 void AssignPreferredTexture(std::string &slot, const std::string &candidate) {
+  // 空き枠に登録する。登録済みの場合は、DDS以外からDDSへ差し替える場合だけ更新する。
   if (slot.empty() || (!IsDdsTexture(slot) && IsDdsTexture(candidate))) {
     slot = candidate;
   }
@@ -42,12 +43,13 @@ std::string BuildPbrPresetKey(const fs::path &path) {
   std::string stem = ToLowerAscii(path.stem().string());
 
   for (char &c : stem) {
+    // ハイフンと空白をアンダースコアに揃え、同じ規則で名前を分割できるようにする。
     if (c == '-' || c == ' ') {
       c = '_';
     }
   }
 
-  static const std::set<std::string> ignoredTokens = {
+  static const std::set<std::string> kIgnoredTokens = {
       "1k",      "2k",     "4k",        "8k",       "dx",       "gl",
       "directx", "opengl", "diff",      "diffuse",  "albedo",   "basecolor",
       "base",    "color",  "colour",    "nor",      "normal",   "arm",
@@ -60,7 +62,9 @@ std::string BuildPbrPresetKey(const fs::path &path) {
     const size_t end = stem.find('_', start);
     const std::string token = stem.substr(
         start, end == std::string::npos ? std::string::npos : end - start);
-    if (!token.empty() && ignoredTokens.count(token) == 0) {
+    // 空の区切りや用途・解像度を表す語を除き、材質名の一部だけを残す。
+    if (!token.empty() && kIgnoredTokens.count(token) == 0) {
+      // 二つ目以降の語はアンダースコアでつなぎ、先頭に区切りを付けない。
       if (!key.empty()) {
         key += "_";
       }
@@ -68,6 +72,7 @@ std::string BuildPbrPresetKey(const fs::path &path) {
       key += token;
     }
 
+    // 次の区切りが存在しない場合は、末尾の語まで読んだため走査を終える。
     if (end == std::string::npos) {
       break;
     }
@@ -75,6 +80,7 @@ std::string BuildPbrPresetKey(const fs::path &path) {
     start = end + 1;
   }
 
+  // 名前の全要素が除外された場合は、元の拡張子なしファイル名を使う。
   return key.empty() ? stem : key;
 }
 
@@ -83,11 +89,13 @@ std::string BuildPbrPresetName(const std::string &key) {
   std::string name = key;
 
   for (char &c : name) {
+    // 表示名ではアンダースコアを空白に変える。
     if (c == '_') {
       c = ' ';
     }
   }
 
+  // 空でない表示名だけ、先頭の文字を大文字にする。
   if (!name.empty()) {
     name[0] =
         static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
@@ -102,6 +110,7 @@ bool InspectorTextureCatalog::PbrPreset::IsComplete() const {
 }
 
 void InspectorTextureCatalog::EnsureLoaded() {
+  // まだ一覧を読み込んでいないときに、ファイルから作り直す。
   if (!isLoaded_) {
     Rebuild();
   }
@@ -119,6 +128,7 @@ void InspectorTextureCatalog::Rebuild() {
 
   const fs::path pbrDir = "Resources/texture/PBR/";
 
+  // PBR用フォルダーがある場合だけ、PBR材質の候補を集める。
   if (fs::exists(pbrDir)) {
     std::vector<std::string> allFiles;
     std::set<std::string> ddsBaseNames;
@@ -126,12 +136,14 @@ void InspectorTextureCatalog::Rebuild() {
 
     for (const auto &entry : fs::recursive_directory_iterator(pbrDir)) {
       // 同名のPNG/DDSがある場合はDDSを優先するため、先に組を記録する。
+      // 通常のファイルだけを見て、サブフォルダーはこのファイル処理から外す。
       if (!entry.is_regular_file()) {
         continue;
       }
 
       const fs::path path = entry.path();
 
+      // 対応する画像拡張子だけを一覧の候補にする。
       if (!IsSupportedTextureFile(path)) {
         continue;
       }
@@ -139,6 +151,7 @@ void InspectorTextureCatalog::Rebuild() {
       const std::string normalized = NormalizeAssetPath(path);
       allFiles.push_back(normalized);
 
+      // DDSがある場合は、同じフォルダーとファイル名を持つ別形式を除くために拡張子なしのパスを記録する。
       if (ToLowerAscii(path.extension().string()) == ".dds") {
         ddsBaseNames.insert(
             NormalizeAssetPath(path.parent_path() / path.stem()));
@@ -151,14 +164,18 @@ void InspectorTextureCatalog::Rebuild() {
       const std::string ext = ToLowerAscii(path.extension().string());
       const std::string base =
           NormalizeAssetPath(path.parent_path() / path.stem());
+      // 同じフォルダーとファイル名のDDSが見つかっている場合は、DDS以外の候補を除く。
       if (ext != ".dds" && ddsBaseNames.count(base) != 0) {
         continue;
       }
 
+      // アルベド用のパスは、アルベド単体を選ぶ一覧へも登録する。
       if (pathString.find("/Albedo/") != std::string::npos) {
         albedoPaths_.push_back(pathString);
+      // 法線用のパスは、法線単体を選ぶ一覧へも登録する。
       } else if (pathString.find("/Normal/") != std::string::npos) {
         normalPaths_.push_back(pathString);
+      // ARM用のパスは、ARM単体を選ぶ一覧へも登録する。
       } else if (pathString.find("/ARM/") != std::string::npos) {
         ormPaths_.push_back(pathString);
       }
@@ -167,21 +184,28 @@ void InspectorTextureCatalog::Rebuild() {
       PbrPreset &preset = presetMap[key];
       preset.name = BuildPbrPresetName(key);
 
+      // アルベド用のパスは、材質のアルベド枠に優先形式を考慮して登録する。
       if (pathString.find("/Albedo/") != std::string::npos) {
         AssignPreferredTexture(preset.albedoPath, pathString);
+      // 法線用のパスは、材質の法線枠に優先形式を考慮して登録する。
       } else if (pathString.find("/Normal/") != std::string::npos) {
         AssignPreferredTexture(preset.normalPath, pathString);
+      // ARM用のパスは、材質のARM枠に優先形式を考慮して登録する。
       } else if (pathString.find("/ARM/") != std::string::npos) {
         AssignPreferredTexture(preset.ormPath, pathString);
       // 既定素材だけは用途別フォルダーで分けられないため、名前を基に3枚のうちどの画像かを判断します。
+      // 既定フォルダーの画像は、用途別のフォルダー名が使えない場合にファイル名から分類する。
       } else if (pathString.find("/Default/") != std::string::npos) {
         const std::string stem = ToLowerAscii(path.stem().string());
+        // 名前がalbedoまたはdiffを含む場合は、アルベド枠の候補にする。
         if (stem.find("albedo") != std::string::npos ||
             stem.find("diff") != std::string::npos) {
           AssignPreferredTexture(preset.albedoPath, pathString);
+        // 名前がnormalまたはnorを含む場合は、法線枠の候補にする。
         } else if (stem.find("normal") != std::string::npos ||
                    stem.find("nor") != std::string::npos) {
           AssignPreferredTexture(preset.normalPath, pathString);
+        // 名前がarmまたはormを含む場合は、ARM枠の候補にする。
         } else if (stem.find("arm") != std::string::npos ||
                    stem.find("orm") != std::string::npos) {
           AssignPreferredTexture(preset.ormPath, pathString);
@@ -199,8 +223,10 @@ void InspectorTextureCatalog::Rebuild() {
 
   const fs::path spriteDir = "Resources/sprite/";
 
+  // スプライト用フォルダーが存在する場合だけ、画像候補の走査を行う。
   if (fs::exists(spriteDir)) {
     for (const auto &entry : fs::recursive_directory_iterator(spriteDir)) {
+      // 対応拡張子を持つ通常ファイルだけを、スプライト一覧に加える。
       if (entry.is_regular_file() && IsSupportedTextureFile(entry.path())) {
         spritePaths_.push_back(NormalizeAssetPath(entry.path()));
       }
@@ -221,5 +247,6 @@ void InspectorTextureCatalog::Rebuild() {
               return lhs.name < rhs.name;
             });
 
+  // 候補が空でも走査済みとし、次の参照時に同じ走査を繰り返さない。
   isLoaded_ = true;
 }

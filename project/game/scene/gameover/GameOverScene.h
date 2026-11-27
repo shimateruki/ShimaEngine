@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "BaseScene.h"
 #include "game/system/scene/SceneGameplayAccess.h"
 #include "Object3DCommon.h"
@@ -99,21 +100,21 @@ class GameOverScene : public BaseScene, public ISceneGameplayAccess {
   private:
     std::vector<std::unique_ptr<engine::Sprite>>* GetMutableSprites() override { return &sprites_; }
 
-    enum class MenuItem { Retry, Title, Count };
+    enum class MenuItem { kRetry, kTitle, kCount };
 
     // メニュー行の背景・ラベルを借用する。基準サイズを残し、選択演出の拡縮を累積させない。
     struct MenuRow {
         engine::Sprite* backdrop = nullptr;
         engine::Sprite* label = nullptr;
-        engine::Vector2 backdropBaseSize = engine::Vector2::ZERO;
-        engine::Vector2 labelBaseSize = engine::Vector2::ZERO;
+        engine::Vector2 backdropBaseSize = engine::Vector2::kZero;
+        engine::Vector2 labelBaseSize = engine::Vector2::kZero;
     };
 
     // 背景王冠 Sprite の借用参照と落下周期。基準位置から毎回評価し、流れ続ける表示を作る。
     struct FallingCrown {
         engine::Sprite* sprite = nullptr;
-        engine::Vector2 basePosition = engine::Vector2::ZERO;
-        engine::Vector2 size = engine::Vector2::ZERO;
+        engine::Vector2 basePosition = engine::Vector2::kZero;
+        engine::Vector2 size = engine::Vector2::kZero;
         float timeOffset = 0.0f;
         float cycleDuration = 1.0f;
         float fallDistance = 0.0f;
@@ -181,7 +182,7 @@ class GameOverScene : public BaseScene, public ISceneGameplayAccess {
     void UpdateMenuSprites(float deltaTime);
 
     /// 選択行を指定方向へ進める。
-    void ChangeSelection(int direction);
+    void ChangeSelection(std::int32_t direction);
 
     /// 選択中のリトライまたはタイトル移動を実行する。
     void ConfirmSelection();
@@ -218,20 +219,20 @@ class GameOverScene : public BaseScene, public ISceneGameplayAccess {
     engine::InputManager* inputManager_ = nullptr;
 
     // --- サブシステム (機能を委譲するクラスたち) ---
-    std::unique_ptr<ObjectManager> objectManager_ = nullptr;
-    std::unique_ptr<LevelLoader> levelLoader_ = nullptr;
-    std::unique_ptr<GameRule> gameRule_ = nullptr;
+    std::unique_ptr<ObjectManager> objectManager_;
+    std::unique_ptr<LevelLoader> levelLoader_;
+    std::unique_ptr<GameRule> gameRule_;
 
     // --- オブジェクト・リソース ---
     std::vector<std::unique_ptr<engine::Sprite>> sprites_;
     engine::Object3D* gameOverSlimeObject_ = nullptr;
     GameOverSlimeAnimator gameOverSlimeAnimator_;
-    engine::Vector3 gameOverSlimeBasePosition_ = engine::Vector3::ZERO;
+    engine::Vector3 gameOverSlimeBasePosition_ = engine::Vector3::kZero;
     engine::Vector3 gameOverSlimeBaseScale_ = {1.0f, 1.0f, 1.0f};
     float gameOverPresentationTimer_ = 0.0f;
     PresentationTuning presentationTuning_;
     bool gameOverImpactCuePlayed_ = false;
-    std::unique_ptr<engine::ParticleSystem> particleSystem_ = nullptr;
+    std::unique_ptr<engine::ParticleSystem> particleSystem_;
     Player* player_ = nullptr;
 
     // --- BGM・オーディオ ---
@@ -243,10 +244,10 @@ class GameOverScene : public BaseScene, public ISceneGameplayAccess {
     std::array<engine::Sprite*, 8> titleLetters_ = {};
     std::array<engine::Vector2, 8> titleLetterBasePositions_ = {};
     std::array<engine::Vector2, 8> titleLetterBaseSizes_ = {};
-    std::array<MenuRow, static_cast<size_t>(MenuItem::Count)> menuRows_ = {};
+    std::array<MenuRow, static_cast<size_t>(MenuItem::kCount)> menuRows_ = {};
     std::vector<FallingCrown> fallingCrowns_;
     std::vector<DizzyStar> dizzyStars_;
-    int selectedIndex_ = 0;
+    std::int32_t selectedIndex_ = 0;
     float sceneTime_ = 0.0f;
     float titleRevealTimer_ = 0.0f;
     bool retryExitActive_ = false;

@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "ParticleCommon.h"
 #include "DirectXCommon.h"
 #include "RootSignatureBuilder.h"
@@ -5,6 +6,7 @@
 #include <cassert>
 
 void engine::ParticleCommon::Initialize(engine::DirectXCommon* dxCommon) {
+    // 初期化済みの描画基盤から、粒子が使うルート構成と合成方式別のPSOを順に作る。
     assert(dxCommon);
     dxCommon_ = dxCommon;
     CreateRootSignature();
@@ -40,11 +42,12 @@ void engine::ParticleCommon::CreateRootSignature() {
 
 
 void engine::ParticleCommon::SetPipeline(ID3D12GraphicsCommandList* commandList, ParticleBlendMode mode) {
-    // 範囲チェック（念のため）
-    if ((int)mode >= (int)ParticleBlendMode::Count)
+    // 定義済みのモード数以上なら対応するPSOがないため、コマンドを設定せず戻る。
+    if ((std::int32_t)mode >= (std::int32_t)ParticleBlendMode::kCount)
         return;
 
-    commandList->SetPipelineState(graphicsPipelines_[(int)mode].Get());
+    // 粒子のインスタンス描画で使うパイプライン・ルート構成・三角形リストを設定する。
+    commandList->SetPipelineState(graphicsPipelines_[(std::int32_t)mode].Get());
     commandList->SetGraphicsRootSignature(rootSignature_.Get());
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 }
@@ -53,6 +56,7 @@ void engine::ParticleCommon::SetPipeline(ID3D12GraphicsCommandList* commandList,
 void engine::ParticleCommon::CreatePipeline() {
     ID3D12Device* device = dxCommon_->GetDevice();
 
+    // インスタンスを展開する頂点シェーダーと、色を合成するピクセルシェーダーをビルドする。
     auto vsBlob = dxCommon_->CompileShader(L"Resources/shader/particle/Particle.VS.hlsl", L"vs_6_0");
     auto psBlob = dxCommon_->CompileShader(L"Resources/shader/particle/Particle.PS.hlsl", L"ps_6_0");
 
@@ -88,37 +92,40 @@ void engine::ParticleCommon::CreatePipeline() {
     // =================================================================
     // 3. ブレンドモードごとの生成ループ
     // =================================================================
-    for (int i = 0; i < (int)ParticleBlendMode::Count; ++i) {
+    for (std::int32_t i = 0; i < (std::int32_t)ParticleBlendMode::kCount; ++i) {
         ParticleBlendMode pMode = static_cast<ParticleBlendMode>(i);
 
-        // ① 独自の ParticleBlendMode から、共通の BlendMode へ変換
-        ::BlendMode globalMode = ::BlendMode::Normal;
+        // 粒子用のモードを、PSOビルダーが使う共通の合成方式へ変換する。
+        ::BlendMode globalMode = ::BlendMode::kNormal;
 
         switch (pMode) {
-        case ParticleBlendMode::Alpha:    globalMode = ::BlendMode::Normal;
+        // 通常粒子は自身のアルファで背景色と混ぜる。
+        case ParticleBlendMode::kAlpha:    globalMode = ::BlendMode::kNormal;
         break;
 
-        case ParticleBlendMode::Add:      globalMode = ::BlendMode::Add;
+        // 光などの粒子を背景へ足し合わせる。
+        case ParticleBlendMode::kAdd:      globalMode = ::BlendMode::kAdd;
         break;
 
-        case ParticleBlendMode::Subtract: globalMode = ::BlendMode::Subtract;
+        // 着色した粒子の分だけ背景から引く。
+        case ParticleBlendMode::kSubtract: globalMode = ::BlendMode::kSubtract;
         break;
 
-        case ParticleBlendMode::Multiply: globalMode = ::BlendMode::Multiply;
+        // 粒子の色を背景へ掛ける。
+        case ParticleBlendMode::kMultiply: globalMode = ::BlendMode::kMultiply;
         break;
 
-        case ParticleBlendMode::Screen:   globalMode = ::BlendMode::Screen;
+        // 明るい背景ほど加算を弱めるスクリーン合成を選ぶ。
+        case ParticleBlendMode::kScreen:   globalMode = ::BlendMode::kScreen;
         break;
         }
 
-        // ② 変換したモードをセット
         builder.SetBlendMode(globalMode);
 
-        // ③ ★超重要★ 
+        // シーンの深度で粒子を隠し、重なる粒子同士の合成に備えて深度書き込みを無効にする。
      
         builder.SetDepthStencilState(true, D3D12_DEPTH_WRITE_MASK_ZERO, D3D12_COMPARISON_FUNC_LESS_EQUAL);
 
-        // ④ ビルド実行
         builder.Build(device, graphicsPipelines_[i].GetAddressOf());
     }
 }

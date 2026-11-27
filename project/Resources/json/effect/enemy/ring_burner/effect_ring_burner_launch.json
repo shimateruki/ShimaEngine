@@ -1,0 +1,20 @@
+{
+  "AlphaReference": 0.002,
+  "AutoLoop": false,
+  "BlendMode": 2,
+  "EasingType": 0,
+  "EdgeFadeStrength": 0.46,
+  "EndColor": [1.0, 0.35, 0.04, 0.08],
+  "EndScale": [3.8, 1.0, 3.8],
+  "Intensity": 2.3,
+  "Lifetime": 0.14,
+  "MeshSegments": 64,
+  "NoiseTexturePath": "Resources/sprite/common/white.png",
+  "ProceduralType": 8,
+  "StartColor": [1.0, 0.61, 0.16, 1.0],
+  "StartScale": [1.0, 1.0, 1.0],
+  "TexturePath": "Resources/sprite/common/white.png",
+  "TorusMajorRadius": 1.0,
+  "TorusMinorRadius": 0.10,
+  "VolumeMode": 0
+}

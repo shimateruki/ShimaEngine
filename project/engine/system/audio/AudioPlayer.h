@@ -35,24 +35,21 @@ public:
 	// 再生済みバッファの待機条件を通知し、デコード側を起こす。
 	void OnBufferEnd(void* pBufferContext) override {
 		std::condition_variable* cv = reinterpret_cast<std::condition_variable*>(pBufferContext);
+		// 提出したバッファに待機条件が関連付いている場合だけ、デコード側の待機を解除する。
 		if (cv) {
 			cv->notify_one();
 		}
 	}
 
-	// この通知では追加処理を行わない。
+	// 完了通知は OnBufferEnd で扱う。他のボイス通知は使用しない。
 	void OnStreamEnd() override {}
 
-	// この通知では追加処理を行わない。
 	void OnVoiceProcessingPassStart(UINT32 BytesRequired) override {}
 
-	// この通知では追加処理を行わない。
 	void OnVoiceProcessingPassEnd() override {}
 
-	// この通知では追加処理を行わない。
 	void OnBufferStart(void* pBufferContext) override {}
 
-	// この通知では追加処理を行わない。
 	void OnLoopEnd(void* pBufferContext) override {}
 
 	// このコールバックではエラー処理を行わない。
@@ -76,11 +73,12 @@ struct SoundDataStreaming {
 	bool isEndOfStream_ = false;
 	bool loop_ = false;
 
-	static const int kNumBuffers = 3;
+	static const std::int32_t kNumBuffers = 3;
 	std::vector<BYTE> buffers_[kNumBuffers];
-	int currentBufferIndex_ = 0;
+	std::int32_t currentBufferIndex_ = 0;
 
 	~SoundDataStreaming() {
+		// 取得済みの音声フォーマットは、Media Foundationが使うCOMのアロケーターへ返す。
 		if (waveFormat_) {
 			CoTaskMemFree(waveFormat_);
 			waveFormat_ = nullptr;
@@ -92,8 +90,7 @@ struct SoundDataStreaming {
 // 担当：SE・BGMの読込、再生・停止、音量とストリーミングを管理する。
 // 関連：AudioEventSystem（イベント選択）、AudioVoiceCallback（完了通知）、Framework（寿命）
 // 主な入口：Initialize / LoadSoundFile / PlaySE / PlayBGM / Update / Finalize
-class AudioPlayer
-{
+class AudioPlayer {
 public:
 	// AudioHandle はロード済みファイル、PlaybackHandle は独立した再生インスタンスを指します。
 	using AudioHandle = uint32_t;
@@ -217,7 +214,7 @@ struct AudioEventDefinition {
     float volumeMax = 1.0f;
     float pitchMin = 1.0f;
     float pitchMax = 1.0f;
-    int maxInstances = 4;
+    std::int32_t maxInstances = 4;
     bool spatial = false;
     float minDistance = 2.0f;
     float maxDistance = 30.0f;

@@ -32,16 +32,19 @@ void Character::RestoreReplayCustomState(const json& state) {
     // 記録に存在する項目だけ戻し、古いリプレイ形式でも再生を継続できるようにする。
     engine::Object3D::RestoreReplayCustomState(state);
 
+    // 移動速度が記録されている場合だけ復元し、古い記録では現在値を使う。
     if (state.contains("characterVelocity")) {
         velocity_ = ReadVector3(state["characterVelocity"], velocity_);
     }
 
     isGrounded_ = state.value("characterGrounded", isGrounded_);
 
+    // 外力の速度ベクトルが記録されている場合だけ、方向と大きさを読み戻す。
     if (state.contains("externalImpulseVelocity")) {
         externalImpulseVelocity_ = ReadVector3(state["externalImpulseVelocity"], externalImpulseVelocity_);
     }
 
+    // 外力がまだ続いていた時間と鉛直成分の適用状態を戻し、再開時の重複適用を防ぐ。
     externalImpulseTimer_ = state.value("externalImpulseTimer", externalImpulseTimer_);
     externalImpulseDuration_ = state.value("externalImpulseDuration", externalImpulseDuration_);
     externalImpulseVerticalPending_ = state.value("externalImpulseVerticalPending", externalImpulseVerticalPending_);

@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "EnemyThunderSlime.h"
 #include "Easing.h"
 #include <numbers>
@@ -47,6 +48,7 @@ engine::Vector3 NormalizePlanar(engine::Vector3 value) {
     value.y = 0.0f;
     const float length = std::sqrt(value.x * value.x + value.z * value.z);
 
+    // 水平成分がほぼゼロなら、固定の+Z方向を返す。
     if (length <= 0.001f) {
         return {0.0f, 0.0f, 1.0f};
     }
@@ -57,6 +59,7 @@ engine::Vector3 NormalizePlanar(engine::Vector3 value) {
 engine::Object3D* FindEnemyDamageTarget(engine::Object3D* object) {
     // 子メッシュとの接触を本体の敵へたどり、被弾対象を統一する。
     for (engine::Object3D* current = object; current; current = current->GetParent()) {
+        // 最初に見つかった敵の本体を、子に代わる命中対象として返す。
         if (dynamic_cast<BaseEnemy*>(current)) {
             return current;
         }
@@ -66,10 +69,9 @@ engine::Object3D* FindEnemyDamageTarget(engine::Object3D* object) {
 }
 } // namespace
 
-// 明示的な破棄処理は持たず、unique_ptr に任せる
+// 本体が所有する常時オーラはメンバーの破棄時に解放する。
 EnemyThunderSlime::~EnemyThunderSlime() = default;
 
-// 雷スライム本体と常時オーラの初期化
 void EnemyThunderSlime::Initialize(engine::Object3DCommon* common, const std::string& modelName) {
     // 常時オーラと地上時の球判定を、敵本体の初期化後に結び付ける。
     BaseEnemy::Initialize(common, modelName);
@@ -79,16 +81,16 @@ void EnemyThunderSlime::Initialize(engine::Object3DCommon* common, const std::st
     SetColor({1.0f, 1.0f, 1.0f, 1.0f});
     SetDefaultColor(GetColor());
 
-    SetCollisionAttribute(CollisionCategories::Get("enemy"));
-    SetCollisionMask(CollisionCategories::Get("player") | CollisionCategories::Get("ground") | CollisionCategories::Get("player_attack") | CollisionCategories::Get("player_bullet"));
-    SetColliderType(ColliderType::Sphere);
+    SetCollisionAttribute(engine::collisionCategories::Get("enemy"));
+    SetCollisionMask(engine::collisionCategories::Get("player") | engine::collisionCategories::Get("ground") | engine::collisionCategories::Get("player_attack") | engine::collisionCategories::Get("player_bullet"));
+    SetColliderType(engine::ColliderType::kSphere);
     SyncGroundCollisionRadius();
     InitializeAuraEffect();
 }
 
-// 近距離放電、追跡、徘徊、オーラ同期の更新
+// 近距離の放電と中距離の落雷を選び、共通の移動後にオーラを追従させる。
 void EnemyThunderSlime::Update(float deltaTime) {
-    // 休眠・運搬・投擲中の例外を先に扱い、通常時だけ攻撃AIとオーラを更新する。
+    // 通常の行動を進めない状態を先に処理する。
     if (UpdateInactiveState(deltaTime)) {
         return;
     }
@@ -132,6 +134,7 @@ bool EnemyThunderSlime::UpdateInactiveState(float deltaTime) {
         return true;
     }
 
+    // 通常の本体が残っている間は、待機火花の時計を運搬や投擲の判定より先に進める。
     idleTimer_ += deltaTime;
     UpdateIdleSpark(deltaTime);
 
@@ -147,12 +150,15 @@ bool EnemyThunderSlime::UpdateInactiveState(float deltaTime) {
 
 bool EnemyThunderSlime::UpdateThrowRecoveryState(float deltaTime) {
     // 投げられた間は判定半径を広げ、通常姿勢へ戻る段階で地上半径に戻す。
+    // 復帰中でなければ、呼び出し元で通常の行動を進められるようにする。
     if (!IsThrowRecovering()) {
         return false;
     }
 
+    // 投擲物として動いている間だけ広い球を使う。
     if (IsThrownPhysics()) {
         SyncThrownCollisionRadius();
+    // 投擲の物理挙動が終わり姿勢を戻す間は、地上用の半径を使う。
     } else {
         SyncGroundCollisionRadius();
     }
@@ -178,12 +184,13 @@ void EnemyThunderSlime::UpdateWildTimers(float deltaTime) {
 
 void EnemyThunderSlime::UpdateWildBehavior(float deltaTime, engine::Vector3& velocity) {
     // 連続落雷中は新しい攻撃を選ばず、固定した方向への落雷を完了させる。
-    if (wildLightningState_ != WildLightningState::Idle) {
+    if (wildLightningState_ != WildLightningState::kIdle) {
         UpdateFacing(wildLightningDirection_);
         UpdateWildLightning(deltaTime);
         return;
     }
 
+    // 標的と固有パラメーターを参照できる場合だけ、距離で次の攻撃を選ぶ。
     if (GetTarget() && GetParameters().has_value()) {
         engine::Vector3 toTarget = GetTarget()->GetTranslate() - GetTranslate();
         engine::Vector3 direction = NormalizePlanar(toTarget);
@@ -193,7 +200,8 @@ void EnemyThunderSlime::UpdateWildBehavior(float deltaTime, engine::Vector3& vel
         UpdateCombatBehavior(deltaTime, velocity, direction, distance);
     }
 
-    if (!isCharging_ && wildLightningState_ == WildLightningState::Idle) {
+    // 放電の溜めも落雷も行っていない場合は、前の予兆を残さない。
+    if (!isCharging_ && wildLightningState_ == WildLightningState::kIdle) {
         HideAttackTelegraph();
     }
 }
@@ -206,6 +214,7 @@ void EnemyThunderSlime::UpdateCombatBehavior(float deltaTime, engine::Vector3& v
     const bool forceShockPreview = debugPreviewAttackId_ == kShockAttackId;
     const bool forceLinePreview = debugPreviewAttackId_ == kWildLineAttackId;
 
+    // 放電を溜めていないときに気付き演出が始まれば、向きだけ合わせて今回の攻撃選択を中止する。
     if (!isCharging_ && UpdateNoticeReaction(deltaTime, distance, GetDetectionRange(), direction)) {
         velocity.x = 0.0f;
         velocity.z = 0.0f;
@@ -213,19 +222,24 @@ void EnemyThunderSlime::UpdateCombatBehavior(float deltaTime, engine::Vector3& v
         return;
     }
 
+    // 放電を溜めている間は、新しい行動を選ばず同じ攻撃を進める。
     if (isCharging_) {
         UpdateCloseRangeShock(deltaTime, direction);
+    // 落雷専用のプレビューを除き、放電の最小・最大射程内で再使用可能なら近距離放電を選ぶ。
     } else if (!forceLinePreview && distance >= attack.minRange && distance <= attack.maxRange &&
                attackCooldown_ <= 0.0f) {
         lastShockDirection_ = direction;
         StartCloseRangeShock();
+    // 放電専用のプレビューを除き、落雷の射程内で再使用可能なら連続落雷を選ぶ。
     } else if (!forceShockPreview && distance >= lineAttack.minRange && distance <= lineAttack.maxRange &&
                attackCooldown_ <= 0.0f) {
         StartWildLightning(direction);
+    // どの技も始められなくても、標的が探知圏内なら方向へ移動する。
     } else if (distance <= GetDetectionRange()) {
         const float speed = (std::max)(0.0f, GetParameters()->speed) * kMoveSpeedScale;
         velocity.x = direction.x * speed;
         velocity.z = direction.z * speed;
+    // 探知圏を外れた場合は、標的を追わず通常の徘徊にする。
     } else {
         UpdateWanderBehavior(deltaTime, velocity);
     }
@@ -242,22 +256,27 @@ void EnemyThunderSlime::SetDebugPreviewAttackId(const std::string& attackId) {
 
 const char* EnemyThunderSlime::GetDebugAttackPhaseName() const {
     // 実際の攻撃状態をプレビュー表示用の短い日本語へ変換する。
-    if (wildLightningState_ == WildLightningState::Charging) {
+    // 連続落雷の着弾が始まる前は、専用の溜めとして表示する。
+    if (wildLightningState_ == WildLightningState::kCharging) {
         return "連続落雷・溜め";
     }
 
-    if (wildLightningState_ == WildLightningState::Striking) {
+    // 着弾点を順番に処理する間は連続落雷の実行を表示する。
+    if (wildLightningState_ == WildLightningState::kStriking) {
         return "連続落雷・落雷中";
     }
 
+    // 近距離の電撃をまだ発生させていない間は、放電の溜めとして表示する。
     if (isCharging_) {
         return "近距離放電・溜め";
     }
 
+    // 攻撃終了後の姿勢反応が残っている場合は放電後の反発を表示する。
     if (shockSquashTimer_ > 0.0f) {
         return "放電後・反発";
     }
 
+    // 攻撃中でも反発中でもなく、再使用に時間が残るなら待ち時間と表示する。
     if (attackCooldown_ > 0.0f) {
         return "再使用待ち";
     }
@@ -269,7 +288,7 @@ const char* EnemyThunderSlime::GetDebugAttackPhaseName() const {
 void EnemyThunderSlime::StartWildLightning(const engine::Vector3& direction) {
     // 射線上の着地点を先に固定し、予告と実際の雷が同じ地面を指すようにする。
     const EnemyAttackDefinition& attack = GetAttackDefinition(kWildLineAttackId);
-    wildLightningState_ = WildLightningState::Charging;
+    wildLightningState_ = WildLightningState::kCharging;
     wildLightningDirection_ = NormalizePlanar(direction);
     wildLightningTimer_ = (std::max)(0.12f, attack.windupDuration);
     wildLightningEffectTimer_ = 0.0f;
@@ -288,6 +307,7 @@ void EnemyThunderSlime::StartWildLightning(const engine::Vector3& direction) {
         const engine::Vector3 samplePosition = origin + wildLightningDirection_ * distance;
         wildStrikePositions_[index] = FindStrikeGround(samplePosition, this, origin.y);
 
+        // メッシュ演出が使える場合だけ、確定した着弾位置に予告を重ねる。
         if (meshEffects) {
             engine::Vector3 warningPosition = wildStrikePositions_[index];
             warningPosition.y += 0.045f;
@@ -303,7 +323,8 @@ void EnemyThunderSlime::StartWildLightning(const engine::Vector3& direction) {
 
 void EnemyThunderSlime::UpdateWildLightning(float deltaTime) {
     // 溜め中は全着弾点を予告し、放出後は未発生の地点だけを順番に残す。
-    if (wildLightningState_ == WildLightningState::Idle) {
+    // 落雷を開始していない場合は、予定時刻も発生地点も進めない。
+    if (wildLightningState_ == WildLightningState::kIdle) {
         return;
     }
 
@@ -312,12 +333,14 @@ void EnemyThunderSlime::UpdateWildLightning(float deltaTime) {
     wildLightningTimer_ -= deltaTime;
     wildLightningEffectTimer_ -= deltaTime;
 
-    if (wildLightningState_ == WildLightningState::Charging) {
+    // 溜め中は全着弾点の円を表示し、着弾を開始する条件だけを判定する。
+    if (wildLightningState_ == WildLightningState::kCharging) {
         const float windupDuration = (std::max)(0.01f, attack.windupDuration);
         const float progress = 1.0f - std::clamp(wildLightningTimer_ / windupDuration, 0.0f, 1.0f);
         ShowAttackTelegraphImpactAreas(wildStrikePositions_.data(), wildStrikePositions_.size(), attack.radius,
                                        progress, {1.0f, 0.94f, 0.16f, 0.84f});
         // 攻撃設定の溜め素材を優先し、完了が近づくほど発生間隔を詰める。
+        // 粒子の残り時間が切れたら、溜めの進み具合で次回の発生間隔を設定する。
         if (wildLightningEffectTimer_ <= 0.0f) {
             EmitLineChargeEffect(attack.windupVfx.empty() ? kLineChargePreset : attack.windupVfx.c_str(), progress);
             wildLightningEffectTimer_ = 0.072f - progress * 0.030f;
@@ -331,7 +354,7 @@ void EnemyThunderSlime::UpdateWildLightning(float deltaTime) {
 
         // 溜めの最後に状態だけ切り替え、次の更新で最初の着弾を出す。
         if (wildLightningTimer_ <= 0.0f) {
-            wildLightningState_ = WildLightningState::Striking;
+            wildLightningState_ = WildLightningState::kStriking;
             wildLightningTimer_ = 0.0f;
         }
 
@@ -339,14 +362,14 @@ void EnemyThunderSlime::UpdateWildLightning(float deltaTime) {
     }
 
     // 複数の予定時刻を跨いだときも、用意した着弾先を飛ばさず処理する。
-    while (wildLightningTimer_ <= 0.0f && wildStrikeIndex_ < static_cast<int>(wildStrikePositions_.size())) {
+    while (wildLightningTimer_ <= 0.0f && wildStrikeIndex_ < static_cast<std::int32_t>(wildStrikePositions_.size())) {
         SpawnWildLightningStrike(wildStrikePositions_[wildStrikeIndex_]);
         ++wildStrikeIndex_;
         wildLightningTimer_ += kWildStrikeInterval;
     }
 
     // 発生済みの地点を予兆から外し、残っている地点だけ次の落雷間隔に合わせて表示する。
-    if (wildStrikeIndex_ < static_cast<int>(wildStrikePositions_.size())) {
+    if (wildStrikeIndex_ < static_cast<std::int32_t>(wildStrikePositions_.size())) {
         const std::size_t remainingCount = wildStrikePositions_.size() - static_cast<std::size_t>(wildStrikeIndex_);
         const float strikeProgress = 1.0f - std::clamp(wildLightningTimer_ / kWildStrikeInterval, 0.0f, 1.0f);
         ShowAttackTelegraphImpactAreas(wildStrikePositions_.data() + wildStrikeIndex_, remainingCount, attack.radius,
@@ -354,9 +377,9 @@ void EnemyThunderSlime::UpdateWildLightning(float deltaTime) {
     }
 
     // 最後の落雷後に表示・命中履歴を片付け、次の行動で前回の状態を引き継がないようにする。
-    if (wildStrikeIndex_ >= static_cast<int>(wildStrikePositions_.size())) {
+    if (wildStrikeIndex_ >= static_cast<std::int32_t>(wildStrikePositions_.size())) {
         HideAttackTelegraph();
-        wildLightningState_ = WildLightningState::Idle;
+        wildLightningState_ = WildLightningState::kIdle;
         wildLightningTimer_ = 0.0f;
         wildLightningEffectTimer_ = 0.0f;
         wildStrikeIndex_ = 0;
@@ -373,6 +396,7 @@ void EnemyThunderSlime::SpawnWildLightningStrike(const engine::Vector3& groundPo
 
 void EnemyThunderSlime::DispatchWildLightningDamage(const engine::Vector3& groundPosition) {
     // 一連の落雷で同じ対象を二度傷つけず、水平半径と高さを別々に判定する。
+    // 現在の標的がいないか、この連続落雷ですでに命中を通知した場合は判定しない。
     if (!GetTarget() || wildLightningHitTarget_) {
         return;
     }
@@ -397,20 +421,21 @@ void EnemyThunderSlime::DispatchWildLightningDamage(const engine::Vector3& groun
     damageEvent.target = GetTarget();
     damageEvent.attacker = this;
     damageEvent.damageAmount = attack.damage;
-    damageEvent.damageType = DamageType::Electric;
+    damageEvent.damageType = DamageType::kElectric;
     damageEvent.knockbackVelocity = {
         wildLightningDirection_.x * 7.5f,
         6.5f,
         wildLightningDirection_.z * 7.5f,
     };
 
+    // 命中イベントを共通処理へ送り、同じ連続落雷での再通知を防ぐ。
     EventManager::GetInstance()->Dispatch(damageEvent);
     wildLightningHitTarget_ = true;
 }
 
 void EnemyThunderSlime::ResetWildLightning() {
-    // 中断・運搬・撃破後に落雷の途中状態を持ち越さない。
-    wildLightningState_ = WildLightningState::Idle;
+    // 連続落雷を待機状態に戻し、予約時刻、着弾順、命中済みの記録を消す。
+    wildLightningState_ = WildLightningState::kIdle;
     wildLightningTimer_ = 0.0f;
     wildLightningEffectTimer_ = 0.0f;
     wildStrikeIndex_ = 0;
@@ -428,11 +453,13 @@ void EnemyThunderSlime::ApplyGroundMovementAndAnimation(float deltaTime, engine:
     // 詠唱中は足踏みを止め、移動中だけ跳ねる速度と地上判定半径を反映する。
     velocity.y = (std::min)(GetVelocity().y, 0.0f);
 
-    if (isCharging_ || wildLightningState_ != WildLightningState::Idle) {
+    // 近距離放電の溜めか連続落雷中は、水平移動と小跳びのタイマーを止める。
+    if (isCharging_ || wildLightningState_ != WildLightningState::kIdle) {
         velocity.x = 0.0f;
         velocity.z = 0.0f;
         groundHopTimer_ = 0.0f;
-    } else if (SlimeBounceAnimator::StepGroundHop(groundHopTimer_, velocity, IsGrounded(), deltaTime, kMoveHopInterval,
+    // 攻撃を続けていない場合に、接地・移動と時間の条件を満たした小跳びを適用する。
+    } else if (slimeBounceAnimator::StepGroundHop(groundHopTimer_, velocity, IsGrounded(), deltaTime, kMoveHopInterval,
                                                   0.10f)) {
         velocity.y = (std::max)(velocity.y, kMoveHopPower);
     }
@@ -446,6 +473,7 @@ void EnemyThunderSlime::Draw(ID3D12Resource* pointLightResource, ID3D12Resource*
     // オーラは本体と別のエフェクトなので可視時だけ追加描画する。
     BaseEnemy::Draw(pointLightResource, spotLightResource);
 
+    // オーラを作成済みで表示も有効な場合だけ、本体に重ねる。
     if (auraEffect_ && auraEffect_->GetIsVisible()) {
         auraEffect_->Draw(pointLightResource, spotLightResource);
     }
@@ -464,10 +492,12 @@ std::unique_ptr<engine::Object3D> EnemyThunderSlime::Clone() const {
 
 void EnemyThunderSlime::BeginThrown(const engine::Vector3& initialVelocity) {
     // 雷攻撃を中断して予兆を消し、投擲中だけ広い接触半径に切り替える。
+    // 投げられるまで大きさを記録していなければ、この時点の基準を確定する。
     if (!hasBaseScale_) {
         baseScale_ = GetScale();
         const float capturedMaxScale =
             (std::max)({std::abs(baseScale_.x), std::abs(baseScale_.y), std::abs(baseScale_.z)});
+        // 配置のすべての拡縮成分が絶対値で1.2未満なら、投擲にも使える既定寸法を採用する。
         if (capturedMaxScale < 1.2f) {
             baseScale_ = {2.0f, 2.0f, 2.0f};
         }
@@ -475,6 +505,7 @@ void EnemyThunderSlime::BeginThrown(const engine::Vector3& initialVelocity) {
         hasBaseScale_ = true;
     }
 
+    // 攻撃のタイマーと予兆を消し、投げる前の変形を基準サイズへ戻す。
     isCharging_ = false;
     chargeWarningTriggered_ = false;
     chargeTimer_ = 0.0f;
@@ -493,11 +524,12 @@ engine::Vector3 EnemyThunderSlime::FindStrikeGround(const engine::Vector3& sampl
     engine::Vector3 rayStart = samplePosition;
     rayStart.y += 10.0f;
 
-    PhysicsQueryFilter filter;
-    filter.mask = CollisionCategories::Get("ground");
+    engine::PhysicsQueryFilter filter;
+    filter.mask = engine::collisionCategories::Get("ground");
     filter.ignoredObject = ignoredObject;
-    const RaycastHit hit = CollisionManager::GetInstance()->Raycast(rayStart, {0.0f, -1.0f, 0.0f}, 22.0f, filter);
+    const engine::RaycastHit hit = engine::CollisionManager::GetInstance()->Raycast(rayStart, {0.0f, -1.0f, 0.0f}, 22.0f, filter);
 
+    // 床に当たった場合は実際の接点を返し、床を見つけられない場合は指定のYを使う。
     if (hit.isHit) {
         return hit.hitPoint;
     }
@@ -513,6 +545,7 @@ void EnemyThunderSlime::SpawnLightningStrikeVisual(const engine::Vector3& ground
     strikeCenter.y += kLightningStrikeHeight * 0.5f;
     const float strikeYaw = std::atan2(direction.x, direction.z);
 
+    // メッシュ演出が使える場合は、雷の柱・枝・中心を同じ着弾点に揃える。
     if (MeshEffectManager* meshEffects = MeshEffectManager::GetInstance()) {
         meshEffects->SpawnEffectAt(kLightningBoltEffectPath, strikeCenter, {kHalfPi, strikeYaw, 0.0f});
         meshEffects->SpawnEffectAt(kLightningBoltEffectPath, strikeCenter, {kHalfPi, strikeYaw + kHalfPi, 0.0f},
@@ -545,6 +578,7 @@ void EnemyThunderSlime::SpawnLightningStrikeVisual(const engine::Vector3& ground
 
 void EnemyThunderSlime::SpawnChargeGroundEffect(const engine::Vector3& groundPosition, float scale) {
     // 地面との重なりを避ける小さな高さ補正を加えて詠唱模様を置く。
+    // 描画管理が使える場合だけ、接点よりわずかに浮かせて模様を置く。
     if (MeshEffectManager* meshEffects = MeshEffectManager::GetInstance()) {
         engine::Vector3 effectPosition = groundPosition;
         effectPosition.y += 0.035f;
@@ -553,10 +587,10 @@ void EnemyThunderSlime::SpawnChargeGroundEffect(const engine::Vector3& groundPos
     }
 }
 
-// 放電攻撃と火花演出
 void EnemyThunderSlime::UpdateFacing(const engine::Vector3& direction) {
     // モデルの正面補正を加え、最短角で標的へ向ける。
     const float lengthSq = direction.x * direction.x + direction.z * direction.z;
+    // 水平成分の長さが十分でないときは現在の向きを維持する。
     if (lengthSq <= 0.0001f)
         return;
     const float targetYaw = std::atan2(direction.x, direction.z) + kThunderSlimeModelYawOffset;
@@ -565,6 +599,7 @@ void EnemyThunderSlime::UpdateFacing(const engine::Vector3& direction) {
 
 void EnemyThunderSlime::StartCloseRangeShock() {
     // 近距離放電の予備動作を始め、地面の予告と外周の電弧を同じ時刻に出す。
+    // まだ未設定の場合だけ、溜めで変形させる前に基準の大きさを保持する。
     if (!hasBaseScale_) {
         baseScale_ = GetScale();
         hasBaseScale_ = true;
@@ -594,7 +629,7 @@ void EnemyThunderSlime::UpdateCloseRangeShock(float deltaTime, const engine::Vec
 
     // 溜めが進むほど電弧を増やし、発生間隔を短くする。
     if (chargeParticleTimer_ <= 0.0f) {
-        const int arcCount = progress >= 0.68f ? 3 : 2;
+        const std::int32_t arcCount = progress >= 0.68f ? 3 : 2;
         EmitOuterThunderEffect(attack.windupVfx.empty() ? kRadialChargePreset : attack.windupVfx.c_str(), arcCount,
                                0.55f + progress * 1.4f);
         chargeParticleTimer_ = 0.070f - progress * 0.032f;
@@ -617,19 +652,23 @@ void EnemyThunderSlime::ReleaseShock(const engine::Vector3& direction) {
     const EnemyAttackDefinition& attack = GetAttackDefinition(kShockAttackId);
     isCharging_ = false;
 
+    // 直前の予告強調を出していない場合は、発動時に一度だけ補う。
     if (!chargeWarningTriggered_) {
         TriggerAttackTelegraphCue({1.0f, 0.92f, 0.12f, 1.0f});
         chargeWarningTriggered_ = true;
     }
 
+    // 床の予兆を終えた時点から反動を始め、接触半径も地上用に揃える。
     HideAttackTelegraph();
     shockSquashTimer_ = attack.recoveryDuration;
     SyncGroundCollisionRadius();
 
+    // 放電の中心を本体の底面より上に置き、先に周囲へ電弧を出す。
     engine::Vector3 center = GetTranslate();
     center.y += (std::max)(0.5f, baseScale_.y * 0.22f);
     EmitOuterThunderEffect(attack.activeVfx.empty() ? kDischargePreset : attack.activeVfx.c_str(), 5, 0.35f);
 
+    // メッシュ演出を生成できる場合は、地面の接点へ焦げ跡を残す。
     if (MeshEffectManager* meshEffects = MeshEffectManager::GetInstance()) {
         const engine::Vector3 origin = GetWorldPosition();
         engine::Vector3 scorchPosition = FindStrikeGround(origin, this, origin.y);
@@ -644,6 +683,7 @@ void EnemyThunderSlime::ReleaseShock(const engine::Vector3& direction) {
 void EnemyThunderSlime::DispatchShockDamage(const engine::Vector3& center, const engine::Vector3& direction, float radius,
                                             float damage) {
     // 高さ方向の差を軽く見て球状範囲を判定し、中心に近いほど押し出しを強める。
+    // 標的がいないときは円の距離計算とダメージ通知を省く。
     if (!GetTarget()) {
         return;
     }
@@ -652,6 +692,7 @@ void EnemyThunderSlime::DispatchShockDamage(const engine::Vector3& center, const
     diff.y *= 0.45f;
     const float distance = engine::Math::Length(diff);
 
+    // 高さを弱めた距離でも半径を超える対象には命中を通知しない。
     if (distance > radius) {
         return;
     }
@@ -661,7 +702,7 @@ void EnemyThunderSlime::DispatchShockDamage(const engine::Vector3& center, const
     damageEvent.target = GetTarget();
     damageEvent.attacker = this;
     damageEvent.damageAmount = damage;
-    damageEvent.damageType = DamageType::Electric;
+    damageEvent.damageType = DamageType::kElectric;
     damageEvent.knockbackVelocity = {direction.x * (8.0f + distanceRate * 5.0f), 5.8f + distanceRate * 2.0f,
                                      direction.z * (8.0f + distanceRate * 5.0f)};
     EventManager::GetInstance()->Dispatch(damageEvent);
@@ -669,29 +710,32 @@ void EnemyThunderSlime::DispatchShockDamage(const engine::Vector3& center, const
 
 void EnemyThunderSlime::UpdateIdleSpark(float deltaTime) {
     // 攻撃の溜め中は専用電弧だけを使い、待機火花との二重発生で輪郭が潰れるのを防ぎます。
-    if (isCharging_ || wildLightningState_ == WildLightningState::Charging) {
+    if (isCharging_ || wildLightningState_ == WildLightningState::kCharging) {
         idleSparkTimer_ = kIdleSparkInterval;
         return;
     }
 
     idleSparkTimer_ -= deltaTime;
 
+    // 前回の火花から発生間隔を使い切るまでは、新しい火花を出さない。
     if (idleSparkTimer_ > 0.0f) {
         return;
     }
 
     EmitOuterThunderEffect(kIdleSparkPreset, isCharging_ ? 3 : 2);
 
+    // 放電の溜めでは冒頭で戻るため、ここまで進んだ場合は運搬中か通常時の間隔が選ばれる。
     if (isCharging_) {
         idleSparkTimer_ = kIdleSparkInterval * 0.62f;
+    // 運搬中は通常時より短い発生間隔を設定する。
     } else if (IsCarried()) {
         idleSparkTimer_ = kIdleSparkInterval * 0.76f;
+    // 通常時は基準の発生間隔へ戻す。
     } else {
         idleSparkTimer_ = kIdleSparkInterval;
     }
 }
 
-// 常時オーラの表示位置と形状同期
 void EnemyThunderSlime::InitializeAuraEffect() {
     // 常時オーラを表示専用として用意し、JSON読込失敗時は本体の動作を続ける。
     if (!GetObjectCommon() || auraEffect_) {
@@ -702,6 +746,7 @@ void EnemyThunderSlime::InitializeAuraEffect() {
     auraEffect_->Initialize(GetObjectCommon());
     auraEffect_->SetName("ThunderSlime_RoundAura");
 
+    // 素材の読み込みに失敗したら不完全な表示物を破棄し、本体は動作させる。
     if (!auraEffect_->LoadFromJson(kConstantAuraEffectPath)) {
         auraEffect_.reset();
         return;
@@ -713,18 +758,22 @@ void EnemyThunderSlime::InitializeAuraEffect() {
 
 void EnemyThunderSlime::UpdateAuraEffect(float deltaTime) {
     // 本体の大きさに合わせてオーラを変形し、カメラへ向く角度を毎フレーム決める。
+    // まだオーラを持たない場合は、今回の更新で素材の準備を試す。
     if (!auraEffect_) {
         InitializeAuraEffect();
     }
 
+    // 再試行後もオーラがなければ、表示物の更新は省く。
     if (!auraEffect_) {
         return;
     }
 
+    // 基準の大きさが未設定なら、本体の現在の大きさから確定する。
     if (!hasBaseScale_) {
         baseScale_ = GetScale();
         const float capturedMaxScale =
             (std::max)({std::abs(baseScale_.x), std::abs(baseScale_.y), std::abs(baseScale_.z)});
+        // 現在の倍率の最大成分が1.2未満の個体には、基準寸法2を補う。
         if (capturedMaxScale < 1.2f) {
             baseScale_ = {2.0f, 2.0f, 2.0f};
         }
@@ -741,9 +790,11 @@ void EnemyThunderSlime::UpdateAuraEffect(float deltaTime) {
     float yaw = GetRotation().y;
     engine::Camera* camera = CameraManager::GetInstance() ? CameraManager::GetInstance()->GetActiveCamera() : nullptr;
 
+    // 描画カメラを取得できれば、その視点への水平方向を求める。
     if (camera) {
         const engine::Vector3 toCamera = camera->GetEye() - auraPos;
 
+        // カメラとのXZの成分差が十分なときだけ、板のYawを視点に向け直す。
         if (std::abs(toCamera.x) + std::abs(toCamera.z) > 0.001f) {
             yaw = std::atan2(toCamera.x, toCamera.z);
         }
@@ -779,8 +830,9 @@ void EnemyThunderSlime::CalculateAuraShape(engine::Vector3& center, float& horiz
     center.y += (std::max)(0.22f, yScale * 0.43f);
 }
 
-void EnemyThunderSlime::EmitOuterThunderEffect(const char* presetName, int count, float phaseOffset) {
+void EnemyThunderSlime::EmitOuterThunderEffect(const char* presetName, std::int32_t count, float phaseOffset) {
     // 電弧を楕円周上に分散し、個数と位相で待機・詠唱・放電を使い分ける。
+    // 発生する個数が0以下なら、周の等間隔分割を行わない。
     if (count <= 0) {
         return;
     }
@@ -794,7 +846,7 @@ void EnemyThunderSlime::EmitOuterThunderEffect(const char* presetName, int count
     const float verticalRadius = verticalDiameter * 0.38f;
     const float phase = idleTimer_ * 3.4f + phaseOffset;
 
-    for (int i = 0; i < count; ++i) {
+    for (std::int32_t i = 0; i < count; ++i) {
         const float angle = phase + (kTwoPi * static_cast<float>(i) / static_cast<float>(count));
         engine::Vector3 pos = center;
         pos.x += std::cos(angle) * horizontalRadius;
@@ -807,6 +859,7 @@ void EnemyThunderSlime::EmitOuterThunderEffect(const char* presetName, int count
 // 中距離落雷では、外周の電弧を上方へ絞り込み、次に縦方向の雷が来ることを形で示します。
 void EnemyThunderSlime::EmitLineChargeEffect(const char* presetName, float progress) {
     // 落雷の発生が近づくほど電弧を中心・上方へ集める。
+    // 粒子の参照名が空の場合は、発生位置を計算せず終了する。
     if (!presetName || presetName[0] == '\0') {
         return;
     }
@@ -818,10 +871,10 @@ void EnemyThunderSlime::EmitLineChargeEffect(const char* presetName, float progr
 
     const float clampedProgress = std::clamp(progress, 0.0f, 1.0f);
     const float radius = horizontalDiameter * (0.42f - clampedProgress * 0.17f);
-    const int arcCount = clampedProgress >= 0.62f ? 3 : 2;
+    const std::int32_t arcCount = clampedProgress >= 0.62f ? 3 : 2;
     const float phase = idleTimer_ * 4.8f + clampedProgress * 2.3f;
 
-    for (int index = 0; index < arcCount; ++index) {
+    for (std::int32_t index = 0; index < arcCount; ++index) {
         const float angle = phase + kTwoPi * static_cast<float>(index) / static_cast<float>(arcCount);
         engine::Vector3 position = center;
         position.x += std::cos(angle) * radius;
@@ -831,6 +884,7 @@ void EnemyThunderSlime::EmitLineChargeEffect(const char* presetName, float progr
         EmitThunderPreset(presetName, position);
     }
 
+    // 溜めが74%以上に達した場合は、周囲の電弧に加えて頭上にも一つ出す。
     if (clampedProgress >= 0.74f) {
         engine::Vector3 crownPosition = center;
         crownPosition.y += verticalDiameter * 0.58f + 0.54f + clampedProgress * 0.42f;
@@ -842,6 +896,7 @@ void EnemyThunderSlime::EmitThunderPreset(const char* presetName, const engine::
     // GPU粒子が未初期化のプレビューでも本体の攻撃は継続する。
     GpuParticleManager* particles = GpuParticleManager::GetInstance();
 
+    // 管理オブジェクトが無いか初期化前の場合は、粒子の発生だけを省く。
     if (!particles || !particles->IsInitialized()) {
         return;
     }
@@ -867,11 +922,11 @@ void EnemyThunderSlime::ApplySlimeAnimation(float deltaTime) {
         targetRotation.x = chargePulse * 0.8f;
         targetRotation.z = std::sin(t * kTwoPi * 4.0f) * 0.035f * slam;
         SetColor({1.0f, 0.98f, 0.70f + std::sin(t * 58.0f) * 0.08f, 1.0f});
-    } else if (wildLightningState_ != WildLightningState::Idle) {
+    } else if (wildLightningState_ != WildLightningState::kIdle) {
         // 連続落雷は発動前には残りの溜め時間、発動後には着弾済みの数を姿勢の進行率にする。
         const EnemyAttackDefinition& lineAttack = GetAttackDefinition(kWildLineAttackId);
         const float windupDuration = (std::max)(0.01f, lineAttack.windupDuration);
-        const bool isWindup = wildLightningState_ == WildLightningState::Charging;
+        const bool isWindup = wildLightningState_ == WildLightningState::kCharging;
         const float progress =
             isWindup
                 ? std::clamp(1.0f - wildLightningTimer_ / windupDuration, 0.0f, 1.0f)
@@ -895,16 +950,19 @@ void EnemyThunderSlime::ApplySlimeAnimation(float deltaTime) {
         const float elapsed = 1.0f - remaining;
         engine::Vector3 multiplier = {1.0f, 1.0f, 1.0f};
 
+        // 反動の序盤では、横につぶれた姿勢から一度縦に伸びる。
         if (elapsed < 0.28f) {
             const float phase = elapsed / 0.28f;
             const float eased = Easing::SmoothStep(phase);
             multiplier = {1.82f + (0.90f - 1.82f) * eased, 0.48f + (1.25f - 0.48f) * eased,
                           1.76f + (0.94f - 1.76f) * eased};
+        // 中盤は反発で縦の伸びを戻し、横を少し広げる。
         } else if (elapsed < 0.64f) {
             const float phase = (elapsed - 0.28f) / 0.36f;
             const float eased = Easing::SmoothStep(phase);
             multiplier = {0.90f + (1.12f - 0.90f) * eased, 1.25f + (0.86f - 1.25f) * eased,
                           0.94f + (1.10f - 0.94f) * eased};
+        // 反動の後半は全軸を基準の1倍へ戻す。
         } else {
             const float phase = (elapsed - 0.64f) / 0.36f;
             const float eased = Easing::SmoothStep(phase);
@@ -917,7 +975,7 @@ void EnemyThunderSlime::ApplySlimeAnimation(float deltaTime) {
         SetColor({1.0f, 0.98f, 0.70f + remaining * 0.16f, 1.0f});
     } else {
         // 通常時は移動・接地で弾みを決め、攻撃色を既定色へ戻す。
-        SlimeBounceAnimator::Params params;
+        slimeBounceAnimator::Params params;
         params.speedForFullBounce = 2.1f;
         params.idleAmplitude = 0.085f;
         params.moveAmplitude = 0.30f;
@@ -925,18 +983,19 @@ void EnemyThunderSlime::ApplySlimeAnimation(float deltaTime) {
         params.horizontalSquash = 0.30f;
         params.verticalStretch = 0.38f;
         params.airborneStretch = 0.36f;
-        targetScale = SlimeBounceAnimator::MakeScale(baseScale_, GetVelocity(), idleTimer_, IsGrounded(), params);
+        targetScale = slimeBounceAnimator::MakeScale(baseScale_, GetVelocity(), idleTimer_, IsGrounded(), params);
         SetColor(GetDefaultColor());
     }
 
     // 攻撃または移動の姿勢に被弾反応を重ね、雷の攻撃中は通常時より早く目標姿勢へ寄せる。
     ApplyDamageReactionPose(targetScale, targetRotation);
     engine::Vector3 scale = GetScale();
-    const float lerpRate = isCharging_ || wildLightningState_ != WildLightningState::Idle || shockSquashTimer_ > 0.0f
+    const float lerpRate = isCharging_ || wildLightningState_ != WildLightningState::kIdle || shockSquashTimer_ > 0.0f
                                ? (std::min)(1.0f, deltaTime * 24.0f)
                                : (std::min)(1.0f, deltaTime * 11.0f);
     scale = engine::Math::Lerp(scale, targetScale, lerpRate);
     SetScale(scale);
+    // 向き付けで更新したYawは保持し、反動による前後と横の傾きだけを補間する。
     const engine::Vector3 currentRotation = GetRotation();
     SetRotation({currentRotation.x + (targetRotation.x - currentRotation.x) * lerpRate, currentRotation.y,
                  currentRotation.z + (targetRotation.z - currentRotation.z) * lerpRate});

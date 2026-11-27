@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "game/actor/enemy/combat/EnemyAttackProfile.h"
 #include <fstream>
 #include <iostream>
@@ -15,7 +16,7 @@ int main(int argc, char** argv) {
         Require(argc == 2, "temporary json path required");
         EnemyAttackProfile profile;
         std::string error;
-        for (const char* type : {"Slime", "FireSlime", "ThunderSlime", "WindSlime", "GiantSlime", "PrismSlime", "MagmaSlime", "FalseKingSlime"}) {
+        for (const char* type : {"Slime", "FireSlime", "ThunderSlime", "WindSlime", "Bomber", "GiantSlime", "PrismSlime", "MagmaSlime", "FalseKingSlime"}) {
             EnemyAttackProfile legacy; Require(legacy.LoadForEnemy(type, &error), error);
         }
         Require(profile.LoadForEnemy("FireSlime", &error), error);
@@ -24,7 +25,7 @@ int main(int argc, char** argv) {
         Require(attack->sequence.tracks.size() == 1 && attack->sequence.tracks[0].type == "body_animation", "body track missing");
         AttackSequenceClock clock;
         Require(clock.Start(attack->sequence), "clock start");
-        int shots = 0;
+        std::int32_t shots = 0;
         auto execute = [&](const AttackSequenceEvent& event) { if (event.operation == "projectile") ++shots; };
         auto always = [](const std::string&) { return true; };
         clock.Update(0, always, execute);
@@ -37,12 +38,12 @@ int main(int argc, char** argv) {
         auto movement = attack->playerMovement;
         const engine::Vector3 current{10, -7, 0}, desired{-10, 0, 0};
         const auto ground = movement.Apply(current, desired, true, 1.0f / 60);
-        Require(std::abs(ground.x + 4.5f) < 0.0001f && ground.y == -7, "ground movement or gravity changed");
+        Require(std::abs(ground.x + 2.0f) < 0.0001f && ground.y == -7, "ground movement or gravity changed");
         const auto air = movement.Apply(current, desired, false, 1.0f / 60);
         Require(air.x > 0 && air.x < 10 && air.y == -7, "air momentum or gravity lost");
         auto slow = current, fast = current;
-        for (int i = 0; i < 30; ++i) slow = movement.Apply(slow, desired, false, 1.0f / 30);
-        for (int i = 0; i < 120; ++i) fast = movement.Apply(fast, desired, false, 1.0f / 120);
+        for (std::int32_t i = 0; i < 30; ++i) slow = movement.Apply(slow, desired, false, 1.0f / 30);
+        for (std::int32_t i = 0; i < 120; ++i) fast = movement.Apply(fast, desired, false, 1.0f / 120);
         Require(std::abs(slow.x - fast.x) < 0.0001f && fast.x < 0, "air response depends on frame rate or cannot turn");
         Require(movement.Apply(current, desired, false, 0).x == 10, "pause changed velocity");
         movement.enabled = false;

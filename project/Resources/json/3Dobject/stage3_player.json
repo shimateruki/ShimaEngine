@@ -78,10 +78,6 @@
                 "scatteringG": 0.0,
                 "scatteringIntensity": 0.0
             },
-            "lod": {
-                "enabled": false,
-                "levels": []
-            },
             "materialType": 25,
             "meshDrawIndex": -1,
             "meshEffect1": "",
@@ -101,7 +97,7 @@
             ],
             "quaternion": [
                 0.0,
-                -1.0,
+                1.0,
                 0.0,
                 7.549790126404332e-08
             ],
@@ -111,9 +107,9 @@
                 "recordPathName": ""
             },
             "rotation": [
-                0.0,
-                -3.141592502593994,
-                0.0
+                -0.0,
+                3.141592502593994,
+                -0.0
             ],
             "roughness": 0.6000000238418579,
             "saveCategory": "Player",

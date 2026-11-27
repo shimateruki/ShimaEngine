@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "engine/utility/math/Math.h"
 #include "engine/animation/cinematic/CinematicPresentation.h"
@@ -14,7 +15,7 @@ namespace engine {
 // 関連：CinematicSequence（この型を使う機能の本体）
 struct CinematicObjectBinding {
     std::string targetName;
-    int targetEventId = -1; // イベントIDによる対象指定。-1は未指定。
+    std::int32_t targetEventId = -1; // イベントIDによる対象指定。-1は未指定。
 };
 
 // 対象Objectへ適用する変形の時間列。relative 系フラグは座標の基準を指定します。
@@ -48,7 +49,7 @@ struct CinematicVfxTrackData {
     float duration = 0.1f; // トラック・クリップの長さ（秒）。
     // trueなら開始時の対象位置をワールド座標で確定し、対象の拡縮・回転をVFXへ継承しない。
     bool snapshotTargetPosition = false;
-    engine::Vector3 rootOffset = engine::Vector3::ZERO;
+    engine::Vector3 rootOffset = engine::Vector3::kZero;
     engine::Vector3 rootScale = {1.0f, 1.0f, 1.0f};
     bool enabled = true;
     bool muted = false; // 再生評価から一時的に除外するか。
@@ -64,7 +65,7 @@ struct CinematicCameraShot {
     float duration = 1.0f; // トラック・クリップの長さ（秒）。
     float blendInDuration = 0.3f;
     float blendOutDuration = 0.3f;
-    int easing = 4;
+    std::int32_t easing = 4;
     bool enabled = true;
     bool muted = false; // 再生評価から一時的に除外するか。
 };
@@ -84,7 +85,7 @@ struct CinematicAnimationClipData {
     float playbackSpeed = 1.0f;
 
     float blendInDuration = 0.12f;
-    int easing = 4;
+    std::int32_t easing = 4;
 
     bool loop = false;
     bool restoreOnStop = true;
@@ -121,7 +122,7 @@ struct CinematicSignalMarker {
 // 関連：CinematicSequence（この型を使う機能の本体）
 struct CinematicEventMarker {
     float time = 0.0f;
-    int eventId = 0;
+    std::int32_t eventId = 0;
     std::string name;
     CinematicObjectBinding binding;
 };
@@ -129,9 +130,9 @@ struct CinematicEventMarker {
 // 担当：カットシーンのトラック・マーカーと対象の対応を保存する。
 // 関連：CinematicPlayer（再生）、GhostDirector（編集）、CinematicPresentation（演出部品）
 // 時刻・長さは秒。カメラ自身の追従設定はCamera Object側で保持する。
-class CinematicSequence {
+struct CinematicSequence {
   public:
-    static constexpr int kCurrentVersion = 8;
+    static constexpr std::int32_t kCurrentVersion = 8;
 
     // 各トラックを消去して制作時の初期値へ戻します。
     void Clear();
@@ -154,14 +155,14 @@ class CinematicSequence {
     bool Save(const std::filesystem::path& filePath) const;
 
     // 保存内容をメモリ上で比較するため、同じJSONを文字列に変換する。
-    std::string ToJsonText(int indent = -1) const;
+    std::string ToJsonText(std::int32_t indent = -1) const;
 
     /// <summary>JSON ファイルを読み込み、各トラックの時刻順を整えます。</summary>
     /// <param name="filePath">読み込むファイルパス。</param>
     /// <returns>読み込みと形式の検証に成功した場合は true。</returns>
     bool Load(const std::filesystem::path& filePath);
 
-    int version = kCurrentVersion;
+    std::int32_t version = kCurrentVersion;
     std::string name = "cinematic_sequence";
     float duration = 0.0f; // トラック・クリップの長さ（秒）。
 

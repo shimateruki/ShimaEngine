@@ -1,4 +1,5 @@
 #ifdef USE_IMGUI
+#include <cstdint>
 #include "engine/editor/preview/SelectedActorSession.h"
 #endif
 #include "game/system/scene/ObjectManager.h"
@@ -18,12 +19,14 @@
 namespace {
 // 透明面を除いたStageGateの枠だけを通常の不透明描画へ送ります。
 bool ShouldDrawStageGateFrame(const std::unique_ptr<engine::Object3D>& obj) {
-    // 透明なゲート面と枠を区別し、枠だけを不透明パスへ残す。
+    // 物体を取得できない場合や、ゲート面と同じ材質番号22を使っていない場合は、この例外描画の対象外。
     if (!obj || obj->GetMaterialType() != 22)
         return false;
+    // StageGateのモデルだけを枠か面かの追加判定へ渡す。
     if (obj->GetGimmickType() != "StageGate")
         return false;
     const std::string modelName = obj->GetModelName();
+    // 名前があり、透明面を表すportal_surfaceを含まなければ、枠として扱う。
     return !modelName.empty() && modelName.find("portal_surface") == std::string::npos;
 }
 } // namespace
@@ -38,12 +41,14 @@ void ObjectManager::Update(float deltaTime) {
 
     // 入力を処理しないフレームが挟まっても、古い床の速度を持ち越さない。
     for (auto& obj : objects_) {
+        // リプレイで除外されていないプレイヤーだけ、前フレームの床速度を初期化する。
         if (auto* player = obj && !obj->IsReplayRemoved() ? dynamic_cast<Player*>(obj.get()) : nullptr)
             player->SetPlatformMotion({});
     }
 
     // 上昇する液面をPlayerの死亡判定より先に更新します。
     for (auto& obj : objects_) {
+        // 更新対象の液面だけを先に進め、プレイヤーの死亡判定が今フレームの高さを使えるようにする。
         if (auto* liquid = obj && !obj->IsReplayRemoved() ? dynamic_cast<GimmickLiquidLevel*>(obj.get()) : nullptr)
             liquid->Update(deltaTime);
     }
@@ -51,8 +56,10 @@ void ObjectManager::Update(float deltaTime) {
     // 全移動床を乗員の物理より先に動かす。従来型も下降時の接地を保つ。
     for (auto& obj : objects_) {
         auto* floor = obj && !obj->IsReplayRemoved() ? dynamic_cast<GimmickMovingFloor*>(obj.get()) : nullptr;
+        // 有効な移動床は、乗っている物体の物理処理より先に進める。
         if (floor)
             floor->Update(deltaTime);
+        // 移動床に当てはまらない物体のうち、沈む床の駆動モード1もここで先行更新する。
         else if (auto* sinking =
                      obj && !obj->IsReplayRemoved() ? dynamic_cast<GimmickSinkingFloor*>(obj.get()) : nullptr;
                  sinking && sinking->GetParameters() && sinking->GetParameters()->actionMode == 1)
@@ -61,11 +68,13 @@ void ObjectManager::Update(float deltaTime) {
 
     // 先行更新した液面・移動床を除き、各オブジェクトのロジックを一度ずつ進めます。
     for (auto& obj : objects_) {
-        // 確認用Actorのロジックは固定刻み側だけで実行し、Sceneの時間0更新では重ねない。
+        // 空参照・リプレイで除外済み・固定刻みで進めるエディター内の物体は、通常の更新から外す。
         if (!obj || obj->IsReplayRemoved() || (selectedActorUpdating && obj->IsEditorInternal()))
             continue;
+        // 移動床と液面はすでに先に進めたので、このループでは更新しない。
         if (dynamic_cast<GimmickMovingFloor*>(obj.get()) || dynamic_cast<GimmickLiquidLevel*>(obj.get()))
             continue;
+        // 沈む床の駆動モード1も先行更新済みなので、二重に進めない。
         if (dynamic_cast<GimmickSinkingFloor*>(obj.get()) && obj->GetParameters() && obj->GetParameters()->actionMode == 1)
             continue;
         obj->Update(deltaTime);
@@ -79,18 +88,21 @@ void ObjectManager::Update(float deltaTime) {
     managedObjects.reserve(objects_.size());
 
     for (const auto& obj : objects_) {
+        // 実体のある管理物体だけを、親の参照が管理内にあるか調べる集合に入れる。
         if (obj) {
             managedObjects.insert(obj.get());
         }
     }
 
     for (auto& obj : objects_) {
+        // 空参照やリプレイから除外された物体には、描画用の行列を計算しない。
         if (!obj || obj->IsReplayRemoved())
             continue;
 
         engine::Object3D* parent = obj->GetParent();
         const bool hierarchyRoot = parent == nullptr || managedObjects.find(parent) == managedObjects.end();
 
+        // 親がいないか管理外にいる物体を起点に更新する。管理内の親を持つ子は親の再帰に任せる。
         if (hierarchyRoot) {
             obj->UpdateWorldMatrix();
         }
@@ -101,7 +113,7 @@ void ObjectManager::Update(float deltaTime) {
 }
 
 void ObjectManager::ApplyPendingChanges() {
-    // 更新中に生成したオブジェクトは走査を終えてから追加します。
+    // 走査中に生成した物体があれば、走査を終えた後で管理リストへ移す。
     if (!pendingObjects_.empty()) {
         for (auto& pendingObj : pendingObjects_) {
             // 既存Objectの行列確定後に追加されるため、生成した位置・縮小率を初回描画前に転送する。
@@ -118,17 +130,17 @@ void ObjectManager::ApplyPendingChanges() {
 }
 
 void ObjectManager::Draw(ID3D12Resource* pointLight, ID3D12Resource* spotLight) {
-    // 管理している全オブジェクトを描画する
-    // ※GamePlayScene側で object3dCommon_->SetGraphicsCommand() 等を呼んでいる前提
+    // 描画側が通常パスを設定した後に、管理物体を不透明と透明の順に描く。
 
     // 不透明描画
     for (auto& obj : objects_) {
+        // 非表示の物体とカメラ用オブジェクトは、不透明パスへ渡さない。
         if (!obj->GetIsVisible() || obj->IsCameraObject())
             continue;
-        const int materialType = obj->GetMaterialType();
+        const std::int32_t materialType = obj->GetMaterialType();
         const bool drawStageGateFrame = ShouldDrawStageGateFrame(obj);
 
-        // 25（スライムの通常シェーディング）も不透明パスへ渡す。
+        // ゲートの枠と不透明パスで扱う材質を描く。スライム用の25もここに含める。
         // 偽王のDrawは所有する槍・光刃も描くため、ここで除外すると攻撃だけが消える。
         if (drawStageGateFrame ||
             (materialType != 1 && materialType != 7 &&
@@ -139,8 +151,10 @@ void ObjectManager::Draw(ID3D12Resource* pointLight, ID3D12Resource* spotLight) 
 
     // 透明描画
     for (auto& obj : objects_) {
+        // 透明パスでも、非表示の物体とカメラ用オブジェクトを飛ばす。
         if (!obj->GetIsVisible() || obj->IsCameraObject())
             continue;
+        // この透明パスは材質番号1を描く。特殊材質のパスは描画側で別に進む。
         if (obj->GetMaterialType() == 1) {
             obj->Draw(pointLight, spotLight);
         }
@@ -148,36 +162,38 @@ void ObjectManager::Draw(ID3D12Resource* pointLight, ID3D12Resource* spotLight) 
 }
 
 void ObjectManager::AddObject(std::unique_ptr<engine::Object3D> object) {
+    // 追加する実体がなければ、衝突登録も追加予約も行わない。
     if (!object)
         return;
 
     // 衝突判定に登録
-    CollisionManager::GetInstance()->AddObject(object.get());
+    engine::CollisionManager::GetInstance()->AddObject(object.get());
 
     // 追加待ちリストへ
     pendingObjects_.push_back(std::move(object));
 }
 
 engine::Object3D* ObjectManager::AddObjectImmediate(std::unique_ptr<engine::Object3D> object) {
-    // 編集などで即時参照が必要な場合も、所有権と衝突登録を同時に移す。
+    // 即時追加する実体がなければ、利用側に渡せる参照もないのでnullを返す。
     if (!object)
         return nullptr;
     // 即時登録も、次の通常更新を待たず正しい姿勢で描画できる状態にする。
     object->UpdateWorldMatrix();
     engine::Object3D* raw = object.get();
-    CollisionManager::GetInstance()->AddObject(raw);
+    engine::CollisionManager::GetInstance()->AddObject(raw);
     objects_.push_back(std::move(object));
     return raw;
 }
 
 std::unique_ptr<engine::Object3D> ObjectManager::TakeObjectImmediate(engine::Object3D* object) {
-    // 所有権の移譲前に衝突・削除予約から外し、旧 Manager に参照を残さない。
+    // 移譲する物体の参照がなければ、現在の管理リストを変更せず返す。
     if (!object)
         return nullptr;
     auto takeFrom = [object](std::vector<std::unique_ptr<engine::Object3D>>& storage) -> std::unique_ptr<engine::Object3D> {
         auto it = std::find_if(storage.begin(), storage.end(), [object](const auto& candidate) {
             return candidate.get() == object;
         });
+        // 指定した参照がこのリストにない場合は、取り出せる所有権がないことを返す。
         if (it == storage.end())
             return nullptr;
         std::unique_ptr<engine::Object3D> result = std::move(*it);
@@ -185,19 +201,22 @@ std::unique_ptr<engine::Object3D> ObjectManager::TakeObjectImmediate(engine::Obj
         return result;
     };
 
-    // 通常の管理リストにない場合は、同じフレームに生成された追加待ちリストも探します。
     std::unique_ptr<engine::Object3D> result = takeFrom(objects_);
+    // 通常の管理リストにない場合は、同じフレームの追加待ちリストにも探しに行く。
     if (!result)
         result = takeFrom(pendingObjects_);
+    // どちらのリストにもなければ、衝突と削除予約を変更せず返す。
     if (!result)
         return nullptr;
-    CollisionManager::GetInstance()->RemoveObject(object);
+    // 所有権を渡す前に、この管理器の衝突登録と削除予約から同じ参照を外す。
+    engine::CollisionManager::GetInstance()->RemoveObject(object);
     removalList_.erase(std::remove(removalList_.begin(), removalList_.end(), object), removalList_.end());
     return result;
 }
 
 // 所有中のObjectだけ削除予約し、同フレームの描画を防ぐため先に非表示へします。
 void ObjectManager::RequestRemove(engine::Object3D* object) {
+    // 参照が空なら、削除のための検索や表示変更は行わない。
     if (!object)
         return;
 
@@ -205,12 +224,14 @@ void ObjectManager::RequestRemove(engine::Object3D* object) {
         return candidate && candidate.get() == object;
     };
 
-    // 借用したポインターをそのまま削除せず、自分が所有していることを先に確かめます。
+    // 現在の管理分と追加待ちのどちらかで所有しているかを調べる。
     const bool exists = std::any_of(objects_.begin(), objects_.end(), matches) ||
                         std::any_of(pendingObjects_.begin(), pendingObjects_.end(), matches);
+    // どちらでも所有していない物体は、この管理器で削除予約できない。
     if (!exists)
         return;
 
+    // すでに同じ物体を予約した場合は、非表示化と予約を繰り返さない。
     if (std::find(removalList_.begin(), removalList_.end(), object) != removalList_.end()) {
         return;
     }
@@ -223,10 +244,11 @@ void ObjectManager::RequestRemove(engine::Object3D* object) {
 // 削除予約を重複排除し、衝突登録を外してから所有コンテナから取り除きます。
 // リプレイ保持中のObjectは破棄せず、除外状態にして復元可能な寿命を保ちます。
 void ObjectManager::ProcessRemovals() {
+    // 削除予約がないフレームは、管理リストや衝突登録を走査しない。
     if (removalList_.empty())
         return;
 
-    CollisionManager* colManager = CollisionManager::GetInstance();
+    engine::CollisionManager* colManager = engine::CollisionManager::GetInstance();
 
     std::sort(removalList_.begin(), removalList_.end());
     removalList_.erase(std::unique(removalList_.begin(), removalList_.end()), removalList_.end());
@@ -240,18 +262,19 @@ void ObjectManager::ProcessRemovals() {
         colManager->RemoveObject(obj);
     }
 
-    // リストから削除
+    // 削除要求が処理される時点で、追加待ちリストに残っている予約対象も取り除く。
     pendingObjects_.erase(
         std::remove_if(pendingObjects_.begin(), pendingObjects_.end(),
                        [&](const std::unique_ptr<engine::Object3D>& p) { return p && isRequestedForRemoval(p.get()); }),
         pendingObjects_.end());
 
     auto it = std::remove_if(objects_.begin(), objects_.end(), [&](const std::unique_ptr<engine::Object3D>& p) {
+        // 参照が空か削除予約に含まれない場合は、この削除処理で取り除かない。
         if (!p || !isRequestedForRemoval(p.get())) {
             return false;
         }
+        // リプレイで保持する物体は、死亡・非表示・リプレイ除外を記録したうえで所有し続ける。
         if (p->IsReplayRetained()) {
-            // リプレイ記録中は所有権を維持し、過去フレームから復元できるようにする。
             p->SetReplayRemoved(true);
             p->SetIsVisible(false);
             p->SetDead(true);
@@ -265,32 +288,37 @@ void ObjectManager::ProcessRemovals() {
 }
 
 void ObjectManager::DrawShadow() {
-    // メインカメラ外から届く影も残せるよう、ライト視錐台で描画対象を絞る。
+    // 管理物体がなければ、ライト視錐台の計算と描画を行わない。
     if (objects_.empty())
         return;
 
     engine::Camera* camera = CameraManager::GetInstance()->GetActiveCamera();
+    // 使用中のカメラから影投影の基準を取れない場合は、影を描けないので戻る。
     if (!camera)
         return;
     const engine::Matrix4x4& lightViewProjection = engine::LightManager::GetInstance()->GetDirectionalShadowViewProjection(camera);
     const engine::Frustum shadowFrustum = engine::Math::ExtractFrustumPlanes(lightViewProjection);
 
-    // 軽量化: 共通の状態設定はループの外で1回だけ行う
+    // 影を実際に描く最初の物体でパスの共通状態を設定するため、初回を記録する。
     bool isFirst = true;
 
-    // 管理している全オブジェクトの影を描画する
+    // 影を落とす物体をライト視錐台で絞り、残った物体をシャドウマップへ描く。
     for (auto& obj : objects_) {
+        // 非表示の物体とカメラの配置用オブジェクトには影を描かない。
         if (!obj->GetIsVisible() || obj->IsCameraObject())
             continue;
+        // 影を落とす設定が無効な物体は、パスの対象から外す。
         if (!obj->GetCastShadow())
             continue;
+        // 影パスで扱わない材質番号7の物体を飛ばす。
         if (obj->GetMaterialType() == 7)
             continue;
 
         // ライトの視錐台外にある物体はシャドウマップへ書き込まれないため除外する。
         // 画面外から影だけを落とす物体は残るので、メインカメラ基準より見た目も正確になる。
-        Aabb worldAabb = obj->GetModelWorldAabb();
+        engine::Aabb worldAabb = obj->GetModelWorldAabb();
 
+        // モデルの外接箱がライト視錐台の外なら、除外数を記録して影の描画を飛ばす。
         if (!engine::Math::IntersectFrustumAabb(shadowFrustum, worldAabb.min, worldAabb.max)) {
             engine::RenderStats::GetInstance()->RecordCulledObject();
             continue;

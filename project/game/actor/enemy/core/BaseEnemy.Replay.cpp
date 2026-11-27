@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "BaseEnemy.h"
 
 namespace {
@@ -65,7 +66,7 @@ void BaseEnemy::CaptureReplayCustomState(json& state) const {
     state["enemyTargetDetected"] = wasTargetDetected_;
     state["enemyBossTargetEngaged"] = bossTargetEngaged_;
     state["enemyNoticeActive"] = isNoticeReactionActive_;
-    state["enemyNoticeKind"] = static_cast<int>(noticeReactionKind_);
+    state["enemyNoticeKind"] = static_cast<std::int32_t>(noticeReactionKind_);
     state["enemyNoticeTimer"] = noticeReactionTimer_;
     state["enemyNoticeCooldown"] = noticeReactionCooldown_;
     state["enemyNoticeDetectionRange"] = noticeDetectionRange_;
@@ -89,11 +90,13 @@ void BaseEnemy::RestoreReplayCustomState(const json& state) {
     damageReactionDuration_ = state.value("enemyDamageReactionDuration", damageReactionDuration_);
     damageReactionStrength_ = state.value("enemyDamageReactionStrength", damageReactionStrength_);
 
+    // 被弾方向が記録されている場合だけ、ローカル方向を復元する。
     if (state.contains("enemyDamageReactionDirection")) {
         damageReactionLocalDirection_ =
             ReadVector3(state["enemyDamageReactionDirection"], damageReactionLocalDirection_);
     }
 
+    // 既定色が記録されている場合だけ、リアクション後に戻すRGBAを復元する。
     if (state.contains("enemyDefaultColor"))
         defaultColor_ = ReadVector4(state["enemyDefaultColor"], defaultColor_);
     // 姿勢に続いて捕獲・投擲・徘徊の状態を戻し、途中からでも同じ速度や移動先で再開できるようにします。
@@ -101,14 +104,17 @@ void BaseEnemy::RestoreReplayCustomState(const json& state) {
     isDormant_ = state.value("enemyDormant", isDormant_);
     throwRecoveryTimer_ = state.value("enemyThrowRecoveryTimer", throwRecoveryTimer_);
     isThrownPhysics_ = state.value("enemyThrownPhysics", isThrownPhysics_);
+    // 徘徊の起点が記録されている場合は、行動範囲の基準を戻す。
     if (state.contains("enemyWanderOrigin"))
         wanderOrigin_ = ReadVector3(state["enemyWanderOrigin"], wanderOrigin_);
+    // 徘徊の目的地が記録されている場合は、追従先を途中から再開できるよう戻す。
     if (state.contains("enemyWanderTarget"))
         wanderTarget_ = ReadVector3(state["enemyWanderTarget"], wanderTarget_);
     wanderWaitTimer_ = state.value("enemyWanderWaitTimer", wanderWaitTimer_);
     wanderRetargetTimer_ = state.value("enemyWanderRetargetTimer", wanderRetargetTimer_);
     wanderSeed_ = state.value("enemyWanderSeed", wanderSeed_);
     hasWanderOrigin_ = state.value("enemyHasWanderOrigin", hasWanderOrigin_);
+    // 回転速度が記録されている場合は、投げられた後の回転を続けられるよう戻す。
     if (state.contains("enemyThrownAngularVelocity"))
         thrownAngularVelocity_ = ReadVector3(state["enemyThrownAngularVelocity"], thrownAngularVelocity_);
     thrownTimer_ = state.value("enemyThrownTimer", thrownTimer_);
@@ -124,19 +130,22 @@ void BaseEnemy::RestoreReplayCustomState(const json& state) {
     bossTargetEngaged_ = state.value("enemyBossTargetEngaged", bossTargetEngaged_);
     isNoticeReactionActive_ = state.value("enemyNoticeActive", isNoticeReactionActive_);
     // 反応種別がない旧録画では、反応中フラグが立っていれば発見として読み替えます。
-    const int noticeKindValue = state.value("enemyNoticeKind", isNoticeReactionActive_ ? 1 : 0);
+    const std::int32_t noticeKindValue = state.value("enemyNoticeKind", isNoticeReactionActive_ ? 1 : 0);
 
     switch (noticeKindValue) {
+    // 記録値1は標的を発見したリアクションとして復元する。
     case 1:
-        noticeReactionKind_ = NoticeReactionKind::Detected;
+        noticeReactionKind_ = NoticeReactionKind::kDetected;
         break;
 
+    // 記録値2は標的を見失ったリアクションとして復元する。
     case 2:
-        noticeReactionKind_ = NoticeReactionKind::Lost;
+        noticeReactionKind_ = NoticeReactionKind::kLost;
         break;
 
+    // 値0や未対応の番号は、リアクション種別なしとして扱う。
     default:
-        noticeReactionKind_ = NoticeReactionKind::None;
+        noticeReactionKind_ = NoticeReactionKind::kNone;
         break;
     }
 
@@ -144,18 +153,24 @@ void BaseEnemy::RestoreReplayCustomState(const json& state) {
     noticeReactionCooldown_ = state.value("enemyNoticeCooldown", noticeReactionCooldown_);
     noticeDetectionRange_ = state.value("enemyNoticeDetectionRange", noticeDetectionRange_);
     noticeMarkYaw_ = state.value("enemyNoticeYaw", noticeMarkYaw_);
+    // 反応開始時の拡縮が残っている場合だけ、演出終了時の復元先に使う。
     if (state.contains("enemyNoticeBaseScale"))
         noticeBaseScale_ = ReadVector3(state["enemyNoticeBaseScale"], noticeBaseScale_);
+    // 反応開始時の回転が記録されている場合だけ、その基準姿勢を戻す。
     if (state.contains("enemyNoticeBaseRotation"))
         noticeBaseRotation_ = ReadVector3(state["enemyNoticeBaseRotation"], noticeBaseRotation_);
+    // 反応開始時の色が記録されている場合だけ、表示復元用の色に使う。
     if (state.contains("enemyNoticeBaseColor"))
         noticeBaseColor_ = ReadVector4(state["enemyNoticeBaseColor"], noticeBaseColor_);
     defeatEffectTimer_ = state.value("enemyDefeatTimer", defeatEffectTimer_);
     defeatEffectParticleTimer_ = state.value("enemyDefeatParticleTimer", defeatEffectParticleTimer_);
+    // 撃破を開始した位置が記録されている場合だけ、消滅演出の基準座標を戻す。
     if (state.contains("enemyDefeatBasePosition"))
         defeatBasePosition_ = ReadVector3(state["enemyDefeatBasePosition"], defeatBasePosition_);
+    // 撃破を開始した拡縮が記録されている場合だけ、消滅演出の基準サイズを戻す。
     if (state.contains("enemyDefeatBaseScale"))
         defeatBaseScale_ = ReadVector3(state["enemyDefeatBaseScale"], defeatBaseScale_);
+    // 撃破を開始した色が記録されている場合だけ、消滅演出の基準色を戻す。
     if (state.contains("enemyDefeatBaseColor"))
         defeatBaseColor_ = ReadVector4(state["enemyDefeatBaseColor"], defeatBaseColor_);
 
@@ -164,6 +179,7 @@ void BaseEnemy::RestoreReplayCustomState(const json& state) {
         ConfigureNoticeMarkForReaction();
     }
 
+    // マークを保持している場合は、リアクション中で、リプレイ上も存在する敵に限り表示する。
     if (noticeMarkObject_) {
         noticeMarkObject_->SetIsVisible(isNoticeReactionActive_ && !IsReplayRemoved());
     }

@@ -21,7 +21,7 @@
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
-using namespace AssetDatabaseInternal;
+using namespace assetDatabaseInternal;
 
 namespace {
 std::uintmax_t gDdsNotificationSizeBeforeBuild = 0;
@@ -34,8 +34,9 @@ bool AssetDatabase::StartDdsCacheBuild() {
     const fs::path scriptPath = (projectRoot_ / "tools/dds_cache/dds_cache_builder.ps1").lexically_normal();
     std::error_code error;
 
+    // 変換スクリプトがないか存在確認に失敗した場合は、プロセスを開始せず失敗を記録する。
     if (!fs::exists(scriptPath, error) || error) {
-        ddsCacheBuildState_ = DdsCacheBuildState::Failed;
+        ddsCacheBuildState_ = DdsCacheBuildState::kFailed;
         ddsCacheBuildMessage_ = "DDS変換スクリプトが見つかりません。";
         lastDdsCacheBuildExitCode_ = ERROR_FILE_NOT_FOUND;
         return false;
@@ -45,9 +46,11 @@ bool AssetDatabase::StartDdsCacheBuild() {
     // 前回分の通知を今回の変換結果と取り違えないよう、開始前の末尾位置を控える。
     gDdsNotificationSizeBeforeBuild = 0;
 
+    // 起動前に通知ファイルが存在し照会できた場合だけ、前回分の長さを取得する。
     if (fs::exists(notificationPath, error) && !error) {
         gDdsNotificationSizeBeforeBuild = fs::file_size(notificationPath, error);
 
+        // ファイルサイズを取得できなければ、比較の開始位置を0バイトへ戻す。
         if (error) {
             gDdsNotificationSizeBeforeBuild = 0;
             error.clear();
@@ -78,9 +81,10 @@ bool AssetDatabase::StartDdsCacheBuild() {
         projectRoot_.c_str(),
         &startupInfo,
         &processInfo);
+    // 外部プロセスを起動できなければ、Windowsの失敗コードを保持して画面へ返す。
     if (!created) {
         lastDdsCacheBuildExitCode_ = GetLastError();
-        ddsCacheBuildState_ = DdsCacheBuildState::Failed;
+        ddsCacheBuildState_ = DdsCacheBuildState::kFailed;
         ddsCacheBuildMessage_ = "DDS変換プロセスを開始できませんでした。";
         return false;
     }
@@ -89,14 +93,14 @@ bool AssetDatabase::StartDdsCacheBuild() {
     CloseHandle(processInfo.hThread);
     ddsCacheProcessHandle_ = processInfo.hProcess;
     lastDdsCacheBuildExitCode_ = STILL_ACTIVE;
-    ddsCacheBuildState_ = DdsCacheBuildState::Running;
+    ddsCacheBuildState_ = DdsCacheBuildState::kRunning;
     ddsCacheBuildMessage_ = "未変換・更新済みでない画像をバックグラウンドで確認しています。";
     return true;
 }
 
 bool AssetDatabase::PollDdsCacheBuild() {
     // 終了するまで待機せず、Update() から状態だけを回収します。
-    if (ddsCacheBuildState_ != DdsCacheBuildState::Running || !ddsCacheProcessHandle_) {
+    if (ddsCacheBuildState_ != DdsCacheBuildState::kRunning || !ddsCacheProcessHandle_) {
         return false;
     }
 
@@ -104,15 +108,18 @@ bool AssetDatabase::PollDdsCacheBuild() {
     // 待機時間は0ミリ秒。変換中でもエディターのフレームを止めない。
     const DWORD waitResult = WaitForSingleObject(process, 0);
 
+    // 待機時間内に終了通知が来なければまだ変換中として、次のフレームで確認する。
     if (waitResult == WAIT_TIMEOUT) {
         return false;
     }
 
     DWORD exitCode = 1;
 
+    // 終了が通知された場合は、そのプロセスの終了コードを回収する。
     if (waitResult == WAIT_OBJECT_0) {
         GetExitCodeProcess(process, &exitCode);
     }
+    // 終了通知以外の結果は監視失敗として、最後のWindowsエラーを保持する。
     else {
         exitCode = GetLastError();
     }
@@ -126,9 +133,11 @@ bool AssetDatabase::PollDdsCacheBuild() {
     std::error_code error;
     std::uintmax_t notificationSizeAfterBuild = 0;
 
+    // 変換後に通知ファイルを照会できた場合だけ、比較用のバイト数を取り出す。
     if (fs::exists(notificationPath, error) && !error) {
         notificationSizeAfterBuild = fs::file_size(notificationPath, error);
 
+        // 変換後のサイズが取れない場合は0とし、通知増加を確定しない。
         if (error) {
             notificationSizeAfterBuild = 0;
         }
@@ -138,14 +147,16 @@ bool AssetDatabase::PollDdsCacheBuild() {
     const bool generatedDds = notificationSizeAfterBuild > gDdsNotificationSizeBeforeBuild;
     refreshAfterDdsCacheBuild_ = generatedDds;
 
+    // プロセスの終了通知と終了コード0が揃った場合を成功とする。
     if (waitResult == WAIT_OBJECT_0 && exitCode == 0) {
-        ddsCacheBuildState_ = DdsCacheBuildState::Succeeded;
+        ddsCacheBuildState_ = DdsCacheBuildState::kSucceeded;
         ddsCacheBuildMessage_ = generatedDds
             ? "DDSキャッシュの確認・変換が完了しました。"
             : "DDSキャッシュは最新です。再索引は不要です。";
     }
+    // 終了を確認できないか非ゼロで終わった場合は、取得した番号を失敗として表示する。
     else {
-        ddsCacheBuildState_ = DdsCacheBuildState::Failed;
+        ddsCacheBuildState_ = DdsCacheBuildState::kFailed;
         ddsCacheBuildMessage_ = "DDS変換に失敗しました。Exit Code: " + std::to_string(exitCode);
     }
 
@@ -153,7 +164,7 @@ bool AssetDatabase::PollDdsCacheBuild() {
 }
 
 void AssetDatabase::CloseDdsCacheProcessHandle() {
-    // 終了済みの変換プロセスのハンドルだけ閉じ、重複解放を避ける。
+    // 保持するプロセスハンドルがなければ、そのまま返す。ハンドルを閉じる処理自体はプロセスを終了させない。
     if (!ddsCacheProcessHandle_) {
         return;
     }

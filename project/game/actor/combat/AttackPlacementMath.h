@@ -6,7 +6,7 @@
 #include "engine/utility/math/Math.h"
 
 // ギズモのワールド移動を、保存形式である右・上・前の相対位置へ戻します。
-namespace AttackPlacementMath {
+namespace attackPlacementMath {
 inline engine::Vector3 ToLocalDelta(engine::Vector3 delta, float yaw) {
     // yawはラジアン。水平変位を術者の右と前の単位軸へ投影し、高さは保存座標へそのまま渡します。
     return {delta.x * std::cos(yaw) - delta.z * std::sin(yaw), delta.y,

@@ -8,9 +8,9 @@ namespace engine { class Object3D; }
 
 // ステージセレクト内部の共通計算。状態やObjectの所有権は保持しない。
 // 演出時刻はシナリオ JSON に置き、ここには共通の計算と固定設定だけを持つ。
-namespace StageSelectDetail {
+namespace stageSelectDetail {
 constexpr uint32_t kStageSelectSolidMask = 0xFFFFFFFFu;
-constexpr int kStageIslandCollisionStripCount = 15;
+constexpr std::int32_t kStageIslandCollisionStripCount = 15;
 
 constexpr const char* kStageClearCrownPrefix = "__Editor_StageClearCrown_";
 constexpr const char* kStageClearCrownModel = "Stages/crown";
@@ -139,11 +139,11 @@ float SelectEaseOutBack(float value);
 engine::Vector3 SelectLerp(const engine::Vector3& a, const engine::Vector3& b, float t);
 
 // 開放・選択・解放演出の状態から島とゲートの表示色・発光量を算出する。
-engine::Vector4 GetStageIslandColor(int stageIndex, bool unlocked, bool selected, bool unlocking, float pulse);
+engine::Vector4 GetStageIslandColor(std::int32_t stageIndex, bool unlocked, bool selected, bool unlocking, float pulse);
 float GetStageIslandEmissive(bool unlocked, bool selected, bool unlocking, float pulse);
 engine::Vector4 GetStageGateModelColor(bool unlocked, bool selected, bool cleared, bool unlocking, float pulse);
 float GetStageGateModelEmissive(bool unlocked, bool selected, bool cleared, bool unlocking, float pulse);
 
 // ステージ番号に対応する王冠Object名を生成する。
-std::string MakeStageClearCrownName(int stageIndex);
-} // namespace StageSelectDetail
+std::string MakeStageClearCrownName(std::int32_t stageIndex);
+} // namespace stageSelectDetail

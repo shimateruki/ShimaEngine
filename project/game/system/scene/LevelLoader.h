@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <string>
@@ -8,7 +9,7 @@
 
 // 前方宣言
 class BaseScene;
-namespace engine { class Object3D; }
+namespace engine { class Object3D; class Object3DCommon; }
 
 // JSON に保存されたステージ配置データを、シーン上のオブジェクトへ復元するローダー
 // 関連：各Factoryで配置物を作り、BaseSceneへ追加して親子関係やゲーム用参照を接続する。
@@ -43,6 +44,17 @@ class LevelLoader {
     /// <returns>現在のファイルを処理し終えたら true。件数上限で同じファイルを次回も処理する場合は false。</returns>
     bool LoadSingleJson(BaseScene* scene, const std::string& filename, size_t& remainingObjects);
 
+    /// <summary>同名Objectを再利用するか、Factoryで生成してシーンへ登録する。</summary>
+    engine::Object3D* FindOrCreateLayoutObject(
+        BaseScene* scene, engine::Object3DCommon* object3dCommon, const std::vector<std::unique_ptr<engine::Object3D>>& objects,
+        const nlohmann::json& objData, const std::string& name);
+
+    /// <summary>生成・登録済みのObjectへコンポーネント、描画、衝突、配置値を適用する。</summary>
+    static void ApplyLayoutSettings(engine::Object3D* targetObject, const nlohmann::json& objData);
+
+    /// <summary>全配置ファイルの生成後に解決する親GUIDまたは旧形式の名前を控える。</summary>
+    void QueueLayoutParent(engine::Object3D* targetObject, const nlohmann::json& objData);
+
   private:
     // 全 Object 生成後に親を解決する識別情報。GUID と旧形式の名前参照を保持する。
     struct PendingParentReference {
@@ -58,6 +70,6 @@ class LevelLoader {
     nlohmann::json pendingObjects_ = nlohmann::json::array();
     bool pendingFileLoaded_ = false;
     bool objectLayoutLoading_ = false;
-    int preparationStep_ = 0;
+    std::int32_t preparationStep_ = 0;
     RuntimePresetCatalog runtimePresets_;
 };

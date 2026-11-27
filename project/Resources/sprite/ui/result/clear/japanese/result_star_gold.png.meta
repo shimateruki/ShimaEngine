@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "c26aa4f088925aa401f11164d89b5c0f",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/sprite/ui/result/clear/japanese/result_star_gold.png",
+  "version": 1
+}

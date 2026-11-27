@@ -31,7 +31,7 @@ class HitEffectDirector {
     // ダメージ成立後に呼ぶ。攻撃者・対象のどちらかがなければ何も出さない。
     // knockbackVelocity は打撃面の向きとエフェクト配置に使うワールド空間の速度。
     static void SpawnDamageEventHit(engine::Object3D* target, engine::Object3D* attacker, const engine::Vector3& knockbackVelocity,
-                                    DamageType damageType = DamageType::Physical);
+                                    DamageType damageType = DamageType::kPhysical);
 
     // 地面に広がる衝撃波・破片の高さを共通Locatorで求める。
     static engine::Vector3 ResolveGroundEffectPosition(const engine::Vector3& position);

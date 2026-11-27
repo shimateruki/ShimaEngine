@@ -7,9 +7,9 @@
 class EnemyBomb : public BaseEnemy {
   public:
     enum class State {
-        Chase,   // 発見後の追跡
-        Ignited, // 導火線のカウントダウン
-        Exploded // 爆発済み。衝突判定と描画を停止する
+        kChase,   // 発見後の追跡
+        kIgnited, // 導火線のカウントダウン
+        kExploded // 爆発済み。衝突判定と描画を停止する
     };
 
     EnemyBomb() = default;
@@ -42,7 +42,7 @@ class EnemyBomb : public BaseEnemy {
 
     bool IsPlayerOwned() const { return playerOwned_; }
 
-    bool IsExploded() const { return state_ == State::Exploded; }
+    bool IsExploded() const { return state_ == State::kExploded; }
 
     // 点滅による一時変形と区別できるよう、通常時の基準スケールを保持する。
     void ApplyManagedScale(const engine::Vector3& scale) override;
@@ -61,7 +61,7 @@ class EnemyBomb : public BaseEnemy {
     void UpdateBombPhysics(float deltaTime);
 
   private:
-    State state_ = State::Chase;
+    State state_ = State::kChase;
 
     // 導火線と警告演出は運搬中も更新するため、移動状態とは別に保持します。
     float fuseTimer_ = 2.0f;  // 爆発までの残り秒数

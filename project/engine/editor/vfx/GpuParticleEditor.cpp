@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "GpuParticleEditor.h"
 #include "GpuParticlePresetJsonCodec.h"
 #include <imgui.h>
@@ -14,21 +15,24 @@
 #include <algorithm>
 #include "VfxAuthoringEditor.h"
 #include "VfxAssetPicker.h"
+#include "VfxAssetCandidates.h"
 #include <vector>
 
 using json = nlohmann::json;
 
+// 連続発生の待ち時間を初期状態に戻す。粒子の設定とGPU資源はここで作らない。
 void GpuParticleEditor::Initialize() {
     emitTimer_ = 0.0f;
 }
 
 void GpuParticleEditor::Update(float deltaTime, bool sceneIsPlaying) {
-    // Preview StageがこのEditorを操作中のときだけManagerの再生速度と時刻を占有する。
+    // プレビュー空間が有効で、このエディターが選択された間に限り再生速度と時刻を制御する。
     EffectPreviewStage* previewStage = EffectPreviewStage::GetInstance();
     const bool usePreviewStage = previewStage && previewStage->IsEnabled();
     const bool isThisEditorSelected = EditorManager::GetInstance()->GetSelectedObject() == this;
     GpuParticleManager* manager = GpuParticleManager::GetInstance();
 
+    // どちらかの条件を外れた場合は、共有Managerの速度を通常の1倍へ戻して終了する。
     if (!usePreviewStage || !isThisEditorSelected) {
         manager->SetTimeScale(1.0f);
         return;
@@ -54,6 +58,7 @@ void GpuParticleEditor::Update(float deltaTime, bool sceneIsPlaying) {
             previewTime_ += 1.0f / 60.0f;
         }
 
+        // 固定刻みの後で端数が残る場合だけ、その分を進めて指定時刻に合わせる。
         if (clampedSeek > previewTime_) {
             manager->UpdateEditorPreviewStep(clampedSeek - previewTime_);
             previewTime_ = clampedSeek;
@@ -63,11 +68,13 @@ void GpuParticleEditor::Update(float deltaTime, bool sceneIsPlaying) {
     };
 
     // 操作シリアルを比較し、Play・Stop・Seekを一回ずつ反映する。
+    // 再生ボタンの新規要求が届いたら、粒子と時刻を初期化して0秒から始める。
     if (previewStage->GetPlayRequestSerial() != lastStagePlayRequestSerial_) {
         lastStagePlayRequestSerial_ = previewStage->GetPlayRequestSerial();
         restartPreview(0.0f);
     }
 
+    // 停止ボタンの新規要求が届いたら、生存粒子とプレビュー・発生タイマーを消す。
     if (previewStage->GetStopRequestSerial() != lastStageStopRequestSerial_) {
         lastStageStopRequestSerial_ = previewStage->GetStopRequestSerial();
         manager->ResetSimulation();
@@ -75,12 +82,13 @@ void GpuParticleEditor::Update(float deltaTime, bool sceneIsPlaying) {
         emitTimer_ = 0.0f;
     }
 
+    // 新しいシーク要求が届いたら、再発生させて指定時刻までプレビューの時計を進める。
     if (previewStage->GetSeekRequestSerial() != lastStageSeekRequestSerial_) {
         lastStageSeekRequestSerial_ = previewStage->GetSeekRequestSerial();
         restartPreview(previewStage->GetSeekTargetTime());
     }
 
-    // エディタのプレビュー間隔もスローモーションに対応させる
+    // タイムラインの速度をManagerへ渡し、表示時刻と次の発生時刻にも反映する。
     manager->SetTimeScale(previewStage->GetPlaybackSpeed());
     const float scaledDelta = deltaTime * manager->GetTimeScale();
 
@@ -88,26 +96,31 @@ void GpuParticleEditor::Update(float deltaTime, bool sceneIsPlaying) {
     if (config_.isLooping && scaledDelta > 0.0f) {
         emitTimer_ += scaledDelta;
 
+        // 発生間隔を満たすフレームで一度発生させる。超過した時間は繰り越さない。
         if (emitTimer_ >= (std::max)(0.01f, config_.emitInterval)) {
             EmitWithPreview();
             emitTimer_ = 0.0f;
         }
     }
 
+    // 再生速度を掛けた経過時間が正の場合だけ、プレビューの時刻表示を進める。
     if (scaledDelta > 0.0f) {
         previewTime_ += scaledDelta;
 
+        // 粒子寿命と余白を含む表示区間の終端に達した場合は、表示を止めるか再開する。
         if (previewTime_ >= previewDuration) {
+            // 区間のループが有効なら、現在の粒子を捨てて最初から発生させる。
             if (previewStage->IsLoopEnabled()) {
                 restartPreview(0.0f);
+            // ループを使わない場合は、表示時刻を終端に固定する。
             } else {
                 previewTime_ = previewDuration;
             }
         }
     }
 
+    // ゲーム側が再生中でない場合は、エディターからプレビューの更新を明示的に進める。
     if (!sceneIsPlaying) {
-        // 編集停止中はGame側の0秒更新済みフラグを解除し、Preview時間を確実に進めます。
         manager->UpdateEditorPreviewStep(deltaTime);
     }
 
@@ -116,6 +129,7 @@ void GpuParticleEditor::Update(float deltaTime, bool sceneIsPlaying) {
     events.push_back({ "Spawn", 0.0f, 0.05f, engine::Vector4{ 0.35f, 0.85f, 1.0f, 1.0f } });
     events.push_back({ "Particle life", 0.0f, (std::min)(config_.emitLife, previewDuration), engine::Vector4{ 0.25f, 0.65f, 1.0f, 1.0f } });
 
+    // 連続発生を設定した場合だけ、発生間隔をタイムラインの目印に加える。
     if (config_.isLooping) {
         events.push_back({ "Emit interval", 0.0f, (std::min)((std::max)(config_.emitInterval, 0.01f), previewDuration), engine::Vector4{ 0.55f, 0.95f, 0.75f, 1.0f } });
     }
@@ -123,6 +137,7 @@ void GpuParticleEditor::Update(float deltaTime, bool sceneIsPlaying) {
     const uint32_t capacity = GpuParticleManager::ResolveParticleCapacity(config_);
     uint64_t estimatedParticleCount = static_cast<uint64_t>((std::max)(config_.emitCount, 0));
 
+    // ループ間隔が正の場合は、寿命が重なる発生バッチ数まで含めて生存数を見積もる。
     if (config_.isLooping && config_.emitInterval > 0.0f) {
         // 寿命内に重なる発生回数の上限と、開始から現在まで実際に発生できた回数の小さい方を使う。
         const double batchesByLifetime = std::ceil(
@@ -138,7 +153,7 @@ void GpuParticleEditor::Update(float deltaTime, bool sceneIsPlaying) {
     EffectPreviewStage::PerformanceMetrics performance;
     performance.available = true;
     // 見積もった粒子数の上限は、このプリセットに確保する容量。
-    performance.particleCount = static_cast<int>((std::min)(
+    performance.particleCount = static_cast<std::int32_t>((std::min)(
         estimatedParticleCount,
         static_cast<uint64_t>(capacity)));
     performance.cpuTimeMs = manager->GetLastUpdateCpuTimeMs() + manager->GetLastDrawCpuTimeMs();
@@ -146,7 +161,7 @@ void GpuParticleEditor::Update(float deltaTime, bool sceneIsPlaying) {
     performance.frameDeltaSeconds = deltaTime;
     performance.memoryBytes = manager->GetEstimatedMemoryBytesForConfig(config_);
     previewStage->ReportToolState(
-        EffectPreviewStage::ToolKind::GpuParticle,
+        EffectPreviewStage::ToolKind::kGpuParticle,
         "GPU Particle",
         previewTime_,
         previewDuration,
@@ -161,10 +176,11 @@ void GpuParticleEditor::DrawImGui() {
     // 編集パネルを発生条件、寿命曲線、環境、プレビュー、保存に分けて表示する。
     ImGui::Text("--- GPUパーティクルエディタ ---");
 
-    // ⚙️ システム設定
+    // システム欄を開いている間は、共有Managerの再生速度を編集できる。
     if (ImGui::CollapsingHeader(ICON_FA_COGS " システム設定 (System)", ImGuiTreeNodeFlags_DefaultOpen)) {
         float timeScale = GpuParticleManager::GetInstance()->GetTimeScale();
 
+        // 速度欄に変更があった場合だけ、その値を共有Managerへ反映する。
         if (ImGui::DragFloat(ICON_FA_CLOCK " 全体再生速度 (Time Scale)", &timeScale, 0.05f, 0.0f, 5.0f)) {
             GpuParticleManager::GetInstance()->SetTimeScale(timeScale);
         }
@@ -172,13 +188,16 @@ void GpuParticleEditor::DrawImGui() {
         ImGui::Text("※0.5でスローモーション、2.0で倍速になります");
     }
 
+    // プレビュー環境を開いた場合は、一時発生位置に使う設定を表示する。
     if (ImGui::CollapsingHeader(ICON_FA_EYE " プレビュー環境 (Preview Environment)", ImGuiTreeNodeFlags_DefaultOpen)) {
+        // 専用ステージが有効なら、保存位置やカメラ前方よりステージの原点が優先されることを表示する。
         if (EffectPreviewStage::GetInstance()->IsEnabled()) {
             ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.7f, 1.0f), "Effect Preview Stage の原点を使用中");
         }
 
         ImGui::Checkbox("カメラの前に発生させる (Spawn in front of Camera)", &isPreviewMode_);
 
+        // カメラ前方モードを有効にした場合は、視点からの距離を入力できる。
         if (isPreviewMode_) {
             ImGui::Indent();
             ImGui::DragFloat("カメラからの距離 (Distance)", &previewDistance_, 0.1f, 1.0f, 50.0f);
@@ -188,7 +207,7 @@ void GpuParticleEditor::DrawImGui() {
         ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "※プレビュー用です。実際の座標は「発生位置(Position)」に保存されます");
     }
 
-    // ✨ 発生パラメータ
+    // 発生設定を開いた場合は、合成・形状・衝突と寿命中の変化を調整できる。
     if (ImGui::CollapsingHeader(ICON_FA_MAGIC " 発生パラメータ (Emit Parameters)", ImGuiTreeNodeFlags_DefaultOpen)) {
         const char* blendModes[] = { "加算 (光・魔法)", "半透明 (霧・煙)", "歪み (衝撃波・陽炎)" };
         ImGui::Combo(ICON_FA_ADJUST " 合成モード (Blend Mode)", &config_.blendModeIndex, blendModes, IM_ARRAYSIZE(blendModes));
@@ -197,13 +216,16 @@ void GpuParticleEditor::DrawImGui() {
         const char* shapeTypes[] = { "ボックス (Box)", "スフィア (Sphere)", "コーン (Cone)", "メッシュ (Mesh)", "ハート (Heart)" };
         ImGui::Combo(ICON_FA_SHAPES " 発生形状 (Shape Type)", &config_.shapeType, shapeTypes, IM_ARRAYSIZE(shapeTypes));
 
+        // 衝突の詳細を開いた場合に、地形への衝突を有効にする入力を出す。
         if (ImGui::CollapsingHeader(ICON_FA_COMPRESS_ALT " コリジョン (Collision)", ImGuiTreeNodeFlags_DefaultOpen)) {
             bool isCollide = config_.enableCollision != 0;
 
+            // 操作されたチェック状態を、GPU設定で使う整数のフラグへ反映する。
             if (ImGui::Checkbox("地形と衝突させる", &isCollide)) {
                 config_.enableCollision = isCollide ? 1 : 0;
             }
 
+            // 衝突が有効な場合だけ、地形から跳ね返る強さを調整する。
             if (isCollide) {
                 ImGui::DragFloat("跳ね返り係数 (Restitution)", &config_.restitution, 0.05f, 0.0f, 1.0f);
             }
@@ -229,17 +251,20 @@ void GpuParticleEditor::DrawImGui() {
         ImGui::Separator();
         ImGui::Combo(ICON_FA_EXPAND_ARROWS_ALT " サイズの変形カーブ", &config_.sizeEaseType, easeTypes, IM_ARRAYSIZE(easeTypes));
 
-        // 形に合わせて出すUIを変える！
+        // 箱形では発生範囲を各軸の幅で設定する。
         if (config_.shapeType == 0) {
             ImGui::DragFloat3("発生範囲 (Area)", &config_.emitArea.x, 0.1f);
         }
+        // 球形では発生範囲を半径で設定する。
         else if (config_.shapeType == 1) {
             ImGui::DragFloat("半径 (Radius)", &config_.shapeRadius, 0.1f, 0.0f, 100.0f);
         }
+        // 円錐形では半径と、拡がる角度を度で設定する。
         else if (config_.shapeType == 2) {
             ImGui::DragFloat("半径 (Radius)", &config_.shapeRadius, 0.1f, 0.0f, 100.0f);
             ImGui::DragFloat("広がり角度 (Angle)", &config_.shapeAngle, 1.0f, 0.0f, 90.0f);
         }
+        // ハート形では半径、奥行き、輪郭の太さをそれぞれ設定する。
         else if (config_.shapeType == 4) {
 
             ImGui::DragFloat("ハートの大きさ (Radius)", &config_.shapeRadius, 0.1f, 0.0f, 100.0f);
@@ -264,6 +289,7 @@ void GpuParticleEditor::DrawImGui() {
                 "最大同時数が1回の発生数より小さいため、粒子が欠けます。");
         }
 
+        // 自動計算が実行上限に届いた場合は、設定が大きいことを警告する。
         if (config_.maxParticles == 0 && resolvedCapacity == GpuParticleSystem::kMaxParticles) {
             ImGui::TextColored(
                 ImVec4(1.0f, 0.55f, 0.2f, 1.0f),
@@ -282,32 +308,31 @@ void GpuParticleEditor::DrawImGui() {
         ImGui::DragFloat(ICON_FA_SUN " 発光強度 (HDR Intensity)", &config_.colorIntensity, 0.1f, 0.0f, 20.0f);
 
         // 発生用テクスチャの候補だけに絞る。選択値はEmit時に適用する。
-        std::vector<std::string> allPaths = TextureManager::GetInstance()->GetAvailableTexturePaths();
-        std::vector<std::string> filteredPaths;
+        auto loadedPaths = engine::TextureManager::GetInstance()->GetLoadedTexturePaths();
+        for (auto& path : loadedPaths) std::replace(path.begin(), path.end(), '\\', '/');
+        std::erase_if(loadedPaths, [](const std::string& path) {
+            return !vfxAssetCandidates::IsGpuTexturePath(path);
+        });
 
-        for (const auto& path : allPaths) {
-            // spriteフォルダの中の particle フォルダのみを参照するように絞り込み
-            if (path.find("Resources/sprite/particle/") != std::string::npos) {
-                filteredPaths.push_back(path);
-            }
-        }
+        static vfxAssetCandidates::CandidateList textureCandidates;
+        const auto& filteredPaths = textureCandidates.Get(vfxAssetCandidates::GpuTextureName, std::move(loadedPaths));
+        std::int32_t currentIndex = -1;
 
-        std::sort(filteredPaths.begin(), filteredPaths.end());
-        int currentIndex = -1;
-
-        for (int i = 0; i < static_cast<int>(filteredPaths.size()); ++i) {
+        for (std::int32_t i = 0; i < static_cast<std::int32_t>(filteredPaths.size()); ++i) {
+            // 画像パスに一致する候補があれば、その位置を初期選択として使用する。
             if (config_.texturePath == filteredPaths[i]) {
                 currentIndex = i;
                 break;
             }
         }
 
-        if (VfxAssetPicker::DrawCombo(ICON_FA_IMAGE " テクスチャ画像", filteredPaths,
+        // 選び直した画像を設定へ保存し、既に描画中の粒子への変更は扱わない。
+        if (vfxAssetPicker::DrawCombo(ICON_FA_IMAGE " テクスチャ画像", filteredPaths,
                                       currentIndex, textureSearch_, sizeof(textureSearch_))) {
-            // テクスチャは次回の発生時に適用される。
             config_.texturePath = filteredPaths[currentIndex];
         }
 
+        // 現在のパスが候補に載っていない場合も、設定されていれば名前を表示する。
         if (currentIndex < 0 && !config_.texturePath.empty()) {
             ImGui::TextDisabled("現在の画像: %s", config_.texturePath.c_str());
         }
@@ -318,6 +343,7 @@ void GpuParticleEditor::DrawImGui() {
         ImGui::DragFloat("消滅時の大きさ (End Size)", &config_.endSize, 0.1f, 0.1f, 50.0f);
     }
 
+    // 曲線編集を開いている間は、共通の曲線入力をGPUの三点形式へ変換する。
     if (ImGui::CollapsingHeader("共通Curve / Gradient / LOD", ImGuiTreeNodeFlags_DefaultOpen)) {
         // 共通Curve UIの編集結果をGPU設定の始点・中間点・終点に書き戻す。
         VfxFloatCurve sizeCurve = VfxFloatCurve::FromThreePoints(
@@ -326,26 +352,28 @@ void GpuParticleEditor::DrawImGui() {
             config_.midSize,
             config_.endSize,
             static_cast<VfxCurveEasing>(std::clamp(config_.sizeEaseType, 0, 4)));
-        VfxAuthoringEditor::DrawFloatCurve(
+        vfxAuthoringEditor::DrawFloatCurve(
             "GpuParticleSize",
             sizeCurve,
             0.0f,
             50.0f,
             3,
             [this](const VfxFloatCurve& value) {
+                // キーが空の場合はサイズを取得できないため、設定を変更しない。
                 if (value.keys.empty())
                     return;
                 config_.baseSize = value.keys.front().value;
                 config_.endSize = value.keys.back().value;
+                // 中間キーを持つ曲線は、二つ目の時刻と値をそのまま使う。
                 if (value.keys.size() >= 3) {
                     config_.sizeMidTime = value.keys[1].time;
                     config_.midSize = value.keys[1].value;
+                // 中間キーがなければ、寿命の半分で補間した値をGPUの中間値にする。
                 } else {
                     config_.sizeMidTime = 0.5f;
-                    // 中央キーがない入力でも GPU 用の三点形式を保つため、寿命の半分で評価したサイズを使う。
                     config_.midSize = value.Evaluate(0.5f, config_.baseSize);
                 }
-                config_.sizeEaseType = static_cast<int>(value.keys.front().easing);
+                config_.sizeEaseType = static_cast<std::int32_t>(value.keys.front().easing);
             },
             false,
             false);
@@ -356,34 +384,36 @@ void GpuParticleEditor::DrawImGui() {
             config_.midColor,
             config_.endColor,
             static_cast<VfxCurveEasing>(std::clamp(config_.colorEaseType, 0, 4)));
-        VfxAuthoringEditor::DrawColorGradient(
+        vfxAuthoringEditor::DrawColorGradient(
             "GpuParticleColor",
             colorGradient,
             3,
             [this](const VfxColorGradient& value) {
+                // キーが空の場合は色を取得できないため、設定を変更しない。
                 if (value.keys.empty())
                     return;
                 config_.baseColor = value.keys.front().color;
                 config_.endColor = value.keys.back().color;
+                // 中間キーを持つ色は、二つ目の時刻と色をそのまま使う。
                 if (value.keys.size() >= 3) {
                     config_.colorMidTime = value.keys[1].time;
                     config_.midColor = value.keys[1].color;
+                // 中間キーがなければ、寿命の半分で評価した色をGPUの中間色にする。
                 } else {
                     config_.colorMidTime = 0.5f;
-                    // 中央キーがない入力では、寿命の半分の補間色を GPU 用の中間値へ入れる。
                     config_.midColor = value.Evaluate(0.5f, config_.baseColor);
                 }
-                config_.colorEaseType = static_cast<int>(value.keys.front().easing);
+                config_.colorEaseType = static_cast<std::int32_t>(value.keys.front().easing);
             },
             false);
 
         ImGui::SeparatorText("距離LOD / Budget");
-        VfxAuthoringEditor::DrawLodSettings(
+        vfxAuthoringEditor::DrawLodSettings(
             "GpuParticleLod",
             config_.lod,
             [this](const VfxLodSettings& value) { config_.lod = value; },
-            static_cast<int>(GpuParticleSystem::kMinParticles),
-            static_cast<int>(GpuParticleSystem::kMaxParticles));
+            static_cast<std::int32_t>(GpuParticleSystem::kMinParticles),
+            static_cast<std::int32_t>(GpuParticleSystem::kMaxParticles));
         // 入力したプレビュー距離における LOD の発生率を、元の発生数に対する割合で確認する。
         const float previewScale = config_.lod.EvaluateEmissionScale(previewDistance_);
         ImGui::TextDisabled(
@@ -392,7 +422,7 @@ void GpuParticleEditor::DrawImGui() {
             previewScale * 100.0f);
     }
 
-    // 🌍 環境変化
+    // 環境欄が開いている場合は、粒子へ加える外力と地形との馴染みを編集する。
     if (ImGui::CollapsingHeader(ICON_FA_GLOBE " 環境変化 (Environment)", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::DragFloat3("重力 (Gravity)", &config_.envGravity.x, 0.01f);
         ImGui::DragFloat("空気抵抗 (Air Drag)", &config_.envDrag, 0.001f, 0.8f, 1.0f);
@@ -401,6 +431,7 @@ void GpuParticleEditor::DrawImGui() {
         const char* fieldTypes[] = { "なし", "吸引 (Attract)", "渦 (Vortex)", "反発 (Repulse)" };
         ImGui::Combo("Fieldタイプ", &config_.fieldType, fieldTypes, IM_ARRAYSIZE(fieldTypes));
 
+        // フィールドが設定されている場合に限り、発生点からの位置差や影響範囲を調整する。
         if (config_.fieldType != 0) {
             ImGui::DragFloat3("Field位置（発生位置からの相対）", &config_.fieldPosition.x, 0.05f);
             ImGui::DragFloat("Field強度", &config_.fieldStrength, 0.1f, -100.0f, 100.0f);
@@ -414,14 +445,16 @@ void GpuParticleEditor::DrawImGui() {
 
     ImGui::Separator();
 
-    // 🎮 エディタ操作
+    // エディター操作を開いている間は、試しに発生させる操作と連続再生の設定を表示する。
     if (ImGui::CollapsingHeader(ICON_FA_GAMEPAD " エディタ操作 (Editor Controls)", ImGuiTreeNodeFlags_DefaultOpen)) {
+        // 単発ボタンが押されたフレームに、プレビュー位置で発生を要求する。
         if (ImGui::Button(ICON_FA_PLAY " 1回発生 (Emit Once)", ImVec2(ImGui::GetContentRegionAvail().x, 30))) {
             EmitWithPreview();
         }
 
         ImGui::Checkbox(ICON_FA_REDO " 連続発生テスト (Loop Emit)", &config_.isLooping);
 
+        // 連続発生を有効にしている場合だけ、発生までの間隔を秒で調整する。
         if (config_.isLooping) {
             ImGui::Indent();
             ImGui::DragFloat("発生間隔 (Interval)", &config_.emitInterval, 0.01f, 0.01f, 2.0f);
@@ -429,10 +462,11 @@ void GpuParticleEditor::DrawImGui() {
         }
     }
 
-    // 🚀 クイック・プリセット (Quick Presets)
+    // プリセット欄を開いた場合は、選んだ見た目の設定を編集バッファの一部に上書きできる。
     if (ImGui::CollapsingHeader(ICON_FA_BOLT " クイック・プリセット (Quick Presets)", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Text("ボタン一つで標準的な設定を流し込みます。");
         
+        // スターを選ぶと、球状に放った黄色の粒子が赤く透明になる設定へ切り替える。
         if (ImGui::Button("⭐ スター (Star)", ImVec2(120, 30))) {
             config_.blendModeIndex = 0; // Additive
             config_.shapeType = 1;      // Sphere
@@ -457,6 +491,7 @@ void GpuParticleEditor::DrawImGui() {
 
         ImGui::SameLine();
 
+        // コインの待機を選ぶと、少量の金色の粒子がゆっくり浮く設定へ切り替える。
         if (ImGui::Button("✨ コイン待機 (Idle)", ImVec2(150, 30))) {
             config_.blendModeIndex = 0; // Additive
             config_.shapeType = 1;      // Sphere
@@ -481,6 +516,7 @@ void GpuParticleEditor::DrawImGui() {
 
         ImGui::SameLine();
 
+        // コイン取得を選ぶと、中心から一度に弾けて短時間で消える明るい粒子を設定する。
         if (ImGui::Button("🌟 コイン取得 (Burst)", ImVec2(150, 30))) {
             config_.blendModeIndex = 0; // Additive
             config_.shapeType = 1;      // Sphere
@@ -504,7 +540,7 @@ void GpuParticleEditor::DrawImGui() {
             config_.rotSpeed = 10.0f;
         }
 
-        // --- 2段目 ---
+        // オーラを選ぶと、青い粒子が周囲で発光して縮む設定へ切り替える。
         if (ImGui::Button("💫 オーラ (Aura)", ImVec2(120, 30))) {
             config_.blendModeIndex = 0; // Additive
             config_.shapeType = 1;      // Sphere
@@ -529,6 +565,7 @@ void GpuParticleEditor::DrawImGui() {
 
         ImGui::SameLine();
 
+        // 焚き火を選ぶと、赤い加算粒子が上昇する設定へ切り替える。
         if (ImGui::Button("🔥 焚き火 (Fire)", ImVec2(120, 30))) {
             config_.blendModeIndex = 0; // Additive
             config_.shapeType = 1;      // Sphere
@@ -552,6 +589,7 @@ void GpuParticleEditor::DrawImGui() {
 
         ImGui::SameLine();
 
+        // 煙を選ぶと、箱状の範囲から出た灰色の粒子が広がりながら薄くなる設定へ切り替える。
         if (ImGui::Button("💨 煙 (Smoke)", ImVec2(120, 30))) {
             config_.blendModeIndex = 1; // Alpha
             config_.shapeType = 0;      // Box
@@ -580,14 +618,17 @@ void GpuParticleEditor::DrawImGui() {
         [this](const std::filesystem::path& path) { return Load(path); },
         [this](const std::filesystem::path& path, const std::string&) { return Save(path); },
         [this] { config_ = GpuParticleConfig{}; });
+    // 設定を保存せず、現在の編集値で描画結果を確認する。
     if (ImGui::Button(ICON_FA_PLAY " 現在の設定をプレビュー")) EmitWithPreview();
 
     ImGui::Separator();
 
+    // シート表示を開くと、粒子の形、照明、コマの再生順を設定できる。
     if (ImGui::CollapsingHeader("Sprite Sheet Animation")) {
         const char* particleTypes[] = { "Billboard", "Trail" };
         ImGui::Combo("Particle Type", &config_.particleType, particleTypes, IM_ARRAYSIZE(particleTypes));
 
+        // Trailの場合だけ、速度方向へ伸ばす長さを設定する。
         if (config_.particleType == 1) {
             ImGui::DragFloat("Trail Length", &config_.trailLength, 0.005f, 0.0f, 1.0f, "%.3f");
             ImGui::TextDisabled("速度方向へ自動整列し、移動量に応じて軌跡を伸ばします。");
@@ -595,10 +636,12 @@ void GpuParticleEditor::DrawImGui() {
 
         bool receiveLighting = config_.receiveLighting != 0;
 
+        // 照明のチェック状態が変わった場合だけ、GPU用フラグへ反映する。
         if (ImGui::Checkbox("ライトの影響を受ける", &receiveLighting)) {
             config_.receiveLighting = receiveLighting ? 1 : 0;
         }
 
+        // 照明を受ける粒子の場合に、光の方向・色・反映率を調整する。
         if (receiveLighting) {
             ImGui::DragFloat3("ライト方向", &config_.lightDirection.x, 0.01f, -1.0f, 1.0f);
             ImGui::ColorEdit3("ライト色", &config_.lightColor.x);
@@ -613,17 +656,19 @@ void GpuParticleEditor::DrawImGui() {
 
         bool loop = config_.spriteSheetLoop != 0;
 
+        // 再生を繰り返す設定が変更された場合は、シートのループフラグへ保存する。
         if (ImGui::Checkbox("Loop", &loop)) {
             config_.spriteSheetLoop = loop ? 1 : 0;
         }
 
         bool randomStart = config_.spriteSheetRandomStart != 0;
 
+        // ランダム開始が変更された場合は、初期コマを選ぶフラグへ保存する。
         if (ImGui::Checkbox("Random Start", &randomStart)) {
             config_.spriteSheetRandomStart = randomStart ? 1 : 0;
         }
 
-        // 旧モードのランダムな回転を残し、細い軌跡用に方向を固定する選択肢を追加します。
+        // 速度方向に揃える場合は、面内の揺れを残す設定と方向を固定する設定から選べる。
         const char* alignmentModes[] = {"自由回転", "速度方向＋ランダム回転（従来）", "速度方向へ固定"};
         ImGui::Combo("Spriteの向き", &config_.alignToVelocity, alignmentModes, IM_ARRAYSIZE(alignmentModes));
 
@@ -642,9 +687,11 @@ void GpuParticleEditor::EmitWithPreview() {
     if (previewStage && previewStage->IsEnabled()) {
         tempConfig.emitPos = previewStage->GetPreviewPosition();
     }
+    // 専用ステージが無効で、カメラ前方のプレビューを指定した場合にだけ視点を調べる。
     else if (isPreviewMode_) {
         const engine::Camera* camera = CameraManager::GetInstance()->GetActiveCamera();
 
+        // 現在のカメラを参照できた場合だけ位置を置き換える。未取得なら保存設定のまま発生させる。
         if (camera) {
             engine::Vector3 camEye = camera->GetEye();
             engine::Vector3 camTarget = camera->GetTargetPoint();
@@ -652,6 +699,7 @@ void GpuParticleEditor::EmitWithPreview() {
             float length = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
             engine::Vector3 forward = { 0, 0, 1 };
 
+            // 視線ベクトルに十分な長さがあれば正規化する。短すぎる場合は正のZを基準にする。
             if (length > 0.0001f) {
                 forward = { dir.x / length, dir.y / length, dir.z / length };
             }
@@ -671,20 +719,22 @@ void GpuParticleEditor::EmitWithPreview() {
 bool GpuParticleEditor::Save(const std::filesystem::path& path) {
     // プレビュー中の座標は保存せず、既存のプリセット形式へ変換する。
     std::ofstream file(path);
-    file << GpuParticlePresetJsonCodec::Write(config_).dump(4);
+    file << gpuParticlePresetJsonCodec::Write(config_).dump(4);
     file.close();
     return file.good();
 }
 
 bool GpuParticleEditor::Load(const std::filesystem::path& path) {
+    // 開けないファイルでは既存設定を保持する。開けた場合は一時設定へ読み込んでから置き換える。
     std::ifstream file(path);
+    // 保存済みのプリセットを開けなければ、解析前に失敗を返す。
     if (!file) return false;
 
     nlohmann::json j;
     file >> j;
     auto loaded = config_;
     {
-        // 旧プリセットで省略された項目は、従来どおりEditor用の既定値へ戻す。
+        // 旧プリセットで省略できる以下の項目は既定値を使う。他の項目は現在の設定のコピーを土台にする。
         const GpuParticleConfig defaults;
         loaded.spriteSheetColumns = defaults.spriteSheetColumns;
         loaded.spriteSheetRows = defaults.spriteSheetRows;
@@ -708,7 +758,7 @@ bool GpuParticleEditor::Load(const std::filesystem::path& path) {
         loaded.maxParticles = defaults.maxParticles;
         loaded.lod = defaults.lod;
 
-        GpuParticlePresetJsonCodec::Read(j, loaded);
+        gpuParticlePresetJsonCodec::Read(j, loaded);
 
     }
     // 読み込みが済んだ一時設定をまとめて適用する。ファイルを開けない段階では編集値に触れない。

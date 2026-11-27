@@ -43,7 +43,7 @@ struct PointLight {
 
 // シェーダーに渡すライトの定数バッファ (CBV)
 // (ポイントライトの最大数を定義)
-const int kMaxPointLights = 50;
+const std::int32_t kMaxPointLights = 50;
 
 /// <summary>平行光源と固定上限の点光源を束ねる描画用データ。</summary>
 // 関連：LightManager（管理・GPU転送）、MeshRenderer（照明利用）

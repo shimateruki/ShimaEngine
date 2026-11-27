@@ -82,6 +82,18 @@
         "movement": { "minSpeed": 0.0, "maxSpeed": 0.0, "lifetime": 2.30 },
         "preview": { "targetDistance": 15.0, "duration": 7.3 },
       "presentation": { "animation": "crown_dominion_cast", "windupVfx": "enemy/false_king/false_king_nightfall_lances_charge", "activeVfx": "enemy/false_king/false_king_nightfall_lances_trail", "impactVfx": "enemy/false_king/false_king_nightfall_lances_impact", "audioCue": "" }
+    },
+    {
+      "id": "player_crown_lance_charge",
+      "displayName": "コピーゲート槍・溜め",
+      "playerMovement": {"enabled": true, "duration": 0, "groundSpeedScale": 0.45, "airSpeedScale": 0.68, "airResponse": 9},
+      "sequence": { "enabled": false, "binding": "player_special" }
+    },
+    {
+      "id": "player_crown_lance_recovery",
+      "displayName": "コピーゲート槍・反動",
+      "playerMovement": {"enabled": true, "duration": 0.24, "groundSpeedScale": 0.12, "airSpeedScale": 0.46, "airResponse": 14},
+      "sequence": { "enabled": false, "binding": "player_special" }
     }
   ]
 }

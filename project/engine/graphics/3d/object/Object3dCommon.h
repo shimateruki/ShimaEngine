@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "DirectXCommon.h"
 #include <array>
 #include <map>
@@ -9,13 +10,13 @@
 
 // BlendModeは、3D描画で使う合成方式を表します。
 enum class BlendMode {
-    None,             // ブレンドなし
-    Normal,           // 通常ブレンド
-    Add,              // 加算
-    Subtract,         // 減算
-    Multiply,         // 乗算
-    Screen,           // スクリーン
-    Count, // ブレンドモード数
+    kNone,             // ブレンドなし
+    kNormal,           // 通常ブレンド
+    kAdd,              // 加算
+    kSubtract,         // 減算
+    kMultiply,         // 乗算
+    kScreen,           // スクリーン
+    kCount, // ブレンドモード数
 };
 
 /// <summary>3Dモデル、影、特殊マテリアル、スカイボックスの共通描画パイプラインを管理する。</summary>
@@ -56,7 +57,7 @@ public:
     void SetPipelineState(BlendMode blendMode);
 
     /// <summary>材質に専用シェーダがある場合はそれを、なければ通常描画パイプラインを設定する。</summary>
-    void SetMaterialPipelineState(BlendMode blendMode, int materialType, const std::string& shaderMaterialId = {});
+    void SetMaterialPipelineState(BlendMode blendMode, std::int32_t materialType, const std::string& shaderMaterialId = {});
 
     /// <summary>所有しないDirectX基盤への参照を返す。</summary>
     engine::DirectXCommon* GetDxCommon() const { return dxCommon_; }
@@ -142,14 +143,14 @@ private:
     Microsoft::WRL::ComPtr<ID3D12PipelineState> graphicsPipelineState_;
 
     // 添字はBlendModeに対応し、通常材質の合成方式を切り替える。
-    std::array<Microsoft::WRL::ComPtr<ID3D12PipelineState>, static_cast<size_t>(BlendMode::Count)> graphicsPipelineStates_;
+    std::array<Microsoft::WRL::ComPtr<ID3D12PipelineState>, static_cast<size_t>(BlendMode::kCount)> graphicsPipelineStates_;
 
     // ダッシュ床材質の専用シェーダとブレンド方式の組み合わせ。
-    std::array<Microsoft::WRL::ComPtr<ID3D12PipelineState>, static_cast<size_t>(BlendMode::Count)> dashPanelPipelineStates_;
+    std::array<Microsoft::WRL::ComPtr<ID3D12PipelineState>, static_cast<size_t>(BlendMode::kCount)> dashPanelPipelineStates_;
 
     // デカール材質の専用シェーダとブレンド方式の組み合わせ。
-    std::array<Microsoft::WRL::ComPtr<ID3D12PipelineState>, static_cast<size_t>(BlendMode::Count)> decalPipelineStates_;
-    std::map<std::string, std::array<Microsoft::WRL::ComPtr<ID3D12PipelineState>, static_cast<size_t>(BlendMode::Count)>> shaderMaterialPipelineStates_;
+    std::array<Microsoft::WRL::ComPtr<ID3D12PipelineState>, static_cast<size_t>(BlendMode::kCount)> decalPipelineStates_;
+    std::map<std::string, std::array<Microsoft::WRL::ComPtr<ID3D12PipelineState>, static_cast<size_t>(BlendMode::kCount)>> shaderMaterialPipelineStates_;
     std::set<std::string> failedShaderMaterials_;
 
     // 通常モデルを深度へ描く影パスのPSO。
@@ -175,7 +176,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12PipelineState> skyboxPipelineState_;
 
     // 添字をBlendModeに対応させたエフェクト描画用PSO。
-    std::array<Microsoft::WRL::ComPtr<ID3D12PipelineState>, static_cast<size_t>(BlendMode::Count)> effectPipelineStates_;
+    std::array<Microsoft::WRL::ComPtr<ID3D12PipelineState>, static_cast<size_t>(BlendMode::kCount)> effectPipelineStates_;
 };
 
 } // namespace engine

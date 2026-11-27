@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "json.hpp"
 #include <algorithm>
 #include <cmath>
@@ -30,7 +31,6 @@ struct CrownLanceSettings {
 
     // EditorやJSONから入った調整値を、この設定で扱える有限値・範囲へ収める。
     void Sanitize() {
-        // JSONとエディターの両方から来る値を、有効な既定値と範囲に収める。
         auto clamp = [](float& v, float lo, float hi, float fallback) {
             v = std::clamp(std::isfinite(v) ? v : fallback, lo, hi);
         };
@@ -64,12 +64,12 @@ struct CrownLanceSettings {
             clamp(appearance.edgeColor[i], 0.0f, 1.0f, Appearance{}.edgeColor[i]);
     }
     // 溜めた秒数に応じ、出すゲートを1・3・5枚のいずれかにする。
-    int GateCount(float seconds) const { return seconds >= fiveGateTime ? 5 : seconds >= threeGateTime ? 3 : 1; }
+    std::int32_t GateCount(float seconds) const { return seconds >= fiveGateTime ? 5 : seconds >= threeGateTime ? 3 : 1; }
     // 設定JSONを読み込む。既存値を項目ごとに更新し、最後に範囲と段階の順を補正する。
     void Load() {
-        // 保存ファイルがない場合は、その時点で持っている設定を使う。
         try {
             std::ifstream in(kConfigPath);
+            // 設定ファイルを開けない場合は、現在の値を保ち、範囲調整も行わず戻る。
             if (!in)
                 return;
             nlohmann::json j;
@@ -101,8 +101,9 @@ struct CrownLanceSettings {
             appearance.trailLength = j.value("trailLength", appearance.trailLength);
             appearance.trailWidth = j.value("trailWidth", appearance.trailWidth);
             appearance.trailNoise = j.value("trailNoise", appearance.trailNoise);
+        // 構文や値の型で例外が出た場合も、読み込めた値を下で補正する。
         } catch (...) {
-        } // 読み込み失敗時も有効な既定値に収めます。
+        }
         // 一部まで読んで失敗した場合にも、読み込んだ項目をすべて有効範囲へ収める。
         Sanitize();
     }
@@ -136,24 +137,27 @@ struct CrownLanceSettings {
         j["trailLength"] = appearance.trailLength;
         j["trailWidth"] = appearance.trailWidth;
         j["trailNoise"] = appearance.trailNoise;
-        // 出力先を用意できた場合だけJSONを書き、ストリームの状態を成功判定に使う。
+        // 保存ファイルの親フォルダーを先に用意する。
         std::error_code error;
         std::filesystem::create_directories(std::filesystem::path(kConfigPath).parent_path(), error);
+        // 親フォルダーが作れなければ、書き出さず失敗を返す。
         if (error)
             return false;
         std::ofstream out(kConfigPath);
+        // ファイルを開けなければ、書き出さず失敗を返す。
         if (!out)
             return false;
         out << j.dump(2);
         return out.good();
     }
+    // 初めて参照したときに保存値を読み込み、以後は同じ設定を返します。
     static CrownLanceSettings& Get() {
-        static CrownLanceSettings value = [] {
+        static CrownLanceSettings sValue = [] {
             CrownLanceSettings s;
             s.Load();
             return s;
         }();
-        return value;
+        return sValue;
     }
 #ifdef USE_IMGUI
     void DrawEditor() {
@@ -165,12 +169,14 @@ struct CrownLanceSettings {
             ImGui::DragFloat("回避無敵時間", &warpInvincibility, 0.01f, 0.14f, 0.45f, "%.2f 秒");
             ImGui::DragFloat("回避の再使用時間", &warpCooldown, 0.01f, 0.45f, 3.0f, "%.2f 秒");
             Sanitize();
-            static int result = 0;
+            static std::int32_t sResult = 0;
             // 回避の欄で保存しても、同じ設定ファイルに他の項目を含めて書き出す。
             if (ImGui::Button("ゲート回避の設定を保存"))
-                result = Save() ? 1 : -1;
-            if (result) ImGui::TextUnformatted(result > 0 ? "保存しました" : "保存に失敗しました");
+                sResult = Save() ? 1 : -1;
+            // この欄から保存を試した場合にだけ結果を表示する。
+            if (sResult) ImGui::TextUnformatted(sResult > 0 ? "保存しました" : "保存に失敗しました");
         }
+        // 槍の設定欄が閉じている場合は、数値や保存ボタンを描画しない。
         if (!ImGui::CollapsingHeader("覇王・ゲート槍の設定", ImGuiTreeNodeFlags_DefaultOpen))
             return;
         ImGui::DragFloat("3ゲートまで", &threeGateTime, 0.01f, 0.15f, 0.8f, "%.2f 秒");
@@ -193,12 +199,13 @@ struct CrownLanceSettings {
         ImGui::SliderFloat("光の帯の揺らぎ", &appearance.trailNoise, 0.0f, 1.0f);
         ImGui::TextWrapped("粒子の色・数・大きさ・寿命はGPU Particle Editorのplayer_crown_で始まるプリセットから調整できます。");
         Sanitize();
-        static int saved = 0;
+        static std::int32_t sSaved = 0;
         // 槍の欄でも同じ保存処理を使い、結果を欄内に表示する。
         if (ImGui::Button("ゲート槍の設定を保存"))
-            saved = Save() ? 1 : -1;
-        if (saved)
-            ImGui::TextUnformatted(saved > 0 ? "保存しました" : "保存に失敗しました");
+            sSaved = Save() ? 1 : -1;
+        // 槍の設定欄でも、保存を試した場合だけ結果を表示する。
+        if (sSaved)
+            ImGui::TextUnformatted(sSaved > 0 ? "保存しました" : "保存に失敗しました");
         ImGui::TextWrapped("設定は次の溜め開始時に反映。構えと発射反動はAnimation "
                            "Workbenchのplayer_ability_crown_charge / releaseで編集できます。");
     }

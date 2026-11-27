@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #ifdef USE_IMGUI
 #include "game/editor/RegisterGameActorDebug.h"
 #include "engine/editor/preview/EffectPreviewStage.h"
@@ -11,8 +12,8 @@
 // Updateを直接呼ばず、通常のGame View→DebugEditor経路で進むことを検証します。
 struct AttackEditorRuntimeProbe {
     static bool Enabled() {
-        static const bool enabled = GetEnvironmentVariableA("CG2_ATTACK_EDITOR_TEST", nullptr, 0) > 0;
-        return enabled;
+        static const bool kEnabled = GetEnvironmentVariableA("CG2_ATTACK_EDITOR_TEST", nullptr, 0) > 0;
+        return kEnabled;
     }
 
     // 通常描画後に段階を進める。専用起動の確認後にだけ、シーン切替とEditor操作を実行する。
@@ -20,60 +21,60 @@ struct AttackEditorRuntimeProbe {
         if (!Enabled() || !manager || !editor)
             return;
         static std::ofstream log(path, std::ios::trunc);
-        static int phase = 0, frames = 0;
-        static float start = 0;
-        static bool done = false;
-        static ULONGLONG began = GetTickCount64();
-        if (done)
+        static std::int32_t sPhase = 0, sFrames = 0;
+        static float sStart = 0;
+        static bool sDone = false;
+        static ULONGLONG sBegan = GetTickCount64();
+        if (sDone)
             return;
-        auto finish = [&](const std::string& result) { log << result << std::endl; done = true; WinApp::CloseNow(); };
-        if (GetTickCount64() - began > 300000) {
+        auto finish = [&](const std::string& result) { log << result << std::endl; sDone = true; WinApp::CloseNow(); };
+        if (GetTickCount64() - sBegan > 300000) {
             finish("FAIL: editor timeout");
             return;
         }
         if (manager->IsTransitioning())
             return;
-        if (phase == 0) {
+        if (sPhase == 0) {
             manager->ChangeScene("GAMEPLAY");
-            phase = 1;
+            sPhase = 1;
             return;
         }
         if (manager->GetCurrentSceneName() != "GAMEPLAY")
             return;
         auto& preview = *GetGameActorDebugPanel();
-        if (phase == 1) {
+        if (sPhase == 1) {
             // Scene切替直後の選択リセットが終わってから、ユーザーが開くのと同じ順序にします。
-            if (++frames < 3)
+            if (++sFrames < 3)
                 return;
             preview.enemyType_ = "FireSlime";
             preview.LoadSelectedProfile();
-            for (int i = 0; i < static_cast<int>(preview.editableProfile_.attacks.size()); ++i)
+            for (std::int32_t i = 0; i < static_cast<std::int32_t>(preview.editableProfile_.attacks.size()); ++i)
                 if (preview.editableProfile_.attacks[i].id == "fireball")
                     preview.profileAttackIndex_ = i;
             preview.ApplyRecommendedSettings();
             preview.loop_ = false;
             EditorManager::GetInstance()->SetSelectedObject(&preview);
             preview.PreviewDraft(false);
-            start = preview.elapsedTime_;
-            frames = 0;
-            phase = 2;
-            log << "START draft playback time=" << start << std::endl;
+            sStart = preview.elapsedTime_;
+            sFrames = 0;
+            sPhase = 2;
+            log << "START draft playback time=" << sStart << std::endl;
             return;
         }
-        if (++frames < 30)
+        if (++sFrames < 30)
             return;
-        frames = 0;
-        if (phase == 2 || phase == 5 || phase == 7) {
-            log << "PLAY phase=" << phase << " elapsed=" << preview.elapsedTime_ << std::endl;
+        sFrames = 0;
+        if (sPhase == 2 || sPhase == 5 || sPhase == 7) {
+            log << "PLAY phase=" << sPhase << " elapsed=" << preview.elapsedTime_ << std::endl;
             if (!preview.IsAuthoringViewportActive()) {
                 finish("FAIL: attack editor selection lost");
                 return;
             }
-            if (preview.elapsedTime_ < start + 0.3f) {
+            if (preview.elapsedTime_ < sStart + 0.3f) {
                 finish("FAIL: authoring playback clock did not advance");
                 return;
             }
-            int gridObjects = 0;
+            std::int32_t gridObjects = 0;
             for (const auto& object : manager->GetCurrentScene()->GetObjects())
                 if (object && object->GetIsVisible() && object->GetName().find("__Editor_EffectPreviewGrid") == 0)
                     ++gridObjects;
@@ -82,54 +83,54 @@ struct AttackEditorRuntimeProbe {
                 finish("FAIL: isolated preview grid missing");
                 return;
             }
-            if (phase == 7) {
+            if (sPhase == 7) {
                 finish("PASS: editor auto-play, pause, frame-step, resume, placement-to-play and visible grid");
                 return;
             }
-            if (phase == 5) {
+            if (sPhase == 5) {
                 preview.selectedTrack_ = -2;
                 preview.BeginPlacementPreview();
-                start = preview.elapsedTime_;
-                phase = 6;
+                sStart = preview.elapsedTime_;
+                sPhase = 6;
                 return;
             }
             preview.playing_ = false;
-            start = preview.elapsedTime_;
-            phase = 3;
+            sStart = preview.elapsedTime_;
+            sPhase = 3;
             return;
         }
-        if (phase == 3) {
-            if (std::abs(preview.elapsedTime_ - start) > 0.001f) {
+        if (sPhase == 3) {
+            if (std::abs(preview.elapsedTime_ - sStart) > 0.001f) {
                 finish("FAIL: pause advanced time");
                 return;
             }
-            preview.SeekPreview(start + 1.0f / 60.0f);
-            if (std::abs(preview.elapsedTime_ - start - 1.0f / 60.0f) > 0.001f) {
+            preview.SeekPreview(sStart + 1.0f / 60.0f);
+            if (std::abs(preview.elapsedTime_ - sStart - 1.0f / 60.0f) > 0.001f) {
                 finish("FAIL: frame-step mismatch");
                 return;
             }
-            start = preview.elapsedTime_;
-            phase = 4;
-            log << "STEP elapsed=" << start << std::endl;
+            sStart = preview.elapsedTime_;
+            sPhase = 4;
+            log << "STEP elapsed=" << sStart << std::endl;
             return;
         }
-        if (phase == 4) {
-            if (std::abs(preview.elapsedTime_ - start) > 0.001f) {
+        if (sPhase == 4) {
+            if (std::abs(preview.elapsedTime_ - sStart) > 0.001f) {
                 finish("FAIL: frame-step resumed playback");
                 return;
             }
             preview.playing_ = true;
-            phase = 5;
+            sPhase = 5;
             return;
         }
-        if (phase == 6) {
-            if (!preview.placementPreview_ || std::abs(preview.elapsedTime_ - start) > 0.001f) {
+        if (sPhase == 6) {
+            if (!preview.placementPreview_ || std::abs(preview.elapsedTime_ - sStart) > 0.001f) {
                 finish("FAIL: placement preview did not remain paused");
                 return;
             }
             preview.playing_ = true;
-            start = 0;
-            phase = 7;
+            sStart = 0;
+            sPhase = 7;
         }
     }
 };

@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #ifdef USE_IMGUI
 #include "DebugEditor.h"
 #include "EditorManager.h"
@@ -14,10 +15,11 @@
 
 // 明示した専用実行だけで、登録前の入力契約と実Actorへの接続を検証します。
 struct PreviewCompositionRuntimeProbe {
+    /// <summary>コピー能力のプレビューで実行する能力種別とアクション名の組を保持する。</summary>
     struct Case { std::string type, action; };
     static bool Enabled() { return GetEnvironmentVariableA("CG2_PREVIEW_COMPOSITION_TEST",nullptr,0)>0; }
     static void Require(bool value,const char* text) { if(!value)throw std::runtime_error(text); }
-    static PlayerCopyAbilityInput LegacyInput(int action,float time,float deltaTime,bool trigger) {
+    static PlayerCopyAbilityInput LegacyInput(std::int32_t action,float time,float deltaTime,bool trigger) {
         PlayerCopyAbilityInput input{};
         const bool held=time>=0.5f && time<2.0f;
         input.primaryTriggered=trigger && (action==1 || action==2);
@@ -44,13 +46,13 @@ struct PreviewCompositionRuntimeProbe {
                 Require(action.id==actions[a] && action.startTime==0.5f,"legacy action ID/time");
                 Require(action.startsUncopied==(a==0),"copy start policy");
                 Require(static_cast<bool>(action.onTrigger)==(a==0 || a==5),"acquire/release callback");
-                bool triggered=false;int events=0;
-                for(int f=0;f<=180;++f) {
+                bool triggered=false;std::int32_t events=0;
+                for(std::int32_t f=0;f<=180;++f) {
                     const float time=static_cast<float>(f)/60.0f,deltaTime=1.0f/60.0f;
                     const bool trigger=!triggered && time>=0.5f;
                     CopyAbilityPreviewFrame frame{time,deltaTime,1.5f,action.startTime,trigger};
                     const auto actual=action.buildInput?action.buildInput(frame):PlayerCopyAbilityInput{};
-                    const auto expected=LegacyInput(static_cast<int>(a),time,deltaTime,trigger);
+                    const auto expected=LegacyInput(static_cast<std::int32_t>(a),time,deltaTime,trigger);
                     Require(actual.primaryTriggered==expected.primaryTriggered && actual.primaryHeld==expected.primaryHeld &&
                         actual.secondaryTriggered==expected.secondaryTriggered && actual.secondaryHeld==expected.secondaryHeld &&
                         actual.specialTriggered==expected.specialTriggered,"registered input differs from legacy timing");
@@ -72,11 +74,11 @@ struct PreviewCompositionRuntimeProbe {
     static void CheckSpawn(ActorDebugPanel& preview,std::ofstream& log) {
         preview.StopPreview();preview.SetPlayerCopyMode(false);
         preview.enemyType_="PrismSlime";preview.LoadSelectedProfile();preview.prismChantOnly_=false;
-        for(int a=0;a<static_cast<int>(preview.editableProfile_.attacks.size());++a)
+        for(std::int32_t a=0;a<static_cast<std::int32_t>(preview.editableProfile_.attacks.size());++a)
             if(preview.editableProfile_.attacks[a].id=="slime_summon")preview.profileAttackIndex_=a;
         preview.ApplyRecommendedSettings();preview.loopDuration_=8.0f;preview.enabled_=true;preview.CreatePreviewObjects();
         preview.playing_=false;
-        for(int f=0;f<480 && preview.spawnedPreviewObjects_.empty();++f)preview.StepSimulation(1.0f/60.0f);
+        for(std::int32_t f=0;f<480 && preview.spawnedPreviewObjects_.empty();++f)preview.StepSimulation(1.0f/60.0f);
         Require(!preview.spawnedPreviewObjects_.empty(),"real prism summon missing");
         for(auto* object:preview.spawnedPreviewObjects_)
             Require(object && object->IsEditorInternal() && object->GetClassName()=="EditorOnly" &&
@@ -89,7 +91,7 @@ struct PreviewCompositionRuntimeProbe {
         nested->SetTranslate(preview.previewEnemy_->GetTranslate());
         preview.AddPreviewSpawn(std::move(nested));
         const auto count=preview.spawnedPreviewObjects_.size();
-        EnemyProjectileRuntimeProbe::Access::Release(bomber);
+        enemyProjectileRuntimeProbe::Access::Release(bomber);
         Require(preview.spawnedPreviewObjects_.size()==count+1,"nested bomber callback missing");
         auto* bomb=preview.spawnedPreviewObjects_.back();
         Require(bomb && bomb->IsEditorInternal() && bomb->GetCollisionAttribute()==0 && bomb->GetCollisionMask()==0,
@@ -117,33 +119,33 @@ struct PreviewCompositionRuntimeProbe {
         log<<"OK stop/restart/scene mismatch/window destruction reject expired spawn callbacks"<<std::endl;
     }
     static void AfterDraw(SceneManager* manager,DebugEditor* editor,const std::string& path) {
-        static std::ofstream log(path,std::ios::trunc);static int phase=0,wait=0;
-        static size_t index=0;static std::vector<Case> cases;static bool done=false;
-        if(done || !manager || !editor || manager->IsTransitioning())return;
-        auto finish=[&](const std::string& text){log<<text<<std::endl;done=true;WinApp::CloseNow();};
+        static std::ofstream log(path,std::ios::trunc);static std::int32_t sPhase=0,sWait=0;
+        static size_t sIndex=0;static std::vector<Case> sCases;static bool sDone=false;
+        if(sDone || !manager || !editor || manager->IsTransitioning())return;
+        auto finish=[&](const std::string& text){log<<text<<std::endl;sDone=true;WinApp::CloseNow();};
         try {
-            if(phase==0){manager->SetIsPlaying(false);manager->ChangeScene("GAMEPLAY");phase=1;return;}
-            if(manager->GetCurrentSceneName()!="GAMEPLAY" || ++wait<3)return;
+            if(sPhase==0){manager->SetIsPlaying(false);manager->ChangeScene("GAMEPLAY");sPhase=1;return;}
+            if(manager->GetCurrentSceneName()!="GAMEPLAY" || ++sWait<3)return;
             auto& preview=*GetGameActorDebugPanel();
-            if(phase==1){
-                CheckInputs(cases,log);CheckSpawn(preview,log);
+            if(sPhase==1){
+                CheckInputs(sCases,log);CheckSpawn(preview,log);
                 preview.SetPlayerCopyMode(true);preview.loop_=false;preview.showTarget_=false;
-                EditorManager::GetInstance()->SetSelectedObject(&preview);phase=2;
+                EditorManager::GetInstance()->SetSelectedObject(&preview);sPhase=2;
             }
-            if(phase==2){
-                if(index==cases.size()){
+            if(sPhase==2){
+                if(sIndex==sCases.size()){
                     preview.StopPreview();
                     finish("PASS: registered preview spawns and copy abilities, legacy input contract, real playback/rewind/cleanup");return;
                 }
-                preview.copyType_=cases[index].type;preview.LoadSelectedProfile();preview.copyActionId_=cases[index].action;
+                preview.copyType_=sCases[sIndex].type;preview.LoadSelectedProfile();preview.copyActionId_=sCases[sIndex].action;
                 preview.loopDuration_=6.0f;preview.enabled_=true;preview.CreatePreviewObjects();preview.playing_=false;
                 Require(preview.previewPlayer_ && preview.GetCopyAction(),"copy preview creation");
-                if(cases[index].action=="acquire")Require(!preview.previewPlayer_->IsEnemyMorphed(),"acquire started copied");
+                if(sCases[sIndex].action=="acquire")Require(!preview.previewPlayer_->IsEnemyMorphed(),"acquire started copied");
                 else Require(preview.previewPlayer_->IsEnemyMorphed(),"copy form not applied");
-                wait=0;phase=3;return;
+                sWait=0;sPhase=3;return;
             }
-            if(phase==3){
-                const auto& test=cases[index];
+            if(sPhase==3){
+                const auto& test=sCases[sIndex];
                 const float time=test.action=="primary_hold"?2.2f:(test.action=="pink_combo"?2.3f:0.8f);
                 preview.SeekPreview(time);
                 Require(std::abs(preview.elapsedTime_-time)<0.001f && preview.copyActionTriggered_,"copy playback clock/trigger");
@@ -155,8 +157,8 @@ struct PreviewCompositionRuntimeProbe {
                     else Require(preview.previewPlayer_->IsEnemyMorphReleasing() || !preview.previewPlayer_->IsEnemyMorphed(),
                         "release callback not executed");
                 }
-                const std::vector<Player::EnemyMorphType> morphs={Player::EnemyMorphType::Slime,Player::EnemyMorphType::FireSlime,
-                    Player::EnemyMorphType::ThunderSlime,Player::EnemyMorphType::WindSlime,Player::EnemyMorphType::Bomber,Player::EnemyMorphType::Crown};
+                const std::vector<Player::EnemyMorphType> morphs={Player::EnemyMorphType::kSlime,Player::EnemyMorphType::kFireSlime,
+                    Player::EnemyMorphType::kThunderSlime,Player::EnemyMorphType::kWindSlime,Player::EnemyMorphType::kBomber,Player::EnemyMorphType::kCrown};
                 if(test.action!="release"){
                     const auto& entries=CopyAbilityPreviewRegistry::GetEntries();
                     for(size_t f=0;f<entries.size();++f)if(entries[f].type==test.type)
@@ -166,7 +168,7 @@ struct PreviewCompositionRuntimeProbe {
                 Require(!preview.copyActionTriggered_ && std::abs(preview.elapsedTime_-0.25f)<0.001f,"copy rewind did not reset trigger");
                 preview.StopPreview();Require(!preview.spawnSession_ && !preview.previewPlayer_,"copy cleanup references");
                 log<<"OK actual copy playback/rewind "<<test.type<<" / "<<test.action<<std::endl;
-                ++index;phase=2;wait=0;
+                ++sIndex;sPhase=2;sWait=0;
             }
         }catch(const std::exception& error){finish(std::string("FAIL: ")+error.what());}
     }

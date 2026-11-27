@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include <cstdint>
 #include "game/scene/select/GameSelectScene.h"
 #include "Camera.h"
 #include "Player.h"
@@ -12,12 +13,13 @@
 #include <cmath>
 #include <numbers>
 #include "game/scene/select/GameSelectScene.Internal.h"
-using namespace StageSelectDetail;
+using namespace stageSelectDetail;
 
 void GameSelectScene::UpdateGateCinematicBars(float deltaTime) {
     // シネマバーの高さを既定値から補間し、他のポストエフェクト設定を保つ。
     PostEffect::Params* params = PostEffect::GetInstance()->GetParams();
 
+    // ポストエフェクトの設定先がないフレームは、黒帯を更新できない。
     if (!params) {
         return;
     }
@@ -25,11 +27,13 @@ void GameSelectScene::UpdateGateCinematicBars(float deltaTime) {
     // 複数の演出が続いても、最初に上書きしたときだけ元の高さを退避します。
     const bool isCinematicActive =
         gateEntryCinematicActive_ || gateReturnPresentationActive_ || unlockingStageIndex_ >= 0;
+    // 対象の演出が始まり、まだ黒帯を上書きしていない場合だけ現在の高さを控える。
     if (isCinematicActive && !gateCinematicBarOverrideActive_) {
         gateCinematicBarBaseHeight_ = params->cinemaBarHeight;
         gateCinematicBarOverrideActive_ = true;
     }
 
+    // どの対象演出も高さを上書きしていなければ、現在の設定をそのままにする。
     if (!gateCinematicBarOverrideActive_) {
         return;
     }
@@ -39,8 +43,10 @@ void GameSelectScene::UpdateGateCinematicBars(float deltaTime) {
     const float speed = isCinematicActive ? kGateCinematicBarOpenSpeed : kGateCinematicBarCloseSpeed;
     const float step = speed * std::max(deltaTime, 0.0f);
 
+    // 目標より閉じている場合は、演出に向けて黒帯を広げる。
     if (gateCinematicBarBlend_ < targetBlend) {
         gateCinematicBarBlend_ = std::min(targetBlend, gateCinematicBarBlend_ + step);
+    // 目標より開いている場合は、復帰に向けて黒帯を戻す。
     } else if (gateCinematicBarBlend_ > targetBlend) {
         gateCinematicBarBlend_ = std::max(targetBlend, gateCinematicBarBlend_ - step);
     }
@@ -62,6 +68,7 @@ void GameSelectScene::ResetGateCinematicBars() {
     // この演出が上書きした場合だけ元のバー高さへ復元する。
     PostEffect::Params* params = PostEffect::GetInstance()->GetParams();
 
+    // 設定を書き込める状態で、このシーンが高さを変更していた場合に限り元の値へ戻す。
     if (params && gateCinematicBarOverrideActive_) {
         params->cinemaBarHeight = gateCinematicBarBaseHeight_;
     }
@@ -79,12 +86,14 @@ bool GameSelectScene::StartStageReturnPresentation(const GameDataManager::StageS
 
     const auto& stages = StageManager::GetInstance()->GetStages();
 
-    if (request.stageIndex < 0 || request.stageIndex >= static_cast<int>(stages.size())) {
+    // 帰還要求のステージ添字が通常ステージの範囲外なら、対応する門を探せない。
+    if (request.stageIndex < 0 || request.stageIndex >= static_cast<std::int32_t>(stages.size())) {
         return false;
     }
 
     gateReturnTargetGate_ = FindStageGateByIndex(request.stageIndex);
 
+    // ゲートかプレイヤーが存在しなければ、登場経路を用意せず中止する。
     if (!gateReturnTargetGate_ || !player_) {
         return false;
     }
@@ -136,11 +145,13 @@ bool GameSelectScene::StartStageReturnPresentation(const GameDataManager::StageS
     returnRoute.baseScale = gateReturnPlayerScale_;
     player_->StartGateReturnAnimation(returnRoute);
 
+    // 配置物が専用のゲート型なら、プレイヤーの移動を開始した後にゲート側の反応も起動する。
     if (auto* stageGate = dynamic_cast<GimmickStageGate*>(gateReturnTargetGate_)) {
         stageGate->TriggerEntryReaction();
     }
 
     // 現視点、演出の注視点、着地後の通常視点を別々に用意し、後で補間します。
+    // メインカメラを取得できる場合だけ、演出用と復帰用の視点を用意して固定視点にする。
     if (engine::Camera* camera = CameraManager::GetInstance()->GetMainCamera()) {
         const engine::Vector3 side = {gateDirection.z, 0.0f, -gateDirection.x};
         const engine::Vector3 gateFocus = {gatePos.x, returnGroundY + kGateReturnCameraFocusHeight, gatePos.z};
@@ -169,7 +180,7 @@ bool GameSelectScene::StartStageReturnPresentation(const GameDataManager::StageS
             focus.z - gateDirection.z * kGateReturnCameraBackDistance + side.z * kGateReturnCameraSideOffset};
         camera->SetInputEnabled(false);
         camera->SetFollowTarget(nullptr);
-        camera->SetFollowMode(engine::Camera::FollowMode::FixedPoint);
+        camera->SetFollowMode(engine::Camera::FollowMode::kFixedPoint);
         camera->ConfigFixedPoint(gateReturnCameraStartEye_,
                                  SelectLookAtRotation(gateReturnCameraStartEye_, gateReturnCameraStartTarget_));
     }
@@ -187,6 +198,7 @@ bool GameSelectScene::StartStageReturnPresentation(const GameDataManager::StageS
 }
 
 void GameSelectScene::UpdateStageReturnPresentation(float deltaTime) {
+    // 帰還演出が開始されていなければ、時計や通常操作の状態を変更しない。
     if (!gateReturnPresentationActive_) {
         return;
     }
@@ -216,10 +228,11 @@ void GameSelectScene::UpdateStageReturnPresentation(float deltaTime) {
                                         route.surface.z + outwardDirection.z * kGateReturnExitForwardOffset};
     }
 
+    // メインカメラが存在するフレームは、入力による追従を止めて演出用の固定視点を更新する。
     if (engine::Camera* camera = CameraManager::GetInstance()->GetMainCamera()) {
         camera->SetInputEnabled(false);
         camera->SetFollowTarget(nullptr);
-        camera->SetFollowMode(engine::Camera::FollowMode::FixedPoint);
+        camera->SetFollowMode(engine::Camera::FollowMode::kFixedPoint);
 
         engine::Vector3 eye = gateReturnCameraEndEye_;
         engine::Vector3 target = gateReturnCameraEndTarget_;
@@ -251,6 +264,7 @@ void GameSelectScene::UpdateStageReturnPresentation(float deltaTime) {
     // プレイヤーの動作が完了した場合、または演出の全尺に達した場合に通常制御へ戻します。
     const bool playerAnimationFinished = player_ && player_->IsGateReturnAnimationFinished();
 
+    // プレイヤーの帰還動作が終わるか演出の上限時間に達した時点で、後片付けへ進む。
     if (playerAnimationFinished || gateReturnPresentationTimer_ >= kGateReturnTotalDuration) {
         FinishStageReturnPresentation();
     }
@@ -267,15 +281,17 @@ void GameSelectScene::FinishStageReturnPresentation() {
     // 帰還前の操作可否を戻し、待機姿勢と着地の反応へ引き継ぎます。
     if (player_) {
         player_->StopGateReturnAnimation(gateReturnHadPlayerControl_);
-        player_->SetSlimeAnimationMode(PlayerSlimeAnimator::Mode::Idle);
+        player_->SetSlimeAnimationMode(PlayerSlimeAnimator::Mode::kIdle);
         player_->TriggerSlimeImpulse({0.96f, 1.08f, 0.96f}, 0.18f);
     }
 
     // 固定カメラを解除し、プレイヤーの追従を再開できる位置に合わせます。
+    // メインカメラがあれば、演出で止めたカメラ入力を再び有効にする。
     if (engine::Camera* camera = CameraManager::GetInstance()->GetMainCamera()) {
+        // プレイヤーが残っていれば、追従対象と三人称の位置も復元する。
         if (player_) {
             camera->SetFollowTarget(player_);
-            camera->SetFollowMode(engine::Camera::FollowMode::Aimable);
+            camera->SetFollowMode(engine::Camera::FollowMode::kAimable);
             camera->SnapToThirdPerson(kGateReturnThirdPersonDistance, kGateReturnThirdPersonHeight,
                                       kGateReturnThirdPersonPitch);
         }
@@ -287,9 +303,11 @@ void GameSelectScene::FinishStageReturnPresentation() {
     if (pendingStageClearRewardPresentation_.active) {
         StartStageClearRewardPresentation(pendingStageClearRewardPresentation_);
         pendingStageClearRewardPresentation_ = {};
+    // 帰還直後の報酬予約がなければ、ゲートの解放演出を探す。
     } else {
         unlockingStageIndex_ = FindPendingUnlockStage();
 
+        // 解放するステージが見つかった場合は、そのステージを選択して演出へ引き継ぐ。
         if (unlockingStageIndex_ >= 0) {
             selectedStageIndex_ = unlockingStageIndex_;
             DebugConsole::GetInstance()->AddLog("Stage Select: crown unlock presentation start.");
@@ -300,23 +318,28 @@ void GameSelectScene::FinishStageReturnPresentation() {
 }
 
 // 通常の遷移ゲートと同じ移動・ディゾルブを再生し、選択シーンは行き先だけを担当します。
-void GameSelectScene::StartGateEntryCinematic(int stageIndex) {
+void GameSelectScene::StartGateEntryCinematic(std::int32_t stageIndex) {
+    // 進入演出がすでに動いている場合や編集停止中は、もう一度開始しない。
     if (gateEntryCinematicActive_ || !SceneManager::GetInstance()->IsPlaying()) return;
     // 実行中の配置からゲートを探し、共通演出の開始に成功した場合だけ進入中のフラグを立てる。
     auto* gate = FindStageGateByIndex(stageIndex);
+    // 門が未配置か、プレイヤーの共通進入演出を開始できない場合はステージへ移らない。
     if (!gate || !gateEntryPresentation_.Start(player_, gate, false)) return;
     gateEntryTargetGate_ = gate;
     gateEntryCinematicActive_ = true;
     isChangingStage_ = true;
     stageDecisionCooldown_ = 0.35f;
+    // 専用ゲート型なら、共通の進入演出に加えてゲートの反応も起動する。
     if (auto* stageGate = dynamic_cast<GimmickStageGate*>(gate)) stageGate->TriggerEntryReaction();
     DebugConsole::GetInstance()->AddLog("Stage Select: gate entry cinematic start.");
 }
 
 void GameSelectScene::UpdateGateEntryCinematic(float deltaTime) {
+    // 進入開始前と終了後は、再生器を進めない。
     if (!gateEntryCinematicActive_) return;
     // 移動やカメラは再生器に任せ、再生終了を確認してから次のシーンへ進む。
     gateEntryPresentation_.Update(deltaTime);
+    // プレイヤーが門へ進入する演出が完了するまで、シーンの遷移要求は出さない。
     if (!gateEntryPresentation_.IsFinished()) return;
     // 参照と画面の帯を先に片付け、ゲームプレイへの遷移を一度だけ要求する。
     gateEntryCinematicActive_ = false;

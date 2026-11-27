@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include <memory>
 #include <string>
@@ -8,7 +9,7 @@
 
 class Player;
 namespace engine { class Camera; }
-class EnemyAttackProfile;
+struct EnemyAttackProfile;
 struct ID3D12Resource;
 
 // 1フレーム分のコピー能力入力です。
@@ -36,10 +37,10 @@ class PlayerCopyAbilityController {
     PlayerCopyAbilityController& operator=(const PlayerCopyAbilityController&) = delete;
 
     // morphType に対応する能力セッションを生成する。未対応ならセッションは空になる。
-    void Activate(int morphType, const EnemyAttackProfile& attackProfile);
+    void Activate(std::int32_t morphType, const EnemyAttackProfile& attackProfile);
 
     // 敵種別のJSONを読み込みます。ファイルがない場合だけ既定値を使います。
-    void ActivateDefault(int morphType);
+    void ActivateDefault(std::int32_t morphType);
 
     // 1 フレーム分の入力を現在の能力セッションへ渡す。能力がなければ何もしない。
     void ProcessInput(Player& player, const PlayerCopyAbilityInput& input);
@@ -49,13 +50,13 @@ class PlayerCopyAbilityController {
 
     // 能力固有の3D表示を、現在のセッションがある時だけ描く。
     void Draw(Player& player, ID3D12Resource* pointLight, ID3D12Resource* spotLight, engine::Camera* camera = nullptr,
-              int previewBufferIndex = 0);
+              std::int32_t previewBufferIndex = 0);
 
     bool HasOwnedVisuals() const;
 
     // 深度・画面取得テクスチャを使う能力の見た目を専用パスへ転送する。
     void DrawOwnedVisuals(Player& player, uint32_t depthSrvHandle, uint32_t grabSrvHandle, engine::Camera* camera = nullptr,
-                          int previewBufferIndex = 0);
+                          std::int32_t previewBufferIndex = 0);
 
     // 能力側の終了処理を呼んでからセッションを破棄する。
     void Cancel(Player& player);
@@ -71,7 +72,7 @@ class PlayerCopyAbilityController {
     bool NotifyGuardedHit(Player& player, const engine::Vector3& sourcePosition);
 
     // セッションの実在と変身種別の一致をともに確認する。
-    bool HandlesMorphType(int morphType) const;
+    bool HandlesMorphType(std::int32_t morphType) const;
 
     bool IsActive() const;
 

@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "ca8455bfef545c0d6949d571899f9d5a",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/sprite/ui/result/clear/reward_plate.png",
+  "version": 1
+}

@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "5594e782b6a783d3f791b87eb6c90e06",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/sprite/ui/result/clear/japanese/star_empty.png",
+  "version": 1
+}

@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "IEditable.h"
 
@@ -43,7 +44,7 @@ private:
 
 private:
     SceneManager* sceneManager_ = nullptr; // 現在シーンの取得元。借用参照。
-    int lastActiveSlot_ = -1;
-    int crownTarget_ = 0;
+    std::int32_t lastActiveSlot_ = -1;
+    std::int32_t crownTarget_ = 0;
     std::string lastStatus_ = "デバッグ用にセーブデータを直接編集できます。";
 };

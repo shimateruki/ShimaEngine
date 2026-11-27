@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 // 偽王の槍攻撃とシーン演出が共用するカメラ姿勢の計算。Cameraの所有や切替は呼出側が担当する。
 
@@ -15,6 +16,17 @@ struct CrownBarrageCameraPose {
     engine::Vector3 target{};
     float fov = 0.7f;
 };
+
+// 召喚カット内の秒数。カメラとボスの詠唱描画は同じ時刻に合わせます。
+namespace SealRevealTiming {
+inline constexpr float ChantStart = 3.76f;
+inline constexpr engine::Vector3 CasterShotOffset{16.0f, 15.0f, 24.0f};
+inline constexpr float Launch = 4.48f;
+inline constexpr float SkyAppear = 4.84f;
+inline constexpr float SkyPulse = 5.88f;
+inline constexpr float GroundSurge = 6.40f;
+inline constexpr float Duration = 7.75f;
+}
 
 inline CrownBarrageCameraPose EvaluateCrownBarrageCamera(float seconds, const engine::Vector3& boss,
                                                           const engine::Vector3& strike, const CrownFinaleTuning& tuning) {
@@ -33,9 +45,9 @@ inline CrownBarrageCameraPose EvaluateCrownBarrageCamera(float seconds, const en
     };
     const CrownBarrageCameraPose shots[] = {
         // プレイヤー越しに失敗の舞台と頭上の術式を映す。
-        {offset(strike, 11.0f, 7.0f, 4.4f), boss + engine::Vector3{0.0f, 9.2f, 0.0f}, 0.83f},
-        // 低い位置から術式の裏面と大槍のシルエットを見上げる。
-        {offset(boss, 38.0f, 25.0f, 4.0f), boss + engine::Vector3{0.0f, 8.5f, 0.0f}, 0.83f},
+        {offset(boss, 44.0f, 24.0f, 10.0f), boss + engine::Vector3{0.0f, tuning.sealChantSkyHeight, 0.0f}, 0.94f},
+        // 紋章が完成してから視線を下げ、続く大槍のカットへつなぐ。
+        {offset(boss, 38.0f, 25.0f, 6.0f), boss + engine::Vector3{0.0f, 16.0f, 0.0f}, 0.88f},
         // 大槍を画面中央に保ちながら落下へつなぐ。
         {offset(strike, 10.0f, 7.0f, 3.0f), strike + engine::Vector3{0.0f, 7.4f, 0.0f}, 0.62f},
         // 着弾の瞬間は低い位置で止め、槍・閃光・地表から跳ねる雷撃を重ねて見せる。
@@ -45,10 +57,12 @@ inline CrownBarrageCameraPose EvaluateCrownBarrageCamera(float seconds, const en
     };
     // 演出開始からの経過秒でカットを選び、最初のカットには補間を掛けません。
     const float boundaries[] = {0.0f, 0.56f, 1.18f, 2.62f, 3.65f};
-    int shot = 0;
-    for (int index = 1; index < 5; ++index)
+    std::int32_t shot = 0;
+    for (std::int32_t index = 1; index < 5; ++index)
+        // 経過秒が切り替え時刻に達した境界を順に確認し、最後に到達したカットを選ぶ。
         if (seconds >= boundaries[index])
             shot = index;
+    // まだ先頭カットの場合は補間元がないので、定義済みの初期構図をそのまま返す。
     if (shot == 0)
         return shots[0];
     // 切替直後の0.16秒だけ、視点・注視点・画角を前カットから一緒に補間します。

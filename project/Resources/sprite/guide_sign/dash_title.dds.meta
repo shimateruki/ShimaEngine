@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "4677cc35c8f5e78af30a6a9d261a6e73",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/sprite/guide_sign/dash_title.dds",
+  "version": 1
+}

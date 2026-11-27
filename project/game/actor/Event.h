@@ -11,7 +11,7 @@ class Bullet;
 struct PlayerHitEvent {
     engine::Object3D* me = nullptr;
     engine::Object3D* hitObject = nullptr; // ぶつかった相手（罠、アイテムなど）
-    engine::Vector3 normal = engine::Vector3::ZERO;
+    engine::Vector3 normal = engine::Vector3::kZero;
 };
 
 // BulletHitEventは、弾がObject3dへ当たったときの通知データです。
@@ -24,27 +24,28 @@ struct BulletHitEvent {
 // ダメージイベント (Enemyへの攻撃時などに発行する)
 // =========================================================
 enum class StatusEffectType {
-    None = 0,
-    Burning,
+    kNone = 0,
+    kBurning,
 };
 
 // 攻撃の性質を表し、被弾演出やリアクションの選択に使います。
 enum class DamageType {
-    Physical = 0,
-    Fire,
-    Electric,
-    Explosion,
+    kPhysical = 0,
+    kFire,
+    kElectric,
+    kExplosion,
 };
 
 // 攻撃から対象へ付与する状態異常の実行時データです。
 struct StatusEffectApplication {
-    StatusEffectType type = StatusEffectType::None;
+    StatusEffectType type = StatusEffectType::kNone;
     float duration = 0.0f;
     float tickInterval = 0.5f; // 継続ダメージを発生させる間隔（秒）。
     float tickDamage = 0.0f;
     std::string vfxPreset;
 
-    bool IsValid() const { return type != StatusEffectType::None && duration > 0.0f; }
+    // 効果の種類があり、継続時間が正のときだけ適用対象として扱う。
+    bool IsValid() const { return type != StatusEffectType::kNone && duration > 0.0f; }
 };
 
 // DamageEventは、ダメージ対象、攻撃者、ダメージ量、ノックバックをまとめます。
@@ -52,13 +53,14 @@ struct DamageEvent {
     engine::Object3D* target = nullptr;            // ダメージを受ける人
     engine::Object3D* attacker = nullptr;          // 攻撃した人
     float damageAmount = 0.0f;             // ダメージ量
-    engine::Vector3 knockbackVelocity = engine::Vector3::ZERO; // 追加：吹き飛ばしベクトル
+    // 被弾時に適用するワールド空間のノックバック速度。ゼロなら吹き飛ばさない。
+    engine::Vector3 knockbackVelocity = engine::Vector3::kZero;
     float invincibilityDuration = 1.0f;    // 被弾後に操作を守る無敵時間
     bool bypassPlayerInvincibility = false; // 強制攻撃だけ回避・被弾無敵を貫通します。演出中は引き続き無効です。
 
     // プレイヤー専用の即死攻撃。攻撃力倍率によらず残りHPを全て減らします。
     bool lethalPlayerDamage = false;
-    DamageType damageType = DamageType::Physical;
+    DamageType damageType = DamageType::kPhysical;
     StatusEffectApplication statusEffect;
 };
 
@@ -74,12 +76,12 @@ struct PlayerJumpEvent {
 
 // EventTypeは、ゲーム内イベント通知の種類を表します。
 enum class EventType {
-    None = 0,     // なし
-    Damage,       // ダメージ
-    Warp,         // ワープ
-    MovieBridge, // 映像演出
-    Checkpoint,   // 中間地点
-    Goal,         // ゴール
-    StageSelect,  // ステージセレクト
-    StarCoin,     // スターコイン
+    kNone = 0,     // なし
+    kDamage,       // ダメージ
+    kWarp,         // ワープ
+    kMovieBridge, // 映像演出
+    kCheckpoint,   // 中間地点
+    kGoal,         // ゴール
+    kStageSelect,  // ステージセレクト
+    kStarCoin,     // スターコイン
 };

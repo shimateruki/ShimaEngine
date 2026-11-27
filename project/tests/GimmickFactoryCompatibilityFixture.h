@@ -33,7 +33,7 @@
 #include <typeinfo>
 
 
-namespace LegacyGimmickCreation {
+namespace legacyGimmickCreation {
 
 
 template <typename T>
@@ -45,6 +45,7 @@ std::unique_ptr<BaseGimmick> CreateSimpleGimmick(engine::Object3DCommon* common,
 
 using Creator = std::unique_ptr<BaseGimmick> (*)(engine::Object3DCommon*, const char*);
 
+/// <summary>旧ファクトリとの互換性検証で使う、型名・既定モデル・生成関数の対応表の一行。</summary>
 struct SimpleGimmickEntry {
     const char* type;
     const char* modelPath;
@@ -130,6 +131,6 @@ inline std::unique_ptr<BaseGimmick> Create(const std::string& type, engine::Obje
     object->SetGimmickType(type);
     return object;
 }
-} // namespace LegacyGimmickCreation
+} // namespace legacyGimmickCreation
 
 #endif

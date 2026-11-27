@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "CopyAbilitySupport.h"
 #include "CameraManager.h"
 #include "Camera.h"
@@ -5,7 +6,7 @@
 #include <vector>
 
 namespace {
-using namespace CopyAbilityDetail;
+using namespace copyAbilityDetail;
 
 // 炎コピーの入力と継続攻撃を管理し、専用 EffectScope で所有エフェクトをまとめて片付ける。
 // PlayerCopyAbilityControllerが所有する炎ブレス・火球の実装。入力はProcessInput、進行はUpdate、一時表示の回収はCancelが担当する。
@@ -25,8 +26,10 @@ class FireSlimeCopyAbility final : public ICopyAbilitySession {
 
     const char* GetStateLabel() const override {
         // 優先度の高い継続行動を表示し、それ以外は単発攻撃の状態を使う。
+        // 突進が継続中なら、短い単発攻撃より優先して突進を表示する。
         if (dashActive_)
             return "炎ダッシュ";
+        // 突進しておらずブレスの姿勢を再生しているなら、ブレスを表示する。
         if (breathMotionActive_)
             return "炎ブレス";
         return fireballSequence_.GetStateLabel();
@@ -40,11 +43,14 @@ class FireSlimeCopyAbility final : public ICopyAbilitySession {
     void ProcessInput(Player& player, const PlayerCopyAbilityInput& input) override {
         // ブレスの押し続け状態を保存し、突進中は火球の開始を受け付けない。
         primaryHeld_ = input.primaryHeld;
-        if (player.IsDead() || player.IsCinematicLocked() || actionMotionTimer_ > 0.0f || fireballSequence_.IsRunning())
+        if (player.IsDead() || player.IsCinematicLocked() || recovery_.Active() ||
+            actionMotionTimer_ > 0.0f || fireballSequence_.IsRunning())
             return; // 火球の予備動作・後隙を突進や次の火球で取り消さない。
 
+        // 副入力が押されたフレームで、突進しておらず再使用待ちも無ければ炎ダッシュを開始する。
         if (input.secondaryTriggered && !dashActive_ && dashCooldown_ <= 0.0f) {
             BeginDash(player);
+        // 炎ダッシュを開始しない場合に限り、必殺入力と火球の再使用条件が揃えば単発攻撃を試す。
         } else if (input.specialTriggered && fireballCooldown_ <= 0.0f && !dashActive_) {
             Fireball(player);
         }
@@ -52,13 +58,17 @@ class FireSlimeCopyAbility final : public ICopyAbilitySession {
 
     void Update(Player& player, float deltaTime) override {
         // 単発攻撃、突進、継続ブレスの順に更新し、同時実行を避ける。
+        // 死亡または演出拘束中は、火球の時計とブレスの入力を止めて攻撃の更新を打ち切る。
         if (player.IsDead() || player.IsCinematicLocked()) {
             fireballSequence_.Cancel();
+            recovery_.Clear();
             actionMotionTimer_ = 0.0f;
             primaryHeld_ = false;
             StopBreathMotion(player);
             return;
         }
+        recovery_.Update(deltaTime);
+
         // 入力を止めている間も発射シーケンスの時計は進め、指定時刻の弾を放つ。
         if (fireballSequence_.IsRunning())
             fireballSequence_.Update(deltaTime, MakeSequenceContext(player));
@@ -72,12 +82,14 @@ class FireSlimeCopyAbility final : public ICopyAbilitySession {
         dashGroundWakeTimer_ -= deltaTime;
         actionMotionTimer_ = std::max(0.0f, actionMotionTimer_ - deltaTime);
 
+        // 突進中は専用移動と攻撃判定を優先し、この更新ではブレスへ入らない。
         if (dashActive_) {
             UpdateDash(player, deltaTime);
             return;
         }
 
-        if (actionMotionTimer_ > 0.0f) {
+        // 単発攻撃の姿勢時間が残っている間は、新しくブレスを開始しない。
+        if (actionMotionTimer_ > 0.0f || recovery_.Active()) {
             return;
         }
 
@@ -87,13 +99,14 @@ class FireSlimeCopyAbility final : public ICopyAbilitySession {
             return;
         }
 
+        // ブレスの姿勢が未再生なら開始を試す。成功するまで再生済みにはしない。
         if (!breathMotionActive_) {
             breathMotionActive_ = player.PlaySlimeAbilityMotion("player_ability_fire_breath", true, 1.0f, 0.05f, 0.08f);
         }
 
         const engine::Vector3 direction = NormalizePlanar(player.GetLockOnAttackDirection());
         const engine::Vector3 origin = player.GetWorldPosition() + engine::Vector3{0.0f, 0.78f, 0.0f};
-        player.ForceSlimeAnimationModeForNextUpdate(PlayerSlimeAnimator::Mode::Idle, direction);
+        player.ForceSlimeAnimationModeForNextUpdate(PlayerSlimeAnimator::Mode::kIdle, direction);
         UpdateBreathVisuals(player, origin, direction, deltaTime);
 
         // 粒子は短い間隔で追加し、ダメージは別の長い間隔で通知する。
@@ -103,10 +116,27 @@ class FireSlimeCopyAbility final : public ICopyAbilitySession {
             breathEffectTimer_ = 0.065f;
         }
 
+        // ダメージの間隔が尽きた場合だけ敵を照会し、描画より長い0.22秒を次の周期にする。
         if (breathDamageTimer_ <= 0.0f) {
             DamageBreath(player, origin, direction);
             breathDamageTimer_ = 0.22f;
         }
+    }
+
+    void NotifyDamageStarted(Player& player) override {
+        // 被弾側が操作を止める前に攻撃を中断する。頭部表示はコピーを解除するまで保持する。
+        fireballSequence_.Cancel();
+        StopBreathMotion(player);
+        StopDashEffects();
+        if (dashActive_) {
+            player.SetIsControlActive(true);
+            player.SetSlimeAbilityPose(PlayerSlimeAnimator::AbilityPose::kNone);
+        }
+        dashActive_ = primaryHeld_ = false;
+        actionMotionTimer_ = 0.0f;
+        recovery_.Clear();
+        hitTargets_.clear();
+        player.ClearSlimeAbilityMotion();
     }
 
     void Cancel(Player& player) override {
@@ -114,6 +144,7 @@ class FireSlimeCopyAbility final : public ICopyAbilitySession {
         fireballSequence_.Cancel();
         breathVisible_ = false;
         breathVisuals_.clear();
+        recovery_.Clear();
         headVisual_.reset();
         StopDashEffects();
         player.ClearSlimeAbilityMotion();
@@ -127,16 +158,27 @@ class FireSlimeCopyAbility final : public ICopyAbilitySession {
         dashGroundWakeTimer_ = 0.0f;
         actionMotionTimer_ = 0.0f;
         hitTargets_.clear();
-        player.SetSlimeAbilityPose(PlayerSlimeAnimator::AbilityPose::None);
+        player.SetSlimeAbilityPose(PlayerSlimeAnimator::AbilityPose::kNone);
         player.SetIsControlActive(true);
     }
 
     PlayerAttackMovement GetAttackMovement() const override {
-        // 短い制限区間を終えたら歩行速度を戻し、残りの後隙は次の技の受付だけを止める。
-        if (!fireballSequence_.IsRunning())
-            return {};
-        const auto& movement = fireballSequence_.GetDefinition().playerMovement;
-        return fireballSequence_.GetElapsed() < movement.duration ? movement : PlayerAttackMovement{};
+        // 火球は専用タイムラインの開始から指定秒数だけブレーキを掛ける。
+        if (fireballSequence_.IsRunning()) {
+            auto movement = fireballSequence_.GetDefinition().playerMovement;
+            if (fireballSequence_.GetElapsed() >= movement.duration) return {};
+            movement.blocksMovementActions = movement.enabled;
+            return movement;
+        }
+        if (recovery_.Active()) return recovery_.Movement();
+
+        // 吐いている間は水平入力を弱め、照準には通常の入力を残す。
+        if (!dashActive_ && primaryHeld_ && actionMotionTimer_ <= 0.0f) {
+            auto movement = CopyAttackMovement(GetProfile(), "player_fire_breath");
+            movement.blocksMovementActions = movement.enabled;
+            return movement;
+        }
+        return {};
     }
 
     bool CanBreakImpactGate() const override {
@@ -149,19 +191,23 @@ class FireSlimeCopyAbility final : public ICopyAbilitySession {
         return headVisual_ != nullptr || (breathVisible_ && !breathVisuals_.empty());
     }
 
-    void DrawOwnedVisuals(Player& player, uint32_t depth, uint32_t grab, engine::Camera* camera, int bufferIndex) override {
+    void DrawOwnedVisuals(Player& player, uint32_t depth, uint32_t grab, engine::Camera* camera, std::int32_t bufferIndex) override {
         // 死亡・演出ロック中は能力固有の見た目を描かず、通常カメラを補助的に使う。
         if (player.IsDead() || player.IsCinematicLocked())
             return;
+        // 描画カメラが渡されていない場合は、アクティブカメラで代用する。
         if (!camera)
             camera = CameraManager::GetInstance()->GetActiveCamera();
+        // 代用できるビューも無ければ、描画用定数を確定できないため戻る。
         if (!camera)
             return;
+        // 頭部の炎が有効なら、直前のプレイヤー姿勢を反映してから描く。
         if (headVisual_ && headVisual_->GetIsVisible()) {
             SyncHeadVisualTransform(player);
             headVisual_->DrawSpecialMaterialForCamera(camera, depth, grab, bufferIndex);
         }
 
+        // このフレームでブレスが有効でなければ、保持中の炎を描き直さない。
         if (!breathVisible_)
             return;
         for (auto& flame : breathVisuals_) {
@@ -173,27 +219,32 @@ class FireSlimeCopyAbility final : public ICopyAbilitySession {
   private:
     void UpdateHeadVisual(Player& player, float frameDeltaTime) {
         // 頭部の炎は接触判定を持たない表示専用Objectとして遅延生成する。
+        // 死亡または演出拘束中は、頭の炎を生成・更新しない。
         if (player.IsDead() || player.IsCinematicLocked()) {
+            // 以前に表示用 Object を生成している場合は非表示にする。
             if (headVisual_)
                 headVisual_->SetIsVisible(false);
             return;
         }
 
+        // まだ表示用 Object が無い場合だけ生成する。一度作ったら位置と色の更新に使い回す。
         if (!headVisual_) {
             auto* scene = SceneManager::GetInstance()->GetCurrentScene();
+            // シーンや描画の共通部が無ければ、生成できるフレームまで見送る。
             if (!scene || !scene->GetObject3DCommon())
                 return;
             headVisual_ = std::make_unique<engine::Object3D>();
             headVisual_->Initialize(scene->GetObject3DCommon());
             headVisual_->SetModel("Primitives/sphere");
-            headVisual_->SetColliderType(ColliderType::None);
+            headVisual_->SetColliderType(engine::ColliderType::kNone);
             headVisual_->SetCollisionAttribute(0);
             headVisual_->SetCollisionMask(0);
             headVisual_->SetMaterialType(11);
-            headVisual_->SetBlendMode(BlendMode::Normal);
+            headVisual_->SetBlendMode(BlendMode::kNormal);
             headVisual_->SetEnableLighting(false);
             headVisual_->SetEmissive(1.7f);
 
+            // 特殊材質の定数があれば、頭部用の炎の揺れと強さを設定する。
             if (auto* p = headVisual_->GetMeshRenderer()->GetWaterParamData()) {
                 p->effectType = 2.0f;
                 p->waveSpeed = 1.75f;
@@ -226,27 +277,32 @@ class FireSlimeCopyAbility final : public ICopyAbilitySession {
         headVisual_->UpdateWorldMatrix(true);
     }
 
+    // 照準方向に沿って七つの表示用の炎を配置し、位置ごとに色・大きさ・材質を変える。
     void UpdateBreathVisuals(Player& player, const engine::Vector3& origin, const engine::Vector3& direction, float frameDeltaTime) {
+        // 死亡・演出拘束中は、ブレスの見た目を有効にしない。
         if (player.IsDead() || player.IsCinematicLocked())
             return;
+        // 表示用の炎が未生成の場合だけ、七つの Object と固有の材質を確保する。
         if (breathVisuals_.empty()) {
             auto* scene = SceneManager::GetInstance()->GetCurrentScene();
+            // シーンか描画共通部を取得できなければ、表示の生成を見送る。
             if (!scene || !scene->GetObject3DCommon())
                 return;
 
             // 立体ブレスは能力側で所有し、能力解除時にまとめて破棄します。
-            for (int i = 0; i < 7; ++i) {
+            for (std::int32_t i = 0; i < 7; ++i) {
                 auto flame = std::make_unique<engine::Object3D>();
                 flame->Initialize(scene->GetObject3DCommon());
                 flame->SetModel("Primitives/sphere");
-                flame->SetColliderType(ColliderType::None);
+                flame->SetColliderType(engine::ColliderType::kNone);
                 flame->SetCollisionAttribute(0);
                 flame->SetCollisionMask(0);
                 flame->SetMaterialType(11);
-                flame->SetBlendMode(BlendMode::Normal);
+                flame->SetBlendMode(BlendMode::kNormal);
                 flame->SetEnableLighting(false);
                 flame->SetEmissive(1.8f);
 
+                // 特殊材質の定数がある炎は、各個体の UV をずらして同じ模様に見えないようにする。
                 if (auto* p = flame->GetMeshRenderer()->GetWaterParamData()) {
                     p->effectType = 5.0f;
                     p->waveSpeed = 2.45f;
@@ -285,6 +341,7 @@ class FireSlimeCopyAbility final : public ICopyAbilitySession {
             flame->SetScale({width, (std::max)(radius * (0.48f + step * 0.22f + pulse), width * 0.68f), width * 1.12f});
             flame->SetColor({1.0f, 0.30f + step * 0.06f, 0.045f, 0.82f - step * 0.12f});
 
+            // 材質定数が使える場合に、射線上の位置に応じて流れと横幅を調整する。
             if (auto* p = flame->GetMeshRenderer()->GetWaterParamData()) {
                 p->flowSpeedY = 0.82f + step * 0.42f;
                 p->effectScaleX = 1.08f + step * 0.56f;
@@ -301,17 +358,22 @@ class FireSlimeCopyAbility final : public ICopyAbilitySession {
         const EnemyAttackDefinition* selected = nullptr;
 
         for (const auto& candidate : GetProfile().attacks) {
+            // 有効なシーケンスで、プレイヤーの必殺入力に割り当てられた攻撃を候補にする。
             if (!candidate.sequence.enabled || candidate.sequence.binding != "player_special")
                 continue;
+            // プレビューで攻撃IDを指定している場合は、他の技を候補から外す。
             if (!previewAttackId_.empty() && candidate.id != previewAttackId_)
                 continue;
+            // 最初の候補か、現在より優先度が高い候補で採用技を更新する。同値では先の定義を保つ。
             if (!selected || candidate.sequence.priority > selected->sequence.priority)
                 selected = &candidate;
         }
 
+        // 入力に対応する攻撃がなければ、ブレスを中止せず戻る。
         if (!selected)
             return;
         StopBreathMotion(player);
+        // 素材や時刻の検証でシーケンスを開始できなければ、火球の姿勢時間と再使用待ちを設定しない。
         if (!fireballSequence_.Start(*selected, MakeSequenceContext(player)))
             return;
         // 開始できた技について、専用の本体トラックがあるか調べる。
@@ -365,7 +427,7 @@ class FireSlimeCopyAbility final : public ICopyAbilitySession {
         player.SetMoveYaw(std::atan2(dashDirection_.x, dashDirection_.z));
         player.SetIsControlActive(false);
         player.StartEvasionInvincibility(0.50f);
-        player.SetSlimeAbilityPose(PlayerSlimeAnimator::AbilityPose::BlazeDash);
+        player.SetSlimeAbilityPose(PlayerSlimeAnimator::AbilityPose::kBlazeDash);
         player.TriggerSlimeImpulse({1.08f, 1.16f, 3.62f}, 0.17f);
     }
 
@@ -377,14 +439,16 @@ class FireSlimeCopyAbility final : public ICopyAbilitySession {
         engine::Vector3 velocity = player.GetVelocity();
         velocity.x = dashDirection_.x * speed;
         velocity.z = dashDirection_.z * speed;
+        // 接地中に下向きの速度が残っている場合は、床へ押し込む鉛直速度を0にする。
         if (player.IsGrounded() && velocity.y < 0.0f)
             velocity.y = 0.0f;
         player.SetVelocity(velocity);
         player.SetIsControlActive(false);
         player.SetMoveYaw(std::atan2(dashDirection_.x, dashDirection_.z));
-        player.ForceSlimeAnimationModeForNextUpdate(PlayerSlimeAnimator::Mode::Dash, dashDirection_);
-        player.SetSlimeAbilityPose(PlayerSlimeAnimator::AbilityPose::BlazeDash);
+        player.ForceSlimeAnimationModeForNextUpdate(PlayerSlimeAnimator::Mode::kDash, dashDirection_);
+        player.SetSlimeAbilityPose(PlayerSlimeAnimator::AbilityPose::kBlazeDash);
         DamageDash(player);
+        if (!dashActive_) return; // 同期の被弾通知で中断した場合、反動を開始し直さない。
 
         // 移動の後方に火の軌跡を残し、放出する粒子も進行方向と逆へ向ける。
         if (dashEffectTimer_ <= 0.0f) {
@@ -409,7 +473,8 @@ class FireSlimeCopyAbility final : public ICopyAbilitySession {
         if (dashTimer_ <= 0.0f) {
             StopDashEffects();
             dashActive_ = false;
-            player.SetSlimeAbilityPose(PlayerSlimeAnimator::AbilityPose::None);
+            recovery_.Start(CopyAttackMovement(GetProfile(), "player_fire_dash_recovery"));
+            player.SetSlimeAbilityPose(PlayerSlimeAnimator::AbilityPose::kNone);
             player.StopSlimeAbilityMotion(0.055f);
             player.SetIsControlActive(true);
             velocity.x *= 0.30f;
@@ -431,6 +496,7 @@ class FireSlimeCopyAbility final : public ICopyAbilitySession {
         // 押し続け解除時は見た目とループモーションを同時に止める。
         breathVisible_ = false;
 
+        // ループ姿勢の開始に成功していない場合は、別の能力モーションを誤って止めない。
         if (!breathMotionActive_) {
             return;
         }
@@ -441,18 +507,19 @@ class FireSlimeCopyAbility final : public ICopyAbilitySession {
 
     void DamageDash(Player& player) {
         // 重なるColliderを持つ敵でも、突進一回につき根Objectへ一度だけ与える。
-        PhysicsQueryFilter filter;
-        filter.mask = CollisionCategories::Get("enemy");
+        engine::PhysicsQueryFilter filter;
+        filter.mask = engine::collisionCategories::Get("enemy");
         filter.ignoredObject = &player;
         const engine::Vector3 center = player.GetWorldPosition() + engine::Vector3{0.0f, 0.72f, 0.0f};
 
-        for (const PhysicsOverlapHit& hit : CollisionManager::GetInstance()->OverlapSphere(center, 1.55f, filter)) {
+        for (const engine::PhysicsOverlapHit& hit : engine::CollisionManager::GetInstance()->OverlapSphere(center, 1.55f, filter)) {
             engine::Object3D* target = FindEnemyRoot(hit.object);
+            // 敵のルートを得られないか、この突進ですでに命中したルートなら省く。
             if (!target || !hitTargets_.insert(target).second)
                 continue;
             EnemyAttackDefinition fallback;
             const EnemyAttackDefinition& attack = FindAttackOrFallback(GetProfile(), "flame_breath", fallback);
-            DamageEnemy(player, target, 12.0f, DamageType::Fire,
+            DamageEnemy(player, target, 12.0f, DamageType::kFire,
                         {dashDirection_.x * 11.0f, 5.5f, dashDirection_.z * 11.0f}, MakeBurnStatus(attack));
             VfxSequencer::PlayOneShot("player/copy/fire/player_fire_dash_hit_cue",
                                       target->GetWorldPosition() + engine::Vector3{0.0f, 0.58f, 0.0f});
@@ -466,18 +533,19 @@ class FireSlimeCopyAbility final : public ICopyAbilitySession {
         fallback.radius = 1.4f;
         fallback.damage = 0.5f;
         const EnemyAttackDefinition& attack = FindAttackOrFallback(GetProfile(), "flame_breath", fallback);
-        PhysicsQueryFilter filter;
-        filter.mask = CollisionCategories::Get("enemy");
+        engine::PhysicsQueryFilter filter;
+        filter.mask = engine::collisionCategories::Get("enemy");
         filter.ignoredObject = &player;
         std::unordered_set<engine::Object3D*> damaged;
         const engine::Vector3 end = origin + direction * std::max(attack.maxRange, 4.0f);
 
-        for (const PhysicsOverlapHit& hit :
-             CollisionManager::GetInstance()->OverlapCapsule(origin, end, std::max(attack.radius, 1.0f), filter)) {
+        for (const engine::PhysicsOverlapHit& hit :
+             engine::CollisionManager::GetInstance()->OverlapCapsule(origin, end, std::max(attack.radius, 1.0f), filter)) {
             engine::Object3D* target = FindEnemyRoot(hit.object);
+            // このダメージ周期内ですでに選んだ敵と、ルートを解決できない接触を除く。
             if (!target || !damaged.insert(target).second)
                 continue;
-            DamageEnemy(player, target, std::max(attack.damage, 2.5f), DamageType::Fire,
+            DamageEnemy(player, target, std::max(attack.damage, 2.5f), DamageType::kFire,
                         {direction.x * 5.0f, 2.5f, direction.z * 5.0f}, MakeBurnStatus(attack));
         }
     }
@@ -499,6 +567,7 @@ class FireSlimeCopyAbility final : public ICopyAbilitySession {
     float breathDamageTimer_ = 0.0f;
     float breathEffectTimer_ = 0.0f;
     float dashGroundWakeTimer_ = 0.0f;
+    CopyAttackRecovery recovery_;
     float actionMotionTimer_ = 0.0f;
     MeshEffectManager::EffectScopeId effectScope_ = MeshEffectManager::kInvalidEffectScope;
     bool dashActive_ = false;
@@ -507,9 +576,9 @@ class FireSlimeCopyAbility final : public ICopyAbilitySession {
 };
 } // namespace
 
-namespace CopyAbilityDetail {
+namespace copyAbilityDetail {
 std::unique_ptr<ICopyAbilitySession> CreateFireSlimeCopyAbility(const EnemyAttackProfile& profile) {
     // 獲得ごとに独立したクールダウンと演出スコープを持つセッションを返す。
     return std::make_unique<FireSlimeCopyAbility>(profile);
 }
-} // namespace CopyAbilityDetail
+} // namespace copyAbilityDetail

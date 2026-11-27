@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "engine/editor/assets/JsonAssetBrowser.h"
 #include "IEditable.h"
 #include "TrailEmitter.h"
@@ -58,12 +59,12 @@ private:
     float previewTime_ = 0.0f;
     float previewDuration_ = 2.0f; // ダミー軌跡の再生秒数。
     float previewRange_ = 5.0f;
-    engine::Vector3 dummyPos_ = engine::Vector3::ZERO;
-    engine::Vector3 lastDummyPos_ = engine::Vector3::ZERO;
+    engine::Vector3 dummyPos_ = engine::Vector3::kZero;
+    engine::Vector3 lastDummyPos_ = engine::Vector3::kZero;
     bool dummyFirstFrame_ = true;
-    int lastStagePlayRequestSerial_ = 0; // 前回処理したプレビュー再生要求の番号。
-    int lastStageStopRequestSerial_ = 0; // 前回処理したプレビュー停止要求の番号。
-    int lastStageSeekRequestSerial_ = 0; // 前回処理したプレビューシーク要求の番号。
+    std::int32_t lastStagePlayRequestSerial_ = 0; // 前回処理したプレビュー再生要求の番号。
+    std::int32_t lastStageStopRequestSerial_ = 0; // 前回処理したプレビュー停止要求の番号。
+    std::int32_t lastStageSeekRequestSerial_ = 0; // 前回処理したプレビューシーク要求の番号。
 
     bool wasPlaying_ = false;
 

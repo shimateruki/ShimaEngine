@@ -4,7 +4,7 @@
 #include <memory>
 
 #ifdef USE_IMGUI
-namespace EnemyProjectileRuntimeProbe { struct Access; }
+namespace enemyProjectileRuntimeProbe { struct Access; }
 #endif
 
 // 距離を保ちながら爆弾を生成して投げる、ボム使いの敵。
@@ -40,10 +40,10 @@ class EnemyBomber : public BaseEnemy {
 
   private:
 #ifdef USE_IMGUI
-    friend struct EnemyProjectileRuntimeProbe::Access;
+    friend struct enemyProjectileRuntimeProbe::Access;
 #endif
     // 溜め、跳躍投擲、着地までの攻撃段階です。
-    enum class ThrowState { Idle, Windup, LeapThrow, Landing };
+    enum class ThrowState { kIdle, kWindup, kLeapThrow, kLanding };
 
     // 移動制限と敵の射程を先に評価し、投擲状態を進めます。
     bool UpdateBlockedState(float deltaTime);
@@ -119,7 +119,7 @@ class EnemyBomber : public BaseEnemy {
 
     float idleTimer_ = 0.0f; // 待機中の見た目に使う経過秒数。
 
-    ThrowState throwState_ = ThrowState::Idle;
+    ThrowState throwState_ = ThrowState::kIdle;
     float throwRecoilTimer_ = 0.0f;
     float throwRecoverPoseTimer_ = 0.0f;
 
@@ -134,5 +134,5 @@ class EnemyBomber : public BaseEnemy {
     engine::Object3DCommon* common_ = nullptr;
     engine::Vector3 baseScale_ = {2.0f, 2.0f, 2.0f};
     bool hasBaseScale_ = false;
-    std::unique_ptr<engine::Object3D> heldBombVisual_ = nullptr;
+    std::unique_ptr<engine::Object3D> heldBombVisual_;
 };

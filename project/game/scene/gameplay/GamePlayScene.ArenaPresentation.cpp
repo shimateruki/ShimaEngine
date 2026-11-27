@@ -14,7 +14,7 @@
 #include "engine/editor/graphics/camera/CameraEditor.h"
 
 #include "game/scene/gameplay/GamePlayScene.PresentationMath.h"
-using namespace GamePlayPresentationMath;
+using namespace gamePlayPresentationMath;
 
 namespace {
 constexpr float kArenaBossIntroCinemaBarHeight = 0.115f;
@@ -36,35 +36,42 @@ bool BeginArenaFixedCamera(Player& player, bool preserveCopyAbility, bool& hadCo
     return true;
 }
 
+// 現在の黒帯の高さを退避し、終了時に戻すべき設定があることを記録する。
 void CaptureArenaCinemaBar(bool& active, float& baseHeight) {
+    // 後処理定数を取得できた場合にだけ、保存値と上書きフラグを更新する。
     if (PostEffect::Params* params = PostEffect::GetInstance()->GetParams()) {
         baseHeight = params->cinemaBarHeight;
         active = true;
     }
 }
 
+// 演出内の秒数から黒帯の高さを更新する。高さは画面に対する比率。
 void UpdateArenaCinemaBar(float time, float openEnd, float closeStart, float endTime, float targetHeight,
                           float baseHeight) {
     PostEffect::Params* params = PostEffect::GetInstance()->GetParams();
+    // 後処理定数が利用できなければ、値の更新は行わない。
     if (!params) {
         return;
     }
 
     // 開きと閉じを別区間で評価し、演出の合間は既存値以上の高さで帯を維持します。
-    const float openRate = AnimationInterpolation::ApplyEasing(
-        AnimationInterpolation::SegmentRate(time, 0.0f, openEnd), AnimationInterpolation::EasingType::SmootherStep);
-    const float closeRate = AnimationInterpolation::ApplyEasing(
-        AnimationInterpolation::SegmentRate(time, closeStart, endTime),
-        AnimationInterpolation::EasingType::SmootherStep);
+    const float openRate = animationInterpolation::ApplyEasing(
+        animationInterpolation::SegmentRate(time, 0.0f, openEnd), animationInterpolation::EasingType::kSmootherStep);
+    const float closeRate = animationInterpolation::ApplyEasing(
+        animationInterpolation::SegmentRate(time, closeStart, endTime),
+        animationInterpolation::EasingType::kSmootherStep);
     // 開き率と閉じ率の残りを掛け、画面比率で保持した元の高さと演出用の高さを補間する。
     params->cinemaBarHeight = baseHeight +
                               ((std::max)(baseHeight, targetHeight) - baseHeight) * openRate * (1.0f - closeRate);
 }
 
+// 演出前の黒帯の高さを戻し、保存した状態を破棄する。
 void RestoreArenaCinemaBar(bool& active, float& baseHeight) {
+    // 開始時に高さを退避していなければ、現在の帯へ手を加えない。
     if (!active) {
         return;
     }
+    // 定数がまだ使える場合だけ高さを戻す。見つからなくても上書きフラグは解除する。
     if (PostEffect::Params* params = PostEffect::GetInstance()->GetParams()) {
         params->cinemaBarHeight = baseHeight;
     }
@@ -74,9 +81,10 @@ void RestoreArenaCinemaBar(bool& active, float& baseHeight) {
 
 // プレイヤーの操作を戻し、共通カメラ管理へ演出の終了を通知する。
 void EndArenaFixedCamera(Player* player, bool hadControl) {
+    // プレイヤーが残っており演出拘束中の場合だけ、操作権と立ち姿勢を復元する。
     if (player && player->IsCinematicLocked()) {
         player->EndCinematicLock(hadControl);
-        player->SetSlimeAnimationMode(PlayerSlimeAnimator::Mode::Idle);
+        player->SetSlimeAnimationMode(PlayerSlimeAnimator::Mode::kIdle);
     }
 
     CameraManager::GetInstance()->EndMainCameraPresentation();
@@ -87,21 +95,24 @@ void EndArenaFixedCamera(Player* player, bool hadControl) {
 // ボス登場・撃破報酬演出。ロック開始と復帰処理を対で管理し、進行フラグの更新順を維持する。
 bool GamePlayScene::StartArenaBossIntro(engine::Object3D* bossObject, engine::Object3D* gateObject,
                                         const std::string& cinematicPath) {
+    // すでに演出中、ゴール後、または参加する三つの Object が揃わなければ開始しない。
     if (arenaBossIntroActive_ || isGoal_ || !player_ || !bossObject || !gateObject) {
         return false;
     }
 
     engine::Camera* camera = CameraManager::GetInstance()->GetMainCamera();
+    // 固定視点を適用するメインカメラが存在しなければ、演出を準備しない。
     if (!camera) {
         return false;
     }
 
     // 編集データと参照先を確かめてから操作をロックする。欠損時は通常の戦闘進行を続ける。
-    // 従来のデータは保存し、標準登場だけ新しいTimelineへ切り替えます。
-    const auto resolvedPath = CinematicAssetPath::Resolve("Resources/json/scenario", cinematicPath);
+    // 標準の旧入口パスとポータル入口パスは、どちらもポータル登場用のシーケンスを使う。
+    const auto resolvedPath = cinematicAssetPath::Resolve("Resources/json/scenario", cinematicPath);
     const bool portalIntro = resolvedPath == "Resources/json/scenario/stage3/stage3_boss_intro.json" ||
                              resolvedPath == "Resources/json/scenario/stage3/stage3_boss_portal_intro.json";
     const std::string path = portalIntro ? "Resources/json/scenario/stage3/stage3_boss_portal_intro.json" : cinematicPath;
+    // パスが空か読み込めない場合は、入力とカメラを変更せず通常の進行へ戻す。
     if (path.empty() || !arenaBossIntroSequence_.Load(path)) {
         DebugConsole::GetInstance()->AddLog("Stage 3 boss intro timeline missing; cinematic skipped.");
         return false;
@@ -110,6 +121,7 @@ bool GamePlayScene::StartArenaBossIntro(engine::Object3D* bossObject, engine::Ob
     arenaBossIntroPlayer_.Initialize(SceneManager::GetInstance());
     arenaBossIntroPlayer_.SetSequence(&arenaBossIntroSequence_);
     const auto bindingIssues = arenaBossIntroPlayer_.ValidateBindings();
+    // 再生対象の参照にエラーがあれば、最初の理由を報告して開始しない。
     if (!bindingIssues.empty()) {
         DebugConsole::GetInstance()->AddLog(bindingIssues.front());
         return false;
@@ -118,6 +130,7 @@ bool GamePlayScene::StartArenaBossIntro(engine::Object3D* bossObject, engine::Ob
     // 最後の有効ショット以降を戦闘カメラへの復帰区間とします。
     arenaBossIntroReturnStart_ = -1.0f;
     for (const auto& shot : arenaBossIntroSequence_.cameraShots) {
+        // 無効またはミュート中のショットを、復帰区間の開始候補から除外する。
         if (!shot.enabled || shot.muted) {
             continue;
         }
@@ -125,6 +138,7 @@ bool GamePlayScene::StartArenaBossIntro(engine::Object3D* bossObject, engine::Ob
         arenaBossIntroReturnStart_ = (std::max)(arenaBossIntroReturnStart_, shot.startTime);
     }
 
+    // 有効なショットの開始時刻が得られなければ、画面復帰の区間を決められないため中止する。
     if (arenaBossIntroReturnStart_ < 0.0f) {
         DebugConsole::GetInstance()->AddLog("Stage 3 boss intro has no camera shots; cinematic skipped.");
         return false;
@@ -135,6 +149,7 @@ bool GamePlayScene::StartArenaBossIntro(engine::Object3D* bossObject, engine::Ob
                                         arenaBossIntroSequence_.transformTracks.end(), [this, bossObject](const auto& track) {
                                             return track.enabled && !track.muted && arenaBossIntroPlayer_.ResolveBinding(track.binding) == bossObject;
                                         });
+    // ボスのトラックが無い、相対姿勢でない、キーが無い、または開始時刻が負の場合は中止する。
     if (bossTrack == arenaBossIntroSequence_.transformTracks.end() || !bossTrack->relative ||
         bossTrack->keys.empty() || bossTrack->startTime < 0.0f) {
         DebugConsole::GetInstance()->AddLog("Stage 3 boss intro pose track missing; cinematic skipped.");
@@ -147,21 +162,27 @@ bool GamePlayScene::StartArenaBossIntro(engine::Object3D* bossObject, engine::Ob
     float barOpenEnd = -1.0f;
     bool hasBossActivation = false;
     for (const auto& signal : arenaBossIntroSequence_.signals) {
+        // 無効な合図は登場の時刻や起動条件に使わない。
         if (!signal.enabled) {
             continue;
         }
+        // メッセージ表示開始の合図から HUD を出す時刻を得る。
         if (signal.signal == "boss_intro_message_in") {
             messageInTime = signal.time;
+        // メッセージ表示終了の合図から HUD を隠す時刻を得る。
         } else if (signal.signal == "boss_intro_message_out") {
             messageOutTime = signal.time;
+        // 黒帯が開き切る合図は開き区間の終端にする。
         } else if (signal.signal == "boss_intro_bar_open_end") {
             barOpenEnd = signal.time;
+        // ボス起動の合図では、結び付いた遭遇ギミックの対象が今回のボスか確認する。
         } else if (signal.signal == "arena.activate_boss") {
             auto* encounter = dynamic_cast<GimmickArenaEncounter*>(arenaBossIntroPlayer_.ResolveBinding(signal.binding));
             hasBossActivation = hasBossActivation ||
                                 (encounter && encounter->GetTargetId() == bossObject->GetEventId());
         }
     }
+    // メッセージ開始と終了の順、黒帯の正の開始区間、ボスの起動先が揃わなければ中止する。
     if (messageInTime < 0.0f || messageOutTime <= messageInTime || barOpenEnd <= 0.0f || !hasBossActivation) {
         DebugConsole::GetInstance()->AddLog("Stage 3 boss intro timing markers missing; cinematic skipped.");
         return false;
@@ -174,10 +195,12 @@ bool GamePlayScene::StartArenaBossIntro(engine::Object3D* bossObject, engine::Ob
     // ゲートも再生器が動かす場合は、配置の基準位置から相対移動するトラックだけ許可します。
     arenaBossIntroGateTimelineControlled_ = false;
     for (const auto& track : arenaBossIntroSequence_.transformTracks) {
+        // 有効でミュートされておらず、このゲートに結び付くトラックだけを調べる。
         if (!track.enabled || track.muted || arenaBossIntroPlayer_.ResolveBinding(track.binding) != gateObject) {
             continue;
         }
 
+        // ゲートの動きを渡せるのは、基準位置に相対なトラックと専用ゲート型が揃った場合だけ。
         if (!track.anchorRelative || !dynamic_cast<GimmickBossGate*>(gateObject)) {
             DebugConsole::GetInstance()->AddLog("Stage 3 boss gate timeline binding invalid; cinematic skipped.");
             return false;
@@ -193,15 +216,17 @@ bool GamePlayScene::StartArenaBossIntro(engine::Object3D* bossObject, engine::Ob
         return false;
     }
 
-    // 演出開始前の操作権とカメラ値を保存し、途中終了でも Finish で戻せるようにします。
+    // 共通 API が操作権を退避した後で、登場更新に必要な時計と対象を登録する。
     arenaBossIntroActive_ = true;
     arenaBossIntroTimer_ = 0.0f;
     arenaBossIntroBoss_ = bossObject;
+    // 偽王の場合だけポータルと専用の登場時刻を設定する。
     if (auto* king = dynamic_cast<EnemyFalseKingSlime*>(bossObject)) {
         king->SetIntroPresentationActive(true, bossTrack->keys.back().time);
         king->EnableIntroPortal(portalIntro);
         auto cueTime = [this](const char* name, float fallback) {
             for (const auto& cue : arenaBossIntroSequence_.signals)
+                // 有効で指定名に一致する有限の時刻があれば使い、なければ既定秒を返す。
                 if (cue.enabled && cue.signal == name && std::isfinite(cue.time))
                     return cue.time;
             return fallback;
@@ -225,6 +250,7 @@ bool GamePlayScene::StartArenaBossIntro(engine::Object3D* bossObject, engine::Ob
     // 動画中はプレイヤーの速度とカメラ追従を止め、各ショットの固定視点を使います。
     CaptureArenaCinemaBar(arenaBossIntroCinemaBarOverrideActive_, arenaBossIntroCinemaBarBaseHeight_);
 
+    // 有効なゲート用トラックを確認できた場合だけ、通常のゲート更新から Timeline へ制御を渡す。
     if (arenaBossIntroGateTimelineControlled_) {
         static_cast<GimmickBossGate*>(gateObject)->SetIntroTimelineControl(true);
     }
@@ -232,9 +258,11 @@ bool GamePlayScene::StartArenaBossIntro(engine::Object3D* bossObject, engine::Ob
     // プレビューでは敵を起動せず、本番で起動マーカーに到達したときだけ遭遇へ知らせます。
     arenaBossIntroPlayer_.SetSignalCallback([](engine::Object3D* target, const CinematicSignalMarker& signal,
                                                bool isPreview) {
+        // 本番で起動マーカーに達したときだけ処理し、プレビューや他の合図では敵の状態を変えない。
         if (isPreview || signal.signal != "arena.activate_boss") {
             return;
         }
+        // 本番の起動合図で対象を遭遇ギミックとして解決できた場合、ボス起動を依頼する。
         if (auto* encounter = dynamic_cast<GimmickArenaEncounter*>(target)) {
             encounter->ActivateBossFromTimeline();
         }
@@ -255,6 +283,7 @@ void GamePlayScene::UpdateArenaBossIntro(float deltaTime) {
     // 再生器の時刻をポータルとHUD・帯の共通時計にし、速度が復活しないようにします。
     arenaBossIntroPlayer_.Update((std::max)(deltaTime, 0.0f));
     arenaBossIntroTimer_ = arenaBossIntroPlayer_.GetCurrentTime();
+    // 偽王の登場ポータルには Timeline の時刻と非負の経過秒を別々に渡す。
     if(auto* king=dynamic_cast<EnemyFalseKingSlime*>(arenaBossIntroBoss_))
         king->UpdateIntroPortal(arenaBossIntroTimer_,(std::max)(deltaTime,0.0f));
     player_->SetVelocity({0.0f, 0.0f, 0.0f});
@@ -268,6 +297,7 @@ void GamePlayScene::UpdateArenaBossIntro(float deltaTime) {
 
     engine::Camera* camera = CameraManager::GetInstance()->GetMainCamera();
 
+    // 途中でメインカメラが使えなくなった場合は、通常の終了経路で状態を復元する。
     if (!camera) {
         FinishArenaBossIntro();
         return;
@@ -276,6 +306,7 @@ void GamePlayScene::UpdateArenaBossIntro(float deltaTime) {
     // カメラとゲートの動きは Timeline 側で評価する。
     CameraManager::GetInstance()->SetActiveCamera(camera);
 
+    // Timeline の再生が終わったら、復帰位置を確定して操作を返す。
     if (!arenaBossIntroPlayer_.IsPlaying()) {
         FinishArenaBossIntro();
     }
@@ -298,12 +329,14 @@ void GamePlayScene::FinishArenaBossIntro() {
 
     // 動きを再生器へ預けていたゲートとボスを通常更新へ戻してから参照を外します。
     if (arenaBossIntroGateTimelineControlled_) {
+        // 専用ゲートを解決できた場合だけ、制御を通常更新へ戻す。
         if (auto* gate = dynamic_cast<GimmickBossGate*>(arenaBossIntroGate_)) {
             gate->SetIntroTimelineControl(false);
         }
     }
 
     arenaBossIntroGateTimelineControlled_ = false;
+    // 登場状態を持つ偽王の場合は、対象参照を外す前にフラグを解除する。
     if (auto* king = dynamic_cast<EnemyFalseKingSlime*>(arenaBossIntroBoss_))
         king->SetIntroPresentationActive(false);
     arenaBossIntroTimer_ = 0.0f;
@@ -313,11 +346,13 @@ void GamePlayScene::FinishArenaBossIntro() {
     RestoreArenaCinemaBar(arenaBossIntroCinemaBarOverrideActive_, arenaBossIntroCinemaBarBaseHeight_);
     // 誘導戦闘カメラでは最終ショットを補間始点にし、それ以外は用意済みの追従位置へ切り替えます。
     const auto& battle = CameraEditor::GetInstance()->GetBossFramingSettings();
+    // 有効なボスとメインカメラがあり、自動構図を有効にした誘導モードの場合は最終視点を引き継ぐ。
     if (camera && boss && battle.enabled && camera->IsGuidedGameplay()) {
         CameraManager::GetInstance()->PrepareMainCameraReturn(player_, exitEye, exitTarget);
         // 既存の補間始点引継ぎを再利用し、戦闘設定へ徐々に移動する。
         camera->ResumeManualView();
         CameraEditor::GetInstance()->Update(player_, false, boss);
+    // 誘導カメラへの引き継ぎ条件が揃わない場合は、入口格子を避けるために確保した追従位置へ戻す。
     } else {
         CameraManager::GetInstance()->PrepareMainCameraReturn(player_, arenaBossIntroRestoreEye_, arenaBossIntroRestoreTarget_);
         CameraManager::GetInstance()->SnapMainCameraReturn(kArenaBossGameplayCameraDistance,
@@ -334,6 +369,7 @@ void GamePlayScene::StartArenaBossDefeatReward(engine::Object3D* rewardObject) {
     }
 
     engine::Camera* camera = CameraManager::GetInstance()->GetMainCamera();
+    // カメラまたは報酬 Timeline が使えなければ、操作を止める前に中止する。
     if (!camera || !arenaBossRewardSequence_.Load(kArenaBossRewardSequencePath)) {
         DebugConsole::GetInstance()->AddLog("Stage 3 boss reward timeline missing; cinematic skipped.");
         return;
@@ -343,6 +379,7 @@ void GamePlayScene::StartArenaBossDefeatReward(engine::Object3D* rewardObject) {
     arenaBossRewardPlayer_.Initialize(SceneManager::GetInstance());
     arenaBossRewardPlayer_.SetSequence(&arenaBossRewardSequence_);
     const auto bindingIssues = arenaBossRewardPlayer_.ValidateBindings();
+    // 参照先が欠けていれば、最初の検証理由を報告して開始を止める。
     if (!bindingIssues.empty()) {
         DebugConsole::GetInstance()->AddLog(bindingIssues.front());
         return;
@@ -351,18 +388,21 @@ void GamePlayScene::StartArenaBossDefeatReward(engine::Object3D* rewardObject) {
     // カメラ復帰の合図は編集データから取得し、演出開始前に検証する。
     arenaBossRewardReturnStart_ = -1.0f;
     for (const auto& signal : arenaBossRewardSequence_.signals) {
+        // 有効な復帰合図を見つけたら、その最初の時刻を黒帯が閉じ始める目安にする。
         if (signal.enabled && signal.signal == "camera.resume_gameplay") {
             arenaBossRewardReturnStart_ = signal.time;
             break;
         }
     }
     arenaBossRewardDuration_ = arenaBossRewardPlayer_.GetDuration();
+    // 復帰合図が再生範囲内にないかショットが一つもなければ、演出を始めない。
     if (arenaBossRewardReturnStart_ < 0.0f || arenaBossRewardReturnStart_ >= arenaBossRewardDuration_ ||
         arenaBossRewardSequence_.cameraShots.empty()) {
         DebugConsole::GetInstance()->AddLog("Stage 3 boss reward camera markers missing; cinematic skipped.");
         return;
     }
 
+    // 共通固定視点を開始できなかった場合、報酬演出を有効にしない。
     if (!BeginArenaFixedCamera(*player_, false, arenaBossRewardHadPlayerControl_)) {
         return;
     }
@@ -378,6 +418,7 @@ void GamePlayScene::StartArenaBossDefeatReward(engine::Object3D* rewardObject) {
     // 本編の復帰合図で、録っておいた視点から通常追従の準備を始めます。
     arenaBossRewardPlayer_.SetSignalCallback([this](engine::Object3D*, const CinematicSignalMarker& signal,
                                                     bool isPreview) {
+        // プレビューを除き、通常追従へ戻す合図のときだけ退避した視点を渡す。
         if (!isPreview && signal.signal == "camera.resume_gameplay") {
             CameraManager::GetInstance()->PrepareMainCameraReturn(player_, arenaBossRewardGameplayEye_,
                                                                   arenaBossRewardGameplayTarget_);
@@ -406,6 +447,7 @@ void GamePlayScene::UpdateArenaBossDefeatReward(float deltaTime) {
                              kArenaBossRewardCinemaBarHeight, arenaBossRewardCinemaBarBaseHeight_);
     }
 
+    // 報酬 Timeline の再生終了を検出したフレームで、通常視点と操作へ戻す。
     if (!arenaBossRewardPlayer_.IsPlaying()) {
         FinishArenaBossDefeatReward();
     }

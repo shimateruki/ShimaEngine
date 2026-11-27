@@ -12,6 +12,7 @@ void Framework::Initialize() {
     StartupProfileScope frameworkProfile("Framework::Initialize");
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 
+    // 描画先となるウィンドウを先に作り、DirectXのスワップチェーンへ渡す。
     winApp_ = std::make_unique<WinApp>();
     winApp_->Initialize(L"スライムの大冒険", 1280, 720);
 
@@ -21,24 +22,25 @@ void Framework::Initialize() {
         dxCommon_->Initialize(winApp_.get());
     }
 
+    // ウィンドウに結び付く入力と、独立した音声サービスを起動する。
     engine::InputManager::GetInstance()->Initialize(winApp_->GetHwnd());
 
     audioPlayer_ = AudioPlayer::GetInstance();
     audioPlayer_->Initialize();
 
     // 先に描画用の記述子を確保できるようにし、深度・影のビューとImGuiの初期化を続ける。
-    SrvManager::GetInstance()->Initialize(dxCommon_);
+    engine::SrvManager::GetInstance()->Initialize(dxCommon_);
     dxCommon_->CreateDepthSrv();
     dxCommon_->CreateShadowMap();
     ImGuiManager::GetInstance()->Initialize(winApp_.get(), dxCommon_);
 
-    // ModelManagerとTextureManagerの初期化
+    // モデル・テクスチャ・ライトの共有サービスに同じDirectX基盤を渡す。
     {
         StartupProfileScope phase("ModelManager::Initialize");
         ModelManager::GetInstance()->Initialize(dxCommon_);
     }
 
-    TextureManager::GetInstance()->Initialize(dxCommon_);
+    engine::TextureManager::GetInstance()->Initialize(dxCommon_);
     LightManager::GetInstance()->Initialize(dxCommon_);
 
     // 重いGPU準備はSceneManagerが必要な範囲だけ行う。ここでは所有者とDeviceを結び付ける。
@@ -48,12 +50,12 @@ void Framework::Initialize() {
 }
 
 void Framework::Finalize() {
-	// GPU処理の完了を待ってから、音声・ImGui・モデル・DirectXなどを終了する。
+	// DirectXの参照がある場合は、描画資源の解放前にGPUのコマンドキュー完了を待つ。
     if (dxCommon_) {
-        // --- GPU処理が完全に終わるまで待機し、リセット ---
         dxCommon_->FlushCommandQueue();
     }
 
+    // GPU待機後に音声・ImGui・モデルを停止し、後続の共有描画資源の解放に備える。
     AudioPlayer::GetInstance()->Finalize();
     ImGuiManager::GetInstance()->Finalize();
     ModelManager::GetInstance()->Finalize();
@@ -66,7 +68,7 @@ void Framework::Finalize() {
 }
 
 void Framework::Run() {
-	// ウィンドウが閉じられるまで、更新と描画を毎フレーム実行する。
+	// WinAppが終了を通知するまで更新の直後に描画する。初期化と終了はWinMainが呼び出す。
     while (winApp_->Update() == false) {
         Update();
         Draw();

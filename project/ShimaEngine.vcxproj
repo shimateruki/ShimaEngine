@@ -265,6 +265,7 @@
     <ClCompile Include="game\ui\SaveIndicatorOverlay.cpp" />
     <ClCompile Include="game\ui\SettingsMenuOverlay.cpp" />
     <ClCompile Include="game\system\rules\GameRule.cpp" />
+    <ClCompile Include="game\system\progress\GameDataManager.cpp" />
     <ClCompile Include="game\system\progress\StageCatalog.cpp" />
     <ClCompile Include="game\system\tutorial\TutorialDirector.cpp" />
     <ClCompile Include="game\system\combat\GroundEffectLocator.cpp" />
@@ -287,6 +288,7 @@
     <ClCompile Include="engine\editor\core\commands\EditorToolSettings.cpp" />
     <ClCompile Include="engine\editor\core\commands\EditorQuickSearch.cpp" />
     <ClCompile Include="engine\editor\scene\SceneWorkspace.cpp" />
+    <ClCompile Include="engine\editor\scene\DebugTeleportEditor.cpp" />
     <ClCompile Include="engine\editor\core\playmode\PlayModeChangeTracker.cpp" />
     <ClCompile Include="engine\editor\assets\AssetReferenceExplorer.cpp" />
     <ClCompile Include="engine\editor\assets\JsonAssetBrowser.cpp" />
@@ -676,6 +678,7 @@
     <ClInclude Include="engine\editor\core\commands\EditorToolSettings.h" />
     <ClInclude Include="engine\editor\core\commands\EditorQuickSearch.h" />
     <ClInclude Include="engine\editor\scene\SceneWorkspace.h" />
+    <ClInclude Include="engine\editor\scene\DebugTeleportEditor.h" />
     <ClInclude Include="engine\editor\core\playmode\PlayModeChangeTracker.h" />
     <ClInclude Include="engine\editor\assets\AssetReferenceExplorer.h" />
     <ClInclude Include="engine\editor\assets\JsonAssetBrowser.h" />
@@ -1015,6 +1018,7 @@
     <ClInclude Include="engine\graphics\particle\ParticleSystem.h" />
     <ClInclude Include="engine\graphics\3d\light\Light.h" />
     <ClInclude Include="engine\graphics\3d\light\LightManager.h" />
+    <ClInclude Include="engine\graphics\3d\light\SceneLighting.h" />
     <ClInclude Include="engine\editor\vfx\ParticleEditor.h" />
     <ClInclude Include="game\actor\player\Player.h" />
     <ClInclude Include="game\actor\player\combat\PlayerBaseCombatController.h" />

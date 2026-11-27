@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "BaseScene.h"
 #include "Sprite.h"
@@ -19,7 +20,7 @@ public:
     /// <summary>ロード表示に使うSpriteと素材を準備する。</summary>
     void Initialize() override;
 
-    engine::RenderPreparation GetRenderPreparation() const override { return engine::RenderPreparation::SpritesOnly; }
+    engine::RenderPreparation GetRenderPreparation() const override { return engine::RenderPreparation::kSpritesOnly; }
 
     /// <summary>進捗表示とアニメーションを更新する。</summary>
     void Update(float deltaTime) override;
@@ -80,5 +81,5 @@ private:
     // 受け取った進捗と見た目の進捗を分け、表示側の追従アニメーションに使う。
     float targetProgress_ = 0.0f;
     float displayedProgress_ = 0.0f;
-    int slimeFrame_ = -1;
+    std::int32_t slimeFrame_ = -1;
 };

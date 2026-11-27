@@ -8,7 +8,7 @@
 class Easing {
 public:
     // 引数tは補間の進行割合。Inは開始側、Outは終了側、InOutは両側を緩急づける。
-    // 1. Linear (等速)
+    // 入力の進行率をそのまま返し、変化を一定にする。
     // 入力範囲の制限は呼び出し側で行う。Back・Elastic は出力が 0～1 を越える場合がある。
     static float Linear(float t);
 
@@ -28,7 +28,7 @@ public:
     // 五次曲線で終了側を減速する。入力tは0～1へ制限。
     static float OutQuint01(float t);
 
-    // 2. Sine (サイン波：滑らか)
+    // 正弦曲線で開始側を緩やかにし、終端へ向けて加速する。
     static float InSine(float t);
 
     // 正弦曲線で終了側を減速する。
@@ -37,7 +37,7 @@ public:
     // 正弦曲線で開始側を加速し、終了側を減速する。
     static float InOutSine(float t);
 
-    // 3. Quad (2乗：基本)
+    // 二次曲線で始点から加速する。
     static float InQuad(float t);
 
     // 二次曲線で終了側を減速する。
@@ -46,7 +46,7 @@ public:
     // 二次曲線で開始側を加速し、終了側を減速する。
     static float InOutQuad(float t);
 
-    // 4. Cubic (3乗：強め)
+    // 三次曲線で始点から加速する。
     static float InCubic(float t);
 
     // 三次曲線で終了側を減速する。
@@ -55,7 +55,7 @@ public:
     // 三次曲線で開始側を加速し、終了側を減速する。
     static float InOutCubic(float t);
 
-    // 5. Quart (4乗：さらに強め)
+    // 四次曲線で始点近くの変化を小さくし、後半の変化を増やす。
     static float InQuart(float t);
 
     // 四次曲線で終了側を減速する。
@@ -64,7 +64,7 @@ public:
     // 四次曲線で開始側を加速し、終了側を減速する。
     static float InOutQuart(float t);
 
-    // 6. Quint (5乗：急加速)
+    // 五次曲線で始点近くの変化をさらに小さくし、終盤で加速する。
     static float InQuint(float t);
 
     // 五次曲線で終了側を減速する。
@@ -73,7 +73,7 @@ public:
     // 五次曲線で開始側を加速し、終了側を減速する。
     static float InOutQuint(float t);
 
-    // 7. Expo (指数：シュッ！と動く)
+    // 始点を0に固定し、指数曲線で終盤へ向けて加速する。
     static float InExpo(float t);
 
     // 指数曲線で終了側を減速する。
@@ -82,7 +82,7 @@ public:
     // 指数曲線で開始側を加速し、終了側を減速する。
     static float InOutExpo(float t);
 
-    // 8. Circ (円：ゆっくり始まって急に終わる)
+    // 円弧で始点側を緩やかにし、終端に近づくほど速く進める。
     static float InCirc(float t);
 
     // 円弧で終了側を減速する。
@@ -91,7 +91,7 @@ public:
     // 円弧で開始側を加速し、終了側を減速する。
     static float InOutCirc(float t);
 
-    // 9. Back (少し戻る：予備動作や行き過ぎ演出)
+    // 動き始めに逆方向へ進んでから、正方向へ加速する。
     static float InBack(float t);
 
     // 行き過ぎを伴う曲線で終了側を減速する。
@@ -100,7 +100,7 @@ public:
     // 行き過ぎを伴う曲線で開始側を加速し、終了側を減速する。
     static float InOutBack(float t);
 
-    // 10. Elastic (ゴム：ビヨヨンと震える)
+    // 始点側で振動しながら振幅を増やす。tが0または1なら端点をそのまま返す。
     static float InElastic(float t);
 
     // 弾性振動で終了側を減速する。
@@ -109,7 +109,7 @@ public:
     // 弾性振動で開始側を加速し、終了側を減速する。
     static float InOutElastic(float t);
 
-    // 11. Bounce (ボールの跳ね返り)
+    // 終端側の跳ね返りを反転し、始点側に跳ねる動きを作る。
     static float InBounce(float t);
 
     // 跳ね返りで終了側を減速する。

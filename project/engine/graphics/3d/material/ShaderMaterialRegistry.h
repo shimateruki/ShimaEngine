@@ -27,8 +27,8 @@ public:
 
     // 通常材質の追加定義を管理する共有台帳を返す。
     static ShaderMaterialRegistry& Instance() {
-        static ShaderMaterialRegistry instance;
-        return instance;
+        static ShaderMaterialRegistry sInstance;
+        return sInstance;
     }
 
     // 初回にJSON一覧を読む。未登録なら nullptr、返す定義は Reload まで有効な借用参照。
@@ -78,9 +78,11 @@ private:
         namespace fs = std::filesystem;
         const fs::path root = "Resources/json/shader_materials";
         std::error_code ec;
+        // 材質の定義フォルダーを見つけられない場合は、空の一覧のまま終了する。
         if (!fs::exists(root, ec))
             return;
         for (fs::recursive_directory_iterator it(root, ec), end; it != end && !ec; it.increment(ec)) {
+            // 通常ファイルかつJSONだけを材質定義として読み込む。
             if (!it->is_regular_file() || it->path().extension() != ".json")
                 continue;
             try {
@@ -98,7 +100,7 @@ private:
                 const std::string shaderName = shader.generic_string();
                 std::error_code shaderError;
                 // 予約IDと絶対パス・範囲外参照を拒否し、実在するシェーダーファイルだけ登録する。
-                if (value.id.empty() || MaterialRenderPolicy::Find(value.id) != nullptr ||
+                if (value.id.empty() || materialRenderPolicy::Find(value.id) != nullptr ||
                     shader.is_absolute() || shaderName.rfind("Resources/shader/", 0) != 0 ||
                     shaderName.find("..") != std::string::npos || shader.extension() != ".hlsl" ||
                     !fs::is_regular_file(shader, shaderError)) {
@@ -106,6 +108,7 @@ private:
                     continue;
                 }
                 value.pixelShader = shaderName;
+                // 表示名を省略した材質は、Editorで識別できるよう保存IDを表示にも使う。
                 if (value.displayName.empty())
                     value.displayName = value.id;
                 // 同じIDを複数読んだ場合、すでに登録した定義を残して後から読んだファイルを診断に記録します。
@@ -115,6 +118,7 @@ private:
                 errors_.push_back(it->path().generic_string() + ": " + error.what());
             }
         }
+        // ディレクトリの走査が最後まで進まなかった場合は、その理由を診断に残す。
         if (ec)
             errors_.push_back(root.generic_string() + ": 一覧の読み込みに失敗: " + ec.message());
     }

@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "IEditable.h"
 
@@ -29,7 +30,7 @@ private:
         std::string configuration;
         bool buildBeforePackage = false;
         bool analyzeOnly = false; // コピーせず、最終的な選別結果のレポートだけを保存します。
-        int textureMode = 0;
+        std::int32_t textureMode = 0;
         bool createZip = true;
         bool includeProject = true;
         bool includeReadMe = true;
@@ -64,8 +65,8 @@ private:
     // 入力・表示状態は UI スレッドが所有し、ワーカーには PackageRequest のコピーだけを渡します。
     DebugEditor* editor_ = nullptr;
     char packageNameBuffer_[128] = "GE3_Playable";
-    int configurationIndex_ = 2;
-    int textureModeIndex_ = 0;
+    std::int32_t configurationIndex_ = 2;
+    std::int32_t textureModeIndex_ = 0;
     bool createZip_ = true;
     bool includeProject_ = true;
     bool includeReadMe_ = true;

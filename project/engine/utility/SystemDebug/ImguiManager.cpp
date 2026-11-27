@@ -2,8 +2,8 @@
 #include "SrvManager.h"
 #include "IconsFontAwesome5.h"
 ImGuiManager* ImGuiManager::GetInstance() {
-    static ImGuiManager instance;
-    return &instance;
+    static ImGuiManager sInstance;
+    return &sInstance;
 }
 
 void ImGuiManager::Initialize(WinApp* winApp, engine::DirectXCommon* dxCommon) {
@@ -11,7 +11,7 @@ void ImGuiManager::Initialize(WinApp* winApp, engine::DirectXCommon* dxCommon) {
 #ifdef USE_IMGUI
     dxCommon_ = dxCommon;
 
-    // 1. ImGuiのコンテキストを生成
+    // ImGuiのコンテキストを作り、エディターのドッキングを有効にする。
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
@@ -64,11 +64,8 @@ void ImGuiManager::Initialize(WinApp* winApp, engine::DirectXCommon* dxCommon) {
     colors[ImGuiCol_TableRowBgAlt] = ImVec4(0.11f, 0.13f, 0.16f, 0.75f);
     colors[ImGuiCol_DockingPreview] = ImVec4(0.28f, 0.55f, 0.85f, 0.70f);
 
-    // =================================================================
-    // 🎨 フォントとアイコンの「合体（Merge）」読み込み
-    // =================================================================
+    // 日本語の文字と編集UIで使うアイコンを、同じフォントアトラスへ読み込む。
     
-    // ① まずはメインの日本語フォントを読み込む
     float fontSize = 18.0f;
     io.Fonts->AddFontFromFileTTF(
         "Resources/sprite/meiryo.ttc",
@@ -77,16 +74,15 @@ void ImGuiManager::Initialize(WinApp* winApp, engine::DirectXCommon* dxCommon) {
         io.Fonts->GetGlyphRangesJapanese()
     );
 
-    // ② 次に読み込むアイコンフォントを「MergeMode」で合体させる設定にする
+    // 日本語フォントと同じフォントアトラスでアイコンを使えるよう、次の読み込みを結合モードにする。
     ImFontConfig config;
-    config.MergeMode = true;       // ★ここが肝！前のフォントに上書き合体する
+    config.MergeMode = true;
     config.PixelSnapH = true;
     config.GlyphMinAdvanceX = fontSize; // アイコンの幅をフォントサイズに合わせる
 
-    // ③ アイコンの文字コード範囲を指定（IconsFontAwesome5.hで定義されている範囲）
+    // アイコンフォントから取り込む文字コードの範囲を指定する。
     static const ImWchar kIconRanges[] = { ICON_MIN_FA, ICON_MAX_FA, 0 };
 
-    // ④ アイコンフォントを読み込んで合体！
     io.Fonts->AddFontFromFileTTF(
         "Resources/font/fa-solid-900.ttf",
         fontSize,
@@ -98,14 +94,14 @@ void ImGuiManager::Initialize(WinApp* winApp, engine::DirectXCommon* dxCommon) {
     // プラットフォームのバックエンドを初期化
     ImGui_ImplWin32_Init(winApp->GetHwnd());
 
-    // 2. DX12レンダラーの初期化 (マルチテクスチャ対応版)
-    ID3D12DescriptorHeap* srvDescriptorHeap = SrvManager::GetInstance()->GetDescriptorHeap();
+    // 共有SRVヒープと割り当てコールバックを渡して、DX12バックエンドを初期化する。
+    ID3D12DescriptorHeap* srvDescriptorHeap = engine::SrvManager::GetInstance()->GetDescriptorHeap();
 
     // CPU書き込み用とGPU参照用に、共有ヒープの同じインデックスから両方のハンドルを取得します。
     auto allocSrv = [](ImGui_ImplDX12_InitInfo* info, D3D12_CPU_DESCRIPTOR_HANDLE* outCpuHandle, D3D12_GPU_DESCRIPTOR_HANDLE* outGpuHandle) {
-        uint32_t index = SrvManager::GetInstance()->Allocate();
-        *outCpuHandle = SrvManager::GetInstance()->GetCpuDescriptorHandle(index);
-        *outGpuHandle = SrvManager::GetInstance()->GetGpuDescriptorHandle(index);
+        uint32_t index = engine::SrvManager::GetInstance()->Allocate();
+        *outCpuHandle = engine::SrvManager::GetInstance()->GetCpuDescriptorHandle(index);
+        *outGpuHandle = engine::SrvManager::GetInstance()->GetGpuDescriptorHandle(index);
     };
 
     // 現在のコールバックは割り当て番号をヒープへ返却しません。ここでハンドルを受け取っても空き枠は増えません。
@@ -133,7 +129,7 @@ void ImGuiManager::Initialize(WinApp* winApp, engine::DirectXCommon* dxCommon) {
 
 void ImGuiManager::Finalize() {
 #ifdef USE_IMGUI
-    // バックエンドをシャットダウン
+    // ImGuiのバックエンドを終了し、使っていたコンテキストを破棄する。
     // 描画・入力バックエンドが参照するImGuiコンテキストを残したまま、バックエンドを先に終了します。
     ImGui_ImplDX12_Shutdown();
     ImGui_ImplWin32_Shutdown();
@@ -145,7 +141,7 @@ void ImGuiManager::Finalize() {
 
 void ImGuiManager::BeginFrame() {
 #ifdef USE_IMGUI
-    // フレームの開始をImGuiに伝える
+    // Win32とDirectX 12のバックエンドの準備を済ませてから、ImGuiのフレームを開始する。
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
@@ -154,13 +150,13 @@ void ImGuiManager::BeginFrame() {
 
 void ImGuiManager::Draw() {
 #ifdef USE_IMGUI
-    // 1. まず「描画内容」を確定させる
+    // 各ウィンドウの入力とレイアウトを確定し、描画データを生成する。
     ImGui::Render();
 
-    // 2. DX12のコマンドリストに記録
+    // ImGuiが使用するSRVを参照できるよう、共用ディスクリプタヒープを設定する。
     ID3D12GraphicsCommandList* commandList = dxCommon_->GetCommandList();
     assert(commandList != nullptr);
-    SrvManager::GetInstance()->SetDescriptorHeaps(commandList);
+    engine::SrvManager::GetInstance()->SetDescriptorHeaps(commandList);
     ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), commandList);
 #endif
 }
@@ -168,19 +164,20 @@ void ImGuiManager::Draw() {
 void ImGuiManager::EndFrame() {
 #ifdef USE_IMGUI
     ImGuiIO& io = ImGui::GetIO();
-    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
-    {
+    // 複数ビューポートが有効な場合にだけ、ImGuiが管理する別ウィンドウを更新して描く。
+    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+        // ビューポートを処理した後に戻せるよう、現在のコンテキストを控える。
         // 1. 今のコンテキストをバックアップ
         ImGuiContext* previousContext = ImGui::GetCurrentContext();
 
+        // ImGui側のビューポートと対応するOSウィンドウを更新し、追加ウィンドウを描画する。
         // 2. ウィンドウの位置などを更新
         ImGui::UpdatePlatformWindows();
 
-        // 3. サブウィンドウを描画
-        // ※最新版では、第1引数と第2引数は nullptr で内部解決させ、
-        //   メインのコマンドリストに記録させるのが最も安定します。
+        // ImGuiのバックエンドに、別ウィンドウの描画を依頼する。
         ImGui::RenderPlatformWindowsDefault(nullptr, nullptr);
 
+        // 追加ウィンドウの処理前に使用していたコンテキストへ戻す。
         // 4. コンテキストを復元
         ImGui::SetCurrentContext(previousContext);
     }

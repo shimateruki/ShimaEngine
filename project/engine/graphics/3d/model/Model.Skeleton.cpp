@@ -21,9 +21,6 @@ namespace engine {
 
 
 
-// ==========================================
-// 初期化: メッシュごとにバッファを作る
-// ==========================================
 
 // ========================================================================
 // Model スケルトン管理
@@ -43,9 +40,10 @@ const std::vector<Model::Joint>& Model::GetJoints() const {
 }
 
 // ジョイント名からインデックスを探し、存在しない場合は-1を返す。
-int Model::FindJointIndex(const std::string& name) const {
+std::int32_t Model::FindJointIndex(const std::string& name) const {
     auto it = modelData_.skeleton.jointMap.find(name);
 
+    // 名前が登録されていなければ、無効な番号として-1を返す。
     if (it == modelData_.skeleton.jointMap.end()) {
         return -1;
     }
@@ -53,10 +51,10 @@ int Model::FindJointIndex(const std::string& name) const {
     return it->second;
 }
 
-// 指定ジョイントの現在のローカルトランスフォームを取得する。
-// 負の番号や配列の外を指定した場合は、拡縮1・回転なし・移動なしの姿勢を返す。
-Model::QuaternionTransform Model::GetJointTransform(int jointIndex) const {
-    if (jointIndex < 0 || jointIndex >= static_cast<int>(modelData_.skeleton.joints.size())) {
+// 指定ジョイントの現在のローカル姿勢を返す。
+Model::QuaternionTransform Model::GetJointTransform(std::int32_t jointIndex) const {
+    // 負の番号や範囲を超える番号には、既定初期化した姿勢を返す。
+    if (jointIndex < 0 || jointIndex >= static_cast<std::int32_t>(modelData_.skeleton.joints.size())) {
         return {};
     }
 
@@ -64,12 +62,13 @@ Model::QuaternionTransform Model::GetJointTransform(int jointIndex) const {
 }
 
 // 指定ジョイントのローカルトランスフォームを更新し、エディタで調整した姿勢を反映する。
-bool Model::SetJointTransform(int jointIndex, const QuaternionTransform& transform) {
-    // 編集した関節のローカル行列を更新してから、子関節へ姿勢を伝播させる。
-    if (jointIndex < 0 || jointIndex >= static_cast<int>(modelData_.skeleton.joints.size())) {
+bool Model::SetJointTransform(std::int32_t jointIndex, const QuaternionTransform& transform) {
+    // 無効な番号を指定された場合は、現在のスケルトンを変更しない。
+    if (jointIndex < 0 || jointIndex >= static_cast<std::int32_t>(modelData_.skeleton.joints.size())) {
         return false;
     }
 
+    // 有効な関節のローカル行列を更新してから、親子の行列とGPU用の値へ反映する。
     Joint& joint = modelData_.skeleton.joints[jointIndex];
     joint.transform = transform;
     engine::Matrix4x4 mS = math_.MakeScaleMatrix(joint.transform.scale);
@@ -107,7 +106,6 @@ int32_t Model::CreateJoint(const Node& node, const std::optional<int32_t>& paren
     joints.push_back(joint); // SkeletonのJoint列に追加
 
     for (const Node& child : node.children) {
-        // 子Jointを作成し、そのIndexを登録
         // 親の添字が必ず子より先になるように登録し、行列更新時に先頭から一度走査するだけで親を参照できるようにします。
         int32_t childIndex = CreateJoint(child, joint.index, joints);
         joints[joint.index].children.push_back(childIndex);
@@ -134,7 +132,7 @@ Model::Skeleton Model::CreateSkeleton(const Node& rootNode) {
 void Model::UpdateSkeleton(Skeleton& skeleton) {
     engine::Math math;
 
-    // すべてのJointを更新。親が若いので通常ループで処理可能になっている
+    // 親が先に登録されているため、一回の走査で合成済みの親行列を参照できる。
     for (Joint& joint : skeleton.joints) {
         if (joint.parent) {
             // 親がいれば親の行列を掛ける
@@ -151,17 +149,17 @@ void Model::ApplyAnimationToSkeleton(Skeleton& skeleton, const Animation& animat
     engine::Math math;
 
     for (Joint& joint : skeleton.joints) {
-        // 対象のJointのAnimationがあれば、値の適用を行う。
+        // アニメーション内から、ジョイント名に一致するカーブを探す。
         auto it = std::find_if(animation.nodeAnimations.begin(), animation.nodeAnimations.end(),
             [&joint](const NodeAnimation& na) { return na.name == joint.name; });
             
+        // 対応するカーブが存在する関節だけ、現在の時刻からローカル姿勢を作り直す。
         if (it != animation.nodeAnimations.end()) {
             const NodeAnimation& rootNodeAnimation = *it;
             joint.transform.translate = CalculateValue(rootNodeAnimation.translate, time);
             joint.transform.rotate = CalculateValue(rootNodeAnimation.rotate, time);
             joint.transform.scale = CalculateValue(rootNodeAnimation.scale, time);
             
-            // アニメーションがある場合のみlocalMatrixを更新する
             engine::Matrix4x4 mS = math.MakeScaleMatrix(joint.transform.scale);
             engine::Matrix4x4 mR = math.MakeRotateQuaternionMatrix(joint.transform.rotate);
             engine::Matrix4x4 mT = math.MakeTranslateMatrix(joint.transform.translate);
@@ -191,6 +189,7 @@ void Model::ApplyBlendedAnimation(
         const NodeAnimation* fromNode = findNodeAnimation(fromAnimation);
         const NodeAnimation* toNode = findNodeAnimation(toAnimation);
 
+        // 開始側にも終了側にも対象のカーブが無い場合は、その関節の現在姿勢を維持する。
         if (!fromNode && !toNode) {
             continue;
         }

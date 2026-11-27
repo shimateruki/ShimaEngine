@@ -5,15 +5,16 @@
 
 #include "EditorPropertyRegistry.h"
 
-namespace EditorPropertyBuiltIn {
+namespace editorPropertyBuiltIn {
 
 // 複数編集とPrefab差分の共通フラグです。アニメーション対応だけ個別に追加します。
 inline EditorPropertyFlags CommonFlags(bool animatable = false) {
-    EditorPropertyFlags flags = EditorPropertyFlags::MultiEdit | EditorPropertyFlags::PrefabOverride;
+    EditorPropertyFlags flags = EditorPropertyFlags::kMultiEdit | EditorPropertyFlags::kPrefabOverride;
+    // アニメーションから値を動かせるプロパティにだけ、その対応フラグを付ける。
     if (animatable) {
-        flags = flags | EditorPropertyFlags::Animatable;
+        flags = flags | EditorPropertyFlags::kAnimatable;
     }
     return flags;
 }
 
-} // namespace EditorPropertyBuiltIn
+} // namespace editorPropertyBuiltIn

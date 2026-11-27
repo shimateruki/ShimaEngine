@@ -1,14 +1,15 @@
 ﻿#include "engine/editor/graphics/camera/CameraEditor.Internal.h"
 
-using namespace CameraEditorImplementation;
+using namespace cameraEditorImplementation;
 
-// 補助処理の定義を一か所に保持し、共有状態と呼び出し順を維持します。
-namespace CameraEditorImplementation {
+namespace cameraEditorImplementation {
+    // ゲームが実行中で、編集カメラのガイドを隠すべき場合にtrueを返します。
     bool ShouldHideGameCameraGuideDuringPlay() {
         SceneManager* sceneManager = SceneManager::GetInstance();
         return sceneManager && sceneManager->IsPlaying();
     }
 
+    // 現在のシーンを借用して返します。シーン管理が無ければnullptrを返します。
     BaseScene* GetCurrentScene() {
         SceneManager* sceneManager = SceneManager::GetInstance();
         return sceneManager ? sceneManager->GetCurrentScene() : nullptr;
@@ -18,6 +19,7 @@ namespace CameraEditorImplementation {
         // 生ポインターの参照先がシーン切替で失効していないか、現所有一覧と照合する。
         BaseScene* scene = GetCurrentScene();
 
+        // 現在シーンか参照先が無ければ、所有一覧で照合できない。
         if (!scene || !target) {
             return false;
         }
@@ -27,10 +29,12 @@ namespace CameraEditorImplementation {
         });
     }
 
+    // 度で受け取った角度をラジアンへ換算します。
     float DegToRad(float degrees) {
         return degrees * kPi / 180.0f;
     }
 
+    // ラジアンで受け取った角度を度へ換算します。
     float RadToDeg(float radians) {
         return radians * 180.0f / kPi;
     }
@@ -41,6 +45,7 @@ namespace CameraEditorImplementation {
         engine::Vector3 diff = end - start;
         float length = math.Length(diff);
 
+        // 端点がほぼ重なる場合も、描画する箱の長さは0.001以上にする。
         if (length < 0.001f) {
             length = 0.001f;
         }
@@ -58,9 +63,9 @@ namespace CameraEditorImplementation {
     }
 
     engine::Vector3 CalculateForward(const engine::Vector3& rotation) {
-        // rotation.x = Pitch, rotation.y = Yaw
+        // XのピッチとYのヨーから、正のピッチで上を向く前方方向を求める。
         float x = std::sin(rotation.y) * std::cos(rotation.x);
-        float y = std::sin(rotation.x); // Y-Upの場合、Pitch上がプラスならsin(x)ではなく-sin(x)の場合も
+        float y = std::sin(rotation.x);
         float z = std::cos(rotation.y) * std::cos(rotation.x);
         return { x, y, z };
     }
@@ -73,6 +78,7 @@ namespace CameraEditorImplementation {
         return { x, y, z };
     }
 
+    // カメラ基底の軸を直交させる計算に使う外積。引数の順番で向きが決まる。
     engine::Vector3 Cross(const engine::Vector3& a, const engine::Vector3& b) {
         return {
             a.y * b.z - a.z * b.y,
@@ -85,9 +91,11 @@ namespace CameraEditorImplementation {
         return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
     }
 
+    // 長さを使って方向を単位化します。
     engine::Vector3 NormalizeSafe(const engine::Vector3& v, const engine::Vector3& fallback) {
         float length = Length(v);
 
+        // 長さが十分でなければ、呼び出し側が指定した代替方向を返す。
         if (length < 0.0001f) {
             return fallback;
         }
@@ -104,6 +112,7 @@ namespace CameraEditorImplementation {
     }
 
     engine::Vector3 GetObjectWorldForward(const engine::Object3D* object) {
+        // 参照先が無ければ、ワールドの正のZを既定の前方とする。
         if (!object) {
             return { 0.0f, 0.0f, 1.0f };
         }
@@ -113,7 +122,8 @@ namespace CameraEditorImplementation {
         return NormalizeSafe(forward, { 0.0f, 0.0f, 1.0f });
     }
 
-    bool IsValidFocusBounds(const Aabb& bounds) {
+    // フォーカスの対象となる境界の全成分が有限で、各軸の最小・最大が正順であるか確かめます。
+    bool IsValidFocusBounds(const engine::Aabb& bounds) {
         return std::isfinite(bounds.min.x) && std::isfinite(bounds.min.y) && std::isfinite(bounds.min.z) &&
             std::isfinite(bounds.max.x) && std::isfinite(bounds.max.y) && std::isfinite(bounds.max.z) &&
             bounds.max.x >= bounds.min.x && bounds.max.y >= bounds.min.y && bounds.max.z >= bounds.min.z;

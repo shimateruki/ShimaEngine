@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "b2ff6cc124bf872b57eee1edbdc9e9b8",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/sprite/guide_sign/dash_poster.png",
+  "version": 1
+}

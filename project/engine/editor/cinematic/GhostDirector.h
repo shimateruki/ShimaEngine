@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "engine/editor/assets/JsonAssetBrowser.h"
 
 #include "engine/animation/cinematic/CinematicPlayer.h"
@@ -17,7 +18,7 @@ class BaseScene;
 // 再生中に直近で発火したイベント ID と対象。対象 Object は所有しません。
 // 関連：GhostDirector（この型を使う機能の本体）
 struct ActiveEvent {
-    int id = 0;
+    std::int32_t id = 0;
     engine::Object3D* targetObject = nullptr;
 };
 
@@ -67,7 +68,7 @@ class GhostDirector : public IEditable {
     bool IsFinished() const;
 
     /// 直近に発火したイベントの ID を返す。
-    int GetActiveEventId() const;
+    std::int32_t GetActiveEventId() const;
 
     /// 直近に発火したイベントと非所有の対象参照を返す。
     ActiveEvent GetActiveEvent() const;
@@ -92,10 +93,10 @@ class GhostDirector : public IEditable {
     static constexpr float kKeyTimeEpsilon = 1.0f / 120.0f;
 
     // 対象 Object とトラックの対応を調べ、必要な場合だけ新規トラックを作ります。
-    int FindTransformTrack(engine::Object3D* object) const;
+    std::int32_t FindTransformTrack(engine::Object3D* object) const;
 
     // 重複トラックを避け、対象の現在姿勢を新しい移動トラックの初期値にする。
-    int AddTransformTrack(engine::Object3D* object);
+    std::int32_t AddTransformTrack(engine::Object3D* object);
 
     /// Editor で選択中の Object を変形トラックへ追加する。
     void AddSelectedObjectsAsTracks();
@@ -110,7 +111,7 @@ class GhostDirector : public IEditable {
     void EvaluatePreviewAtCurrentTime();
 
     /// 選択したトラックの対象 Object を Editor でも選択する。
-    void SelectTrackTarget(int trackIndex);
+    void SelectTrackTarget(std::int32_t trackIndex);
 
     /// 保存済みの対象識別子から現在シーンの Object を探す。
     engine::Object3D* ResolveTrackTarget(const CinematicObjectBinding& binding) const;
@@ -119,7 +120,7 @@ class GhostDirector : public IEditable {
     void UpsertTransformKey(CinematicTransformTrack& track, const CinematicTransformKey& key);
 
     /// 指定トラックの最後のキー時刻を返す。
-    float GetTransformTrackDuration(int trackIndex) const;
+    float GetTransformTrackDuration(std::int32_t trackIndex) const;
 
     /// シナリオ全体の再生尺を返す。
     float GetScenarioDuration() const;
@@ -144,10 +145,10 @@ class GhostDirector : public IEditable {
     void PlaceStudioCamera();
 
     /// 制作空間で指定役割の Object を探す。
-    engine::Object3D* FindStudioObject(int role) const;
+    engine::Object3D* FindStudioObject(std::int32_t role) const;
 
     /// Object 名から制作空間内の役割番号を求める。
-    static int GetRoleIndex(const std::string& name);
+    static std::int32_t GetRoleIndex(const std::string& name);
 
     /// 演出制作の操作案内を描画する。
     void DrawAuthoringGuide();
@@ -160,7 +161,7 @@ class GhostDirector : public IEditable {
 
     // 演出部品・カメラ・粒子の編集項目を描画する。
     void DrawPresentationEditor();
-    int selectedVisualObject_ = 0, selectedVisualKey_ = 0, selectedViewKey_ = 0;
+    std::int32_t selectedVisualObject_ = 0, selectedVisualKey_ = 0, selectedViewKey_ = 0;
 
     /// VFX の時刻付き再生トラックを編集する。
     void DrawVfxTrackEditor();
@@ -195,7 +196,7 @@ class GhostDirector : public IEditable {
     bool studioCameraSaved_ = false;
     engine::Vector3 studioStoredEye_ = {}, studioStoredTarget_ = {}, studioStoredRotation_ = {};
     float studioStoredFov_ = 0.45f, studioStoredNear_ = 0.1f, studioStoredFar_ = 1000.0f;
-    int studioStoredMode_ = 0, studioStoredFollowMode_ = 0;
+    std::int32_t studioStoredMode_ = 0, studioStoredFollowMode_ = 0;
     engine::Object3D* studioStoredFollow_ = nullptr;
     DebugEditor* editor_ = nullptr;
 
@@ -216,19 +217,19 @@ class GhostDirector : public IEditable {
     float currentScrubTime_ = 0.0f;
     // キーはマウスを離すまで移動先だけを表示し、確定時に履歴へ記録する。
     struct TimelineKeyDrag {
-        int track = -1;
-        int key = -1;
+        std::int32_t track = -1;
+        std::int32_t key = -1;
         float pixelsPerSecond = 0.0f;
         float proposedTime = 0.0f;
         float originalTime = 0.0f;
         bool moved = false;
-        int clipKind = 0; // 0は移動キー。1、2、4はVFX、カメラ、音。
+        std::int32_t clipKind = 0; // 0は移動キー。1、2、4はVFX、カメラ、音。
     } timelineKeyDrag_;
     bool timelineScrubbing_ = false;
-    std::shared_ptr<int> timelineDocument_ = std::make_shared<int>(0);
+    std::shared_ptr<std::int32_t> timelineDocument_ = std::make_shared<std::int32_t>(0);
     void ResetTimelineInteraction();
     void CommitTimelineKeyDrag();
-    float* GetEditableClipStart(int kind, int index);
+    float* GetEditableClipStart(std::int32_t kind, std::int32_t index);
     void CaptureSavedDocument();
     void UpdateDocumentDirty();
     std::string savedDocumentJson_;
@@ -241,7 +242,7 @@ class GhostDirector : public IEditable {
     bool showSelectedTrackPreview_ = true;
     bool showPreviewOrientation_ = true;
     std::string fileOperationStatus_;
-    int selectedTrackKind_ = 0;
-    int selectedTrackIndex_ = -1; // 選択トラック。-1は未選択。
-    int selectedKeyIndex_ = -1; // 選択キー。-1は未選択。
+    std::int32_t selectedTrackKind_ = 0;
+    std::int32_t selectedTrackIndex_ = -1; // 選択トラック。-1は未選択。
+    std::int32_t selectedKeyIndex_ = -1; // 選択キー。-1は未選択。
 };

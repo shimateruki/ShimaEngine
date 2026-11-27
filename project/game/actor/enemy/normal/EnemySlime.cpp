@@ -61,6 +61,7 @@ engine::Vector3 NormalizePlanarOr(const engine::Vector3& value, const engine::Ve
     // 対象と重なった瞬間も直前の向きを維持し、突進方向を失わない。
     const float length = PlanarLength(value);
 
+    // 水平成分がほぼゼロだと向きを求められないため、呼び出し元が指定した向きを使う。
     if (length <= 0.0001f) {
         return fallback;
     }
@@ -86,17 +87,20 @@ void SpawnMeshEffectAtSafe(const char* path, const engine::Vector3& position, co
     }
 }
 
+// 床に投影した座標に、ワールドY方向の表示用の持ち上げ量を足す。
 engine::Vector3 ResolveSlimeGroundEffectPosition(const engine::Vector3& position, float lift = 0.04f) {
     engine::Vector3 groundPosition = HitEffectDirector::ResolveGroundEffectPosition(position);
     groundPosition.y += lift;
     return groundPosition;
 }
 
+// 破片の生成点を床より少し上げつつ、衝突面としては投影先の床の高さを渡す。
 void SpawnDebrisOnGroundSafe(const char* presetName, const engine::Vector3& position, float lift = 0.04f) {
     const engine::Vector3 groundPosition = HitEffectDirector::ResolveGroundEffectPosition(position);
     engine::Vector3 effectPosition = groundPosition;
     effectPosition.y += lift;
 
+    // 破片管理が使える場合だけ床への着地を含む演出を生成する。
     if (auto* debrisEffect = DebrisEffectManager::GetInstance()) {
         debrisEffect->SpawnOnGround(presetName, effectPosition, groundPosition.y);
     }
@@ -108,6 +112,7 @@ void EmitGpuPresetSafe(const char* presetName, const engine::Vector3& position) 
     // GPU粒子が未初期化のプレビューでも、攻撃処理を継続する。
     GpuParticleManager* particles = GpuParticleManager::GetInstance();
 
+    // 管理オブジェクトが存在し、GPUリソースも初期化済みなら指定プリセットを発生させる。
     if (particles && particles->IsInitialized()) {
         particles->Emit(presetName, position);
     }
@@ -116,6 +121,7 @@ void EmitGpuPresetSafe(const char* presetName, const engine::Vector3& position) 
 engine::Object3D* FindEnemyDamageTarget(engine::Object3D* object) {
     // 子メッシュとの接触を親の敵へたどり、ダメージ対象を統一する。
     for (engine::Object3D* current = object; current; current = current->GetParent()) {
+        // 最初に見つかった敵の本体をダメージの対象として返す。
         if (dynamic_cast<BaseEnemy*>(current)) {
             return current;
         }
@@ -141,12 +147,14 @@ void EnemySlime::ApplyManagedScale(const engine::Vector3& scale) {
 }
 
 void EnemySlime::Update(float deltaTime) {
-    // 休眠・撃破・投擲後は個別の追跡や攻撃を進めず、基底の更新へ切り替えます。
+    // 個別の追跡や攻撃を進めない状態を先に処理する。
+    // 休眠中は予兆や行動を更新せず、BaseEnemyに更新を任せる。
     if (IsDormant()) {
         BaseEnemy::Update(deltaTime);
         return;
     }
 
+    // 撃破演出に入ったら、床の予兆を消してBaseEnemy側の処理に任せる。
     if (ShouldHandleDefeatEffect()) {
         HideAttackTelegraph();
         BaseEnemy::Update(deltaTime);
@@ -159,12 +167,14 @@ void EnemySlime::Update(float deltaTime) {
         return;
     }
 
+    // 投げられた後の復帰中は予兆を消し、通常行動へ戻るまで基底の更新だけを行う。
     if (IsThrowRecovering()) {
         HideAttackTelegraph();
         BaseEnemy::Update(deltaTime);
         return;
     }
 
+    // 標的または敵パラメーターが欠けると攻撃を判断できないため、姿勢と基底の更新だけを行う。
     if (!GetTarget() || !GetParameters().has_value()) {
         HideAttackTelegraph();
         // 標的がないプレビューでも待機・被弾の表示を更新し、外力による移動は基底へ任せる。
@@ -182,6 +192,7 @@ void EnemySlime::Update(float deltaTime) {
     engine::Vector3 targetDirection = GetTargetPlanarDirection(&targetDistance);
     float effectiveDetectionRange = GetDetectionRange();
 
+    // 敵パラメーターの探知距離が個体の設定値より広ければ、広い方を判定に使う。
     if (GetParameters().has_value()) {
         effectiveDetectionRange = (std::max)(effectiveDetectionRange, GetParameters()->detectionRange);
     }
@@ -193,7 +204,7 @@ void EnemySlime::Update(float deltaTime) {
     const bool canDiveAtTarget = targetDistance <= effectiveDetectionRange && targetDistance >= attack.minRange;
 
     // 待機・徘徊中に敵を発見したら、溜めより先に気付き演出を終えます。
-    if (moveState_ == MoveState::Wander &&
+    if (moveState_ == MoveState::kWander &&
         UpdateNoticeReaction(deltaTime, targetDistance, effectiveDetectionRange, targetDirection)) {
         FaceDirection(targetDirection, deltaTime * 10.0f);
         SetVelocity({0.0f, GetVelocity().y, 0.0f});
@@ -202,38 +213,42 @@ void EnemySlime::Update(float deltaTime) {
         return;
     }
 
-    if (moveState_ == MoveState::Dive && IsGrounded() && diveTimer_ > 0.18f && GetVelocity().y <= 0.0f) {
+    if (moveState_ == MoveState::kDive && IsGrounded() && diveTimer_ > 0.18f && GetVelocity().y <= 0.0f) {
         // 跳び始めの接地判定で即座に着地扱いしないよう、最短滞空時間を設ける。
         BeginLandingRecovery();
     }
 
-    if (moveState_ == MoveState::Recover) {
+    if (moveState_ == MoveState::kRecover) {
         // 着地後は勢いを落としてから次の行動を選びます。
         UpdateLandingRecovery(deltaTime);
-    } else if (moveState_ == MoveState::Rise) {
+    } else if (moveState_ == MoveState::kRise) {
         // 上昇中は対象へ向き直り、頂点で突進へ切り替えます。
         UpdateRise(deltaTime);
-    } else if (moveState_ == MoveState::Dive) {
+    } else if (moveState_ == MoveState::kDive) {
         // 突進中は過去の予兆を消し、追尾と体当たりの動きを維持します。
         UpdateDive(deltaTime);
     } else if (IsGrounded()) {
         // 接地中の待機・溜めだけ、射程に応じて次の攻撃か徘徊を選びます。
+        // 攻撃可能な最小距離から実効探知距離までの範囲に標的がいるときだけ溜める。
         if (canDiveAtTarget) {
             UpdateCharge(deltaTime, targetDirection, targetDistance);
+        // 標的が近すぎるか遠すぎるときは溜めを解除して徘徊に戻る。
         } else {
             UpdateWander(deltaTime);
         }
+    // 空中の通常移動では溜めも徘徊も始めず、床に残る予兆を消す。
     } else {
         HideAttackTelegraph();
     }
 
+    // 遷移後の状態で描画姿勢を更新してから、基底側に毎フレームの更新を引き渡す。
     ApplySlimeAnimation(deltaTime);
     BaseEnemy::Update(deltaTime);
 }
 
 float EnemySlime::GetBodyAttackDamage() const {
     // 接触ダメージは突進中だけ有効にし、溜め・着地中の接触を攻撃にしない。
-    return moveState_ == MoveState::Dive ? GetAttackDefinition(kDiveAttackId).damage : 0.0f;
+    return moveState_ == MoveState::kDive ? GetAttackDefinition(kDiveAttackId).damage : 0.0f;
 }
 
 void EnemySlime::EnsureBaseScale() {
@@ -245,6 +260,7 @@ void EnemySlime::EnsureBaseScale() {
     baseScale_ = GetScale();
     const float maxScale = (std::max)({std::abs(baseScale_.x), std::abs(baseScale_.y), std::abs(baseScale_.z)});
 
+    // 配置スケールの全成分が絶対値で1.2未満のときだけ、既定の大きさに置き換える。
     if (maxScale < 1.2f) {
         baseScale_ = {2.0f, 2.0f, 2.0f};
         SetScale(baseScale_);
@@ -260,6 +276,7 @@ void EnemySlime::ResetVisualPose() {
     visualRotation_ = {0.0f, 0.0f, 0.0f};
     visualRotationVelocity_ = {0.0f, 0.0f, 0.0f};
 
+    // 描画側が既に作られていれば、描画側に残っていた変形も初期化する。
     if (engine::MeshRenderer* renderer = GetMeshRenderer()) {
         renderer->ResetVisualTransform();
     }
@@ -268,6 +285,7 @@ void EnemySlime::ResetVisualPose() {
 engine::Vector3 EnemySlime::CalculateGroundedVisualOffset(const engine::Vector3& visualScale) const {
     const engine::Model* model = GetModel();
 
+    // モデルが目に見える底面の基準を持たない場合、補正せずゼロを返す。
     if (!model) {
         return {0.0f, 0.0f, 0.0f};
     }
@@ -283,6 +301,7 @@ engine::Vector3 EnemySlime::CalculateGroundedVisualOffset(const engine::Vector3&
 engine::Vector3 EnemySlime::CalculateDiveVisualOffset(const engine::Vector3& visualScale, const engine::Vector3& visualRotation) const {
     const engine::Model* model = GetModel();
 
+    // モデルがなければ顔の位置を求められないため、補正はゼロとする。
     if (!model) {
         return {0.0f, 0.0f, 0.0f};
     }
@@ -300,19 +319,19 @@ engine::Vector3 EnemySlime::CalculateDiveVisualOffset(const engine::Vector3& vis
 const char* EnemySlime::GetDebugMoveStateName() const {
     // 内部状態をプレビューで識別できる短い表示名へ変換する。
     switch (moveState_) {
-    case MoveState::Charge:
+    case MoveState::kCharge:
         return "溜め";
 
-    case MoveState::Rise:
+    case MoveState::kRise:
         return "上昇";
 
-    case MoveState::Dive:
+    case MoveState::kDive:
         return "突進";
 
-    case MoveState::Recover:
+    case MoveState::kRecover:
         return "着地反発";
 
-    case MoveState::Wander:
+    case MoveState::kWander:
     default:
         return "待機・移動";
     }
@@ -321,6 +340,7 @@ const char* EnemySlime::GetDebugMoveStateName() const {
 engine::Vector3 EnemySlime::GetTargetPlanarDirection(float* outDistance) const {
     // 距離は水平面で測り、対象不在なら現在向きを返して攻撃方向を安定させる。
     if (!GetTarget()) {
+        // 距離を受け取る引数がある場合は、標的不在を0として返す。
         if (outDistance) {
             *outDistance = 0.0f;
         }
@@ -336,6 +356,7 @@ engine::Vector3 EnemySlime::GetTargetPlanarDirection(float* outDistance) const {
 
     const float distance = PlanarLength(toTarget);
 
+    // 距離の受け取り先が指定されていればワールド座標上の水平距離を書き込む。
     if (outDistance) {
         *outDistance = distance;
     }
@@ -353,19 +374,20 @@ void EnemySlime::FaceDirection(const engine::Vector3& direction, float turnRate)
     // 最短角補間で対象へ向け、±π付近で長回りしないようにする。
     const float length = PlanarLength(direction);
 
+    // 水平の向きを決められないときは現在のYawを保持する。
     if (length <= 0.0001f) {
         return;
     }
 
-    static engine::Math math;
+    static engine::Math sMath;
     const float targetYaw = std::atan2(direction.x, direction.z) + kSlimeModelYawOffset;
-    SetRotationY(math.LerpShortAngle(GetRotation().y, targetYaw, Clamp01(turnRate)));
+    SetRotationY(sMath.LerpShortAngle(GetRotation().y, targetYaw, Clamp01(turnRate)));
 }
 
 void EnemySlime::UpdateWander(float deltaTime) {
     // 攻撃用タイマーを消して巡回へ戻し、移動中は一定間隔で小さく跳ねる。
     HideAttackTelegraph();
-    moveState_ = MoveState::Wander;
+    moveState_ = MoveState::kWander;
     chargeTimer_ = 0.0f;
     riseTimer_ = 0.0f;
     diveTimer_ = 0.0f;
@@ -380,12 +402,14 @@ void EnemySlime::UpdateWander(float deltaTime) {
     engine::Vector3 wanderDirection = NormalizePlanarOr(wanderVelocity, GetFacingPlanarDirection());
     const float wanderPlanarSpeed = PlanarLength(wanderVelocity);
 
+    // 巡回速度が0.05を超えたときだけ、移動方向へ向き直る。
     if (wanderPlanarSpeed > 0.05f) {
         FaceDirection(wanderDirection, 0.08f);
     }
 
     jumpTimer_ += deltaTime;
 
+    // 小跳びの間隔が経過し、巡回の移動方向もある場合に跳躍を始める。
     if (jumpTimer_ >= kWanderHopInterval && wanderPlanarSpeed > 0.05f) {
         const float jumpPower = GetParameters()->jumpPower > 0.0f ? GetParameters()->jumpPower * 0.46f : 7.5f;
         SetVelocityX(wanderDirection.x * wanderSpeed);
@@ -395,13 +419,14 @@ void EnemySlime::UpdateWander(float deltaTime) {
         return;
     }
 
+    // 跳躍を始めないフレームでは、残っている水平速度を減衰させる。
     SetVelocityX(GetVelocity().x * (0.82f));
     SetVelocityZ(GetVelocity().z * (0.82f));
 }
 
 void EnemySlime::UpdateCharge(float deltaTime, const engine::Vector3& direction, float distance) {
     // 進行率に応じて突進予定線と演出を強め、警告の後に上昇へ切り替える。
-    moveState_ = MoveState::Charge;
+    moveState_ = MoveState::kCharge;
     jumpTimer_ = 0.0f;
     diveDirection_ = NormalizePlanarOr(direction, diveDirection_);
 
@@ -419,6 +444,7 @@ void EnemySlime::UpdateCharge(float deltaTime, const engine::Vector3& direction,
     SpawnChargeVortexEffect(deltaTime, chargeRate);
     FaceDirection(diveDirection_, 0.11f + chargeRate * 0.10f);
 
+    // 溜めの間は水平に移動させず、今のフレームの経過時間を積む。
     SetVelocityX(0.0f);
     SetVelocityZ(0.0f);
     chargeTimer_ += deltaTime;
@@ -426,11 +452,13 @@ void EnemySlime::UpdateCharge(float deltaTime, const engine::Vector3& direction,
     // 警告の強調は設定の残り時間に入った時の一回に限り、溜めの満了後に飛びます。
     const float remainingChargeTime = (std::max)(0.0f, chargeDuration - chargeTimer_);
 
+    // 警告が未発動で、残り時間が設定の先行秒数以下になった場合だけ強調する。
     if (!attackWarningTriggered_ && remainingChargeTime <= attack.warningLeadTime) {
         TriggerAttackTelegraphCue({1.0f, 0.34f, 0.78f, 1.0f});
         attackWarningTriggered_ = true;
     }
 
+    // 溜めが満了したフレームにBeginRiseで離陸させる。
     if (chargeTimer_ >= chargeDuration) {
         BeginRise(diveDirection_);
     }
@@ -438,7 +466,7 @@ void EnemySlime::UpdateCharge(float deltaTime, const engine::Vector3& direction,
 
 void EnemySlime::BeginRise(const engine::Vector3& direction) {
     // 予兆を消して水平速度を止め、上昇と落下を別段階にする。
-    moveState_ = MoveState::Rise;
+    moveState_ = MoveState::kRise;
     chargeTimer_ = 0.0f;
     riseTimer_ = 0.0f;
     diveTimer_ = 0.0f;
@@ -449,9 +477,11 @@ void EnemySlime::BeginRise(const engine::Vector3& direction) {
     landingSquashTimer_ = 0.0f;
     diveDirection_ = NormalizePlanarOr(direction, GetFacingPlanarDirection());
 
+    // 床の予兆を消したうえで、離陸地点に発射直前の見た目を出す。
     HideAttackTelegraph();
     SpawnLaunchEffect();
 
+    // 接地状態を解除し、真上向きの初速を与えて上昇を始める。
     SetGrounded(false);
     SetVelocityX(0.0f);
     SetVelocityZ(0.0f);
@@ -475,6 +505,7 @@ void EnemySlime::UpdateRise(float deltaTime) {
     const bool reachedApex = riseTimer_ >= kRiseApexMinTime && GetVelocity().y <= 0.0f;
     const bool forcedDive = riseTimer_ >= kRiseMaxDuration;
 
+    // 最低時間を過ぎて上向き速度がなくなったか、上昇時間が上限に達した場合は突進へ移る。
     if (reachedApex || forcedDive) {
         SpawnApexEffect();
         BeginDive(diveDirection_, distance);
@@ -483,7 +514,7 @@ void EnemySlime::UpdateRise(float deltaTime) {
 
 void EnemySlime::BeginDive(const engine::Vector3& direction, float distance) {
     // 対象距離と攻撃JSONの速度範囲から突進速度を決め、下向き速度で開始する。
-    moveState_ = MoveState::Dive;
+    moveState_ = MoveState::kDive;
     chargeTimer_ = 0.0f;
     diveTimer_ = 0.0f;
     chargeEffectTimer_ = 0.0f;
@@ -494,11 +525,13 @@ void EnemySlime::BeginDive(const engine::Vector3& direction, float distance) {
     HideAttackTelegraph();
     diveDirection_ = NormalizePlanarOr(direction, GetFacingPlanarDirection());
 
+    // 離れた標的ほど初速を上げる。敵の移動設定も加味し、攻撃設定の速度範囲に収める。
     const float speedFromDistance = distance * kDiveDistanceSpeedRate;
     const float speedFromStatus = GetParameters().has_value() ? GetParameters()->speed * 2.0f : 0.0f;
     const EnemyAttackDefinition& attack = GetAttackDefinition(kDiveAttackId);
     diveSpeed_ = std::clamp(attack.minSpeed + speedFromDistance + speedFromStatus, attack.minSpeed, attack.maxSpeed);
 
+    // 確定した向きと初速を適用し、下向きの移動を始める。
     SetVelocityX(diveDirection_.x * diveSpeed_);
     SetVelocityZ(diveDirection_.z * diveSpeed_);
     SetVelocityY(kDiveStartDownSpeed);
@@ -514,6 +547,7 @@ void EnemySlime::UpdateDive(float deltaTime) {
     float distance = 0.0f;
     engine::Vector3 targetDirection = GetTargetPlanarDirection(&distance);
 
+    // 水平距離が0.65を超える間だけ追尾し、通過直前に急旋回しないようにする。
     if (distance > 0.65f) {
         const float steerRate = deltaTime * kDiveSteerStrength;
         engine::Vector3 blended = {LerpFloat(diveDirection_.x, targetDirection.x, steerRate), 0.0f,
@@ -522,6 +556,7 @@ void EnemySlime::UpdateDive(float deltaTime) {
         FaceDirection(diveDirection_, 0.22f);
     }
 
+    // 水平速度は設定の攻撃時間に対する進行率に合わせ、前半から後半へ加速する。
     const float activeDuration = (std::max)(0.01f, GetAttackDefinition(kDiveAttackId).activeDuration);
     const float curveRate = Easing::SmoothStep01(diveTimer_ / activeDuration);
     const float targetSpeed = diveSpeed_ * (1.0f + curveRate * 0.34f);
@@ -534,6 +569,7 @@ void EnemySlime::UpdateDive(float deltaTime) {
     const float targetYSpeed = LerpFloat(kDiveStartDownSpeed, kDiveDropSpeed, diveRate);
     SetVelocityY(LerpFloat(GetVelocity().y, targetYSpeed, deltaTime * 22.0f));
 
+    // 設定上の攻撃時間を超えても着地までは突進を続けるため、演出の経過時間だけ上限に留める。
     if (diveTimer_ > activeDuration) {
         diveTimer_ = activeDuration;
     }
@@ -541,7 +577,7 @@ void EnemySlime::UpdateDive(float deltaTime) {
 
 void EnemySlime::BeginLandingRecovery() {
     // 着地の衝撃を一度だけ出し、硬直中は水平速度を落として再突進を防ぐ。
-    moveState_ = MoveState::Recover;
+    moveState_ = MoveState::kRecover;
     recoverTimer_ = GetAttackDefinition(kDiveAttackId).recoveryDuration;
     landingSquashTimer_ = kLandingSquashDuration;
     chargeTimer_ = 0.0f;
@@ -551,10 +587,12 @@ void EnemySlime::BeginLandingRecovery() {
     chargeDebrisTimer_ = 0.0f;
     chargeVortexTimer_ = 0.0f;
     diveTrailTimer_ = 0.0f;
+    // 着地の演出を発生させ、この時点の水平速度を一度大きく落とす。
     SpawnLandingEffect();
     SetVelocityX(GetVelocity().x * (0.34f));
     SetVelocityZ(GetVelocity().z * (0.34f));
 
+    // 着地点へ向かう負の縦速度だけを止める。
     if (GetVelocity().y < 0.0f) {
         SetVelocityY(0.0f);
     }
@@ -568,8 +606,9 @@ void EnemySlime::UpdateLandingRecovery(float deltaTime) {
     SetVelocityX(GetVelocity().x * (0.62f));
     SetVelocityZ(GetVelocity().z * (0.62f));
 
+    // 硬直の残り時間がなくなったら、次の更新で行動を選べるようにする。
     if (recoverTimer_ <= 0.0f) {
-        moveState_ = MoveState::Wander;
+        moveState_ = MoveState::kWander;
     }
 }
 
@@ -582,6 +621,7 @@ void EnemySlime::SpawnChargePulseEffect(float deltaTime, float chargeRate) {
     chargeEffectTimer_ += deltaTime;
     const float interval = (std::max)(0.34f, kChargePulseInterval - chargeRate * 0.12f);
 
+    // 今回の輪を出す間隔に届いていなければ、床にも本体にも新しい演出を出さない。
     if (chargeEffectTimer_ < interval) {
         return;
     }
@@ -594,6 +634,7 @@ void EnemySlime::SpawnChargePulseEffect(float deltaTime, float chargeRate) {
     const char* windupVfx = attack.windupVfx.empty() ? kChargePulseEffectPath : attack.windupVfx.c_str();
     SpawnMeshEffectAtSafe(windupVfx, position, {0.0f, 0.0f, 0.0f}, {scale, 0.9f, scale});
 
+    // 溜めが52%を超えたときは、床の輪に加えて胴の高さに閃光を置く。
     if (chargeRate > 0.52f) {
         engine::Vector3 corePosition = GetTranslate();
         corePosition.y += (std::max)(0.45f, GetScale().y * 0.28f);
@@ -612,6 +653,7 @@ void EnemySlime::SpawnChargeDebrisEffect(float deltaTime, float chargeRate) {
     chargeDebrisTimer_ += deltaTime;
     const float interval = (std::max)(0.38f, kChargeDebrisInterval - chargeRate * 0.12f);
 
+    // 小石用の間隔が満了するまで、前回の破片の演出を継続させる。
     if (chargeDebrisTimer_ < interval) {
         return;
     }
@@ -623,6 +665,7 @@ void EnemySlime::SpawnChargeDebrisEffect(float deltaTime, float chargeRate) {
 
 void EnemySlime::SpawnChargeVortexEffect(float deltaTime, float chargeRate) {
     // 本体の周囲に回転する軌跡を配置し、中心へ向く姿勢を毎回計算する。
+    // 溜めが42%に届くまでは軌跡の発生間隔を数え始めない。
     if (chargeRate < 0.42f) {
         return;
     }
@@ -630,12 +673,14 @@ void EnemySlime::SpawnChargeVortexEffect(float deltaTime, float chargeRate) {
     chargeVortexTimer_ += deltaTime;
     const float interval = (std::max)(0.22f, kChargeVortexInterval - chargeRate * 0.05f);
 
+    // 軌跡用の間隔を過ぎたフレームだけ、新しい一筋を生成する。
     if (chargeVortexTimer_ < interval) {
         return;
     }
 
     chargeVortexTimer_ = 0.0f;
 
+    // 床からの高さと回転角を溜めの進捗に合わせ、中心へ向く位置と角度を作る。
     const engine::Vector3 center = ResolveSlimeGroundEffectPosition(GetTranslate(), 0.30f + chargeRate * 0.24f);
     const float baseAngle = idleTimer_ * (7.4f + chargeRate * 3.2f);
     const float radius = (std::max)(0.48f, 1.20f - chargeRate * 0.34f + std::sin(idleTimer_ * 13.0f) * 0.08f);
@@ -667,12 +712,14 @@ void EnemySlime::SpawnDiveTrailEffect(float deltaTime) {
     // 移動方向の後方へ一定間隔で軌跡を出し、突進が進むほど長くする。
     diveTrailTimer_ -= deltaTime;
 
+    // 次の軌跡まで残り時間があれば、今回は生成しない。
     if (diveTrailTimer_ > 0.0f) {
         return;
     }
 
     diveTrailTimer_ = kDiveTrailInterval;
 
+    // 新しい軌跡は敵の後方に置き、突進の進捗に応じて長くする。
     engine::Vector3 position = GetTranslate();
     position.x -= diveDirection_.x * 0.52f;
     position.y += 0.22f;
@@ -692,6 +739,7 @@ void EnemySlime::SpawnLandingEffect() {
     const EnemyAttackDefinition& attack = GetAttackDefinition(kDiveAttackId);
     const char* impactVfx = attack.impactVfx.empty() ? kLandingRingEffectPath : attack.impactVfx.c_str();
     SpawnMeshEffectAtSafe(impactVfx, position, {0.0f, 0.0f, 0.0f}, {1.85f, 0.95f, 1.85f});
+    // 閃光は床から浮かせ、衝撃の弧は突進方向とそれに直交する方向へ出す。
     engine::Vector3 flashPosition = position;
     flashPosition.y += 0.34f;
     SpawnMeshEffectAtSafe(kLandingCoreEffectPath, flashPosition, MakeDiveEffectRotation(diveDirection_, -0.42f),
@@ -706,8 +754,8 @@ void EnemySlime::SpawnLandingEffect() {
 void EnemySlime::ApplySlimeAnimation(float deltaTime) {
     // 行動ごとの目標変形を作り、ばねで補間して物理判定を変えずに見た目だけ動かす。
     engine::Vector3 targetVisualScale = {1.0f, 1.0f, 1.0f};
-    engine::Vector3 targetVisualRotation = engine::Vector3::ZERO;
-    SlimeBounceAnimator::Params bounceParams;
+    engine::Vector3 targetVisualRotation = engine::Vector3::kZero;
+    slimeBounceAnimator::Params bounceParams;
     bounceParams.speedForFullBounce = 2.2f;
     bounceParams.idleAmplitude = 0.055f;
     bounceParams.moveAmplitude = 0.22f;
@@ -723,7 +771,7 @@ void EnemySlime::ApplySlimeAnimation(float deltaTime) {
                        std::abs(baseScale_.z) > 0.0001f ? absoluteScale.z / baseScale_.z : 1.0f};
     };
 
-    if (moveState_ == MoveState::Charge) {
+    if (moveState_ == MoveState::kCharge) {
         // 溜めが深くなるほど縦に縮め、離陸直前の踏ん張りを見せます。
         const float windupDuration = (std::max)(0.01f, GetAttackDefinition(kDiveAttackId).windupDuration);
         const float chargeRate = Easing::SmoothStep01(chargeTimer_ / windupDuration);
@@ -735,14 +783,14 @@ void EnemySlime::ApplySlimeAnimation(float deltaTime) {
         const float wobble = std::sin(idleTimer_ * 27.0f) * chargeRate * 0.055f;
         targetVisualRotation.x = -diveDirection_.z * wobble;
         targetVisualRotation.z = diveDirection_.x * wobble;
-    } else if (moveState_ == MoveState::Rise) {
+    } else if (moveState_ == MoveState::kRise) {
         // 離陸直後の勢いと上昇速度に合わせ、頭上方向への伸びを作ります。
         const float release = 1.0f - Easing::SmoothStep01(riseTimer_ / 0.30f);
         const float verticalSpeedRate = Clamp01(std::abs(GetVelocity().y) / kRiseJumpSpeed);
         const float riseStretch = 0.34f + verticalSpeedRate * 0.16f + release * 0.10f;
         targetVisualScale = {1.0f - riseStretch * 0.42f, 1.0f + riseStretch, 1.0f - riseStretch * 0.34f};
         targetVisualRotation.x = -0.08f * release;
-    } else if (moveState_ == MoveState::Dive) {
+    } else if (moveState_ == MoveState::kDive) {
         // 速度と進行度で進行方向に伸ばし、横幅は逆平方根で抑えて体積の急増を防ぐ。
         const float activeDuration = (std::max)(0.01f, GetAttackDefinition(kDiveAttackId).activeDuration);
         const float divePose = Easing::SmoothStep01(diveTimer_ / activeDuration);
@@ -757,19 +805,22 @@ void EnemySlime::ApplySlimeAnimation(float deltaTime) {
         const float flightPitch = std::atan2(GetVelocity().y, (std::max)(planarSpeed, 0.001f));
         targetVisualRotation.x = std::clamp(flightPitch, -1.10f, 0.30f);
         targetVisualRotation.z = flutter * 1.8f;
-    } else if (moveState_ == MoveState::Recover) {
+    } else if (moveState_ == MoveState::kRecover) {
         // 着地時の潰れから一度伸び、その後通常形へ戻る三段階の反動を作る。
         const float recoveryDuration = (std::max)(0.01f, GetAttackDefinition(kDiveAttackId).recoveryDuration);
         const float recoveryProgress = Clamp01((recoveryDuration - recoverTimer_) / recoveryDuration);
 
+        // 着地直後は縦につぶれた姿勢から少し高さを取り戻す。
         if (recoveryProgress < 0.30f) {
             const float phase = Easing::SmoothStep01(recoveryProgress / 0.30f);
             targetVisualScale = {LerpFloat(1.40f, 1.23f, phase), LerpFloat(0.56f, 0.72f, phase),
                                  LerpFloat(1.32f, 1.18f, phase)};
+        // 中盤は反動を強め、横幅を絞って一度上へ伸ばす。
         } else if (recoveryProgress < 0.64f) {
             const float phase = Easing::SmoothStep01((recoveryProgress - 0.30f) / 0.34f);
             targetVisualScale = {LerpFloat(1.23f, 0.92f, phase), LerpFloat(0.72f, 1.24f, phase),
                                  LerpFloat(1.18f, 0.94f, phase)};
+        // 硬直の後半で伸びを減らして元の寸法に戻す。
         } else {
             const float phase = Easing::SmoothStep01((recoveryProgress - 0.64f) / 0.36f);
             targetVisualScale = {LerpFloat(0.92f, 1.0f, phase), LerpFloat(1.24f, 1.0f, phase),
@@ -782,20 +833,22 @@ void EnemySlime::ApplySlimeAnimation(float deltaTime) {
     } else if (!IsGrounded()) {
         // 攻撃動作に該当しない空中姿勢は、共通の跳ねアニメーションを使います。
         targetVisualScale =
-            toVisualScale(SlimeBounceAnimator::MakeScale(baseScale_, GetVelocity(), idleTimer_, false, bounceParams));
+            toVisualScale(slimeBounceAnimator::MakeScale(baseScale_, GetVelocity(), idleTimer_, false, bounceParams));
+    // 通常行動で接地している場合は、共通アニメーションの接地版を使う。
     } else {
         targetVisualScale =
-            toVisualScale(SlimeBounceAnimator::MakeScale(baseScale_, GetVelocity(), idleTimer_, true, bounceParams));
+            toVisualScale(slimeBounceAnimator::MakeScale(baseScale_, GetVelocity(), idleTimer_, true, bounceParams));
     }
 
+    // 目標の拡縮率に上限と下限を設けてからばねを進める。
     targetVisualScale.x = std::clamp(targetVisualScale.x, 0.58f, 1.45f);
     targetVisualScale.y = std::clamp(targetVisualScale.y, 0.48f, 1.55f);
     targetVisualScale.z = std::clamp(targetVisualScale.z, 0.62f, 1.96f);
 
     // 拡縮と傾きに別の減衰を掛け、行動状態を切り替えても見た目が急変しないようにします。
-    SlimeBounceAnimator::StepDampedSpring(visualScale_, visualScaleVelocity_, targetVisualScale, deltaTime, 23.0f,
+    slimeBounceAnimator::StepDampedSpring(visualScale_, visualScaleVelocity_, targetVisualScale, deltaTime, 23.0f,
                                           0.58f);
-    SlimeBounceAnimator::StepDampedSpring(visualRotation_, visualRotationVelocity_, targetVisualRotation, deltaTime,
+    slimeBounceAnimator::StepDampedSpring(visualRotation_, visualRotationVelocity_, targetVisualRotation, deltaTime,
                                           21.0f, 0.68f);
 
     visualScale_.x = std::clamp(visualScale_.x, 0.58f, 1.50f);
@@ -805,12 +858,13 @@ void EnemySlime::ApplySlimeAnimation(float deltaTime) {
     // 被弾の変形をばねの現在値に重ねます。ばね自体の状態には被弾姿勢を持ち越しません。
     engine::Vector3 renderedScale = visualScale_;
     engine::Vector3 renderedRotation = visualRotation_;
-    engine::Vector3 reactionOffset = engine::Vector3::ZERO;
+    engine::Vector3 reactionOffset = engine::Vector3::kZero;
     ApplyDamageReactionPose(renderedScale, renderedRotation, &reactionOffset);
     renderedScale.x = std::clamp(renderedScale.x, 0.52f, 1.58f);
     renderedScale.y = std::clamp(renderedScale.y, 0.40f, 1.68f);
     renderedScale.z = std::clamp(renderedScale.z, 0.52f, 2.10f);
 
+    // 実体の寸法は配置時の値へ戻し、向きは水平回転だけを残す。
     SetScale(baseScale_);
     const float yaw = GetRotation().y;
     SetRotation({0.0f, yaw, 0.0f});
@@ -818,11 +872,13 @@ void EnemySlime::ApplySlimeAnimation(float deltaTime) {
     // 描画側だけを補正します。突進では顔側、接地中は底面を固定して身体の伸縮を見せます。
     if (engine::MeshRenderer* renderer = GetMeshRenderer()) {
         const bool keepGroundContact =
-            IsGrounded() || moveState_ == MoveState::Charge || moveState_ == MoveState::Recover;
-        engine::Vector3 visualOffset = engine::Vector3::ZERO;
+            IsGrounded() || moveState_ == MoveState::kCharge || moveState_ == MoveState::kRecover;
+        engine::Vector3 visualOffset = engine::Vector3::kZero;
 
-        if (moveState_ == MoveState::Dive) {
+        // 突進中はモデルの前端を固定し、変形量だけ後ろへ逃がす。
+        if (moveState_ == MoveState::kDive) {
             visualOffset = CalculateDiveVisualOffset(renderedScale, renderedRotation);
+        // 突進以外の接地姿勢では、底面の高さを基準に補正する。
         } else if (keepGroundContact) {
             visualOffset = CalculateGroundedVisualOffset(renderedScale);
         }

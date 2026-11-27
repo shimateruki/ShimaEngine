@@ -10,15 +10,15 @@
 
 // キャラクター、カメラ、演出オブジェクトで共通利用する補間関数です。
 // フレームレートに依存しない追従と、回転の最短経路補間を一か所へまとめます。
-namespace AnimationInterpolation {
+namespace animationInterpolation {
 
 /// <summary>補間率へ適用する加減速カーブの種類。</summary>
 enum class EasingType {
-    Linear = 0,
-    EaseIn = 1,
-    EaseOut = 2,
-    EaseInOut = 3,
-    SmootherStep = 4
+    kLinear = 0,
+    kEaseIn = 1,
+    kEaseOut = 2,
+    kEaseInOut = 3,
+    kSmootherStep = 4
 };
 
 /// <summary>補間率を 0～1 に収めます。</summary>
@@ -33,21 +33,24 @@ inline float Clamp01(float value) {
 inline float ApplyEasing(float value, EasingType type) {
     const float t = Clamp01(value);
     switch (type) {
-    case EasingType::EaseIn:
+    // 開始側を緩やかにし、終端に近づくにつれて速く進める三次曲線。
+    case EasingType::kEaseIn:
         return t * t * t;
     // 残り時間を三乗してから1から引き、開始側の加速曲線を終了側の減速へ反転します。
-    case EasingType::EaseOut: {
+    case EasingType::kEaseOut: {
         const float inv = 1.0f - t;
         return 1.0f - inv * inv * inv;
     }
-    case EasingType::EaseInOut:
+    // 前半の加速と後半の減速を中央の0.5でつなぐ。
+    case EasingType::kEaseInOut:
         return t < 0.5f
             ? 4.0f * t * t * t
             : 1.0f - std::pow(-2.0f * t + 2.0f, 3.0f) * 0.5f;
     // 始点と終点の速度と加速度を0にする五次曲線です。
-    case EasingType::SmootherStep:
+    case EasingType::kSmootherStep:
         return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
-    case EasingType::Linear:
+    // 線形と対応外の指定は、範囲内に収めた元の進行率を使う。
+    case EasingType::kLinear:
     default:
         return t;
     }
@@ -80,6 +83,7 @@ inline engine::Vector3 Lerp(const engine::Vector3& start, const engine::Vector3&
 /// <param name="deltaTime">経過秒数。0 以下なら停止します。</param>
 /// <returns>このフレームに適用する 0～1 の割合。</returns>
 inline float FollowAlpha(float response, float deltaTime) {
+    // 経過が進んでいないか、追従係数が正でなければ現在値を保つ。
     if (deltaTime <= 0.0f || response <= 0.0f) {
         return 0.0f;
     }
@@ -135,10 +139,11 @@ inline engine::Vector3 DampEuler(const engine::Vector3& currentEuler, const engi
 /// <remarks>区間長が 0 に近いときは、終端へ到達したかどうかで 0 または 1 を返します。</remarks>
 inline float SegmentRate(float time, float startTime, float endTime) {
     const float duration = endTime - startTime;
+    // 同じ時刻のキーや逆順の区間では補間せず、終了時刻への到達だけで0または1を返す。
     if (duration <= 0.0001f) {
         return time >= endTime ? 1.0f : 0.0f;
     }
     return Clamp01((time - startTime) / duration);
 }
 
-} // namespace AnimationInterpolation
+} // namespace animationInterpolation

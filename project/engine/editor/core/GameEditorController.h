@@ -91,7 +91,7 @@ void DrawToolWindows(
 		float drawTimeMs,
 		float* updateTimeHistory,
 		float* drawTimeHistory,
-		int timeHistoryIndex);
+		std::int32_t timeHistoryIndex);
 
 	/// <summary>保留中の素材サムネイルを撮影する。</summary>
 	void CapturePendingThumbnails();
@@ -137,9 +137,9 @@ void DrawToolWindows(
 	DebugEditor* GetDebugEditor() const { return debugEditor_.get(); }
 
 private:
-    enum class WorkspacePreset : int {
-        Vfx = 0,
-        Animation,
+    enum class WorkspacePreset : std::int32_t {
+        kVfx = 0,
+        kAnimation,
     };
 
     /// <summary>指定した作業領域の窓配置を適用する。</summary>
@@ -217,7 +217,7 @@ bool HasUnsavedEditorChanges() const;
 		float drawTimeMs,
 		float* updateTimeHistory,
 		float* drawTimeHistory,
-		int timeHistoryIndex);
+		std::int32_t timeHistoryIndex);
 
 private:
 	// 外部のシーン管理と再生状態を借用する。各ツールは下の unique_ptr が所有する。
@@ -270,12 +270,12 @@ private:
 	bool dockspaceInitialized_ = false;
 	bool openUnsavedExitConfirm_ = false;
 
-    int activeWorkspacePreset_ = -1; // 選択中の配置Preset。-1は未選択。
-    int pendingWorkspaceLayout_ = -1; // 次回適用する配置。-1は予約なし。
+    std::int32_t activeWorkspacePreset_ = -1; // 選択中の配置Preset。-1は未選択。
+    std::int32_t pendingWorkspaceLayout_ = -1; // 次回適用する配置。-1は予約なし。
     std::string workspaceStatus_;
 
     bool hasPendingPlayStartPosition_ = false; // 開始位置の上書き予約があるか。
-    engine::Vector3 pendingPlayStartPosition_ = engine::Vector3::ZERO; // 次のPlay開始で使うワールド位置。
+    engine::Vector3 pendingPlayStartPosition_ = engine::Vector3::kZero; // 次のPlay開始で使うワールド位置。
     std::string pendingPlayStartLabel_; // 開始位置の表示用ラベル。
 };
 

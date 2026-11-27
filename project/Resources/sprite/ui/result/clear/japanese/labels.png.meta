@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "f6c6d0e9e899431f88862663f3e4ce83",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/sprite/ui/result/clear/japanese/labels.png",
+  "version": 1
+}

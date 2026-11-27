@@ -17,7 +17,7 @@ namespace engine { class SpriteCommon; }
 // 主な入口：Initialize / SetActive / Update / Draw / Finalize
 class SettingsMenuOverlay {
   public:
-    enum class Result { None, Closed };
+    enum class Result { kNone, kClosed };
 
     /// 設定メニューの表示状態を初期化する。
     SettingsMenuOverlay();
@@ -52,13 +52,13 @@ class SettingsMenuOverlay {
     void RestoreReplayState(const nlohmann::json& state);
 
     // 複数インスタンスを含む表示数で判定し、他画面でも設定UIが入力を使用中か共有する。
-    static bool IsAnyActive() { return activeCount_ > 0; }
+    static bool IsAnyActive() { return sActiveCount > 0; }
 
     // エディターから描画範囲を受け取り、Game View外のクリックを無視します。
-    static void SetEditorViewport(int left, int top, int right, int bottom);
+    static void SetEditorViewport(std::int32_t left, std::int32_t top, std::int32_t right, std::int32_t bottom);
 
   private:
-    enum class Modal { None, Discard, Reset };
+    enum class Modal { kNone, kDiscard, kReset };
 
     // 設定画面の編集値一式。適用・キャンセルに備え、確定済み設定と分けて保持する。
     struct Values {
@@ -85,16 +85,16 @@ class SettingsMenuOverlay {
     void ResetCategory();
 
     /// 現在カテゴリに表示する行数を返す。
-    int RowCount() const;
+    std::int32_t RowCount() const;
 
     /// 選択項目の値を指定方向へ調整する。
-    void Adjust(int direction);
+    void Adjust(std::int32_t direction);
 
     /// 選択行の決定操作を処理する。
     void ActivateRow();
 
     /// 下部の適用・取消操作を処理する。
-    void ActivateFooter(int index);
+    void ActivateFooter(std::int32_t index);
 
     /// 破棄・初期化の確認ダイアログを処理する。
     void HandleModal(bool accept, bool back);
@@ -102,7 +102,7 @@ class SettingsMenuOverlay {
     /// 現在の値と選択状態から描画用 Sprite を構築する。
     void BuildFrame();
 
-    void DrawCursor(int row);
+    void DrawCursor(std::int32_t row);
 
     // JSONの名前で静的な画像・配置を取得し、入力判定と描画で共有する。
     struct LayoutSprite {
@@ -127,7 +127,7 @@ class SettingsMenuOverlay {
 
     void Label(const std::string& id, float x, float y, float height = 22.0f);
 
-    void Number(int value, float x, float y, float height = 22.0f);
+    void Number(std::int32_t value, float x, float y, float height = 22.0f);
 
     void Picture(const std::string& texture, float x, float y, float w, float h, const engine::Vector4& color);
 
@@ -144,26 +144,26 @@ class SettingsMenuOverlay {
     size_t usedSprites_ = 0;
 
     Values original_, draft_; // 開いた時の確定値と、編集中の値。破棄時はoriginal_へ戻す。
-    Modal modal_ = Modal::None;
+    Modal modal_ = Modal::kNone;
     std::string status_;
 
-    int category_ = 0, row_ = 0, scroll_ = 0, footer_ = -1; // カテゴリ・行・スクロール位置。footer_=-1はフッター未選択。
+    std::int32_t category_ = 0, row_ = 0, scroll_ = 0, footer_ = -1; // カテゴリ・行・スクロール位置。footer_=-1はフッター未選択。
     bool active_ = false, suppressInput_ = false; // 画面の開閉状態と、開いた直後の持ち越し入力の抑止状態。
     bool replayOnly_ = false; // 復元表示用の状態。通常の操作・適用と区別する。
 
-    int modalSelection_ = 1;
+    std::int32_t modalSelection_ = 1;
 
     bool dragging_ = false;
     engine::Vector2 previousPointer_{-1000, -1000};
 
     float animationTime_ = 0.f;
 
-    int horizontalHeldDirection_ = 0; // 左右の長押し方向。-1が左、0がなし、1が右。
+    std::int32_t horizontalHeldDirection_ = 0; // 左右の長押し方向。-1が左、0がなし、1が右。
     // 左右の連続調整に使う実時刻はミリ秒。animationTime_の経過秒数とは別に管理する。
     uint64_t horizontalHoldStartMs_ = 0; // 左右キーの長押し開始時刻（ミリ秒）。
     uint64_t horizontalNextRepeatMs_ = 0; // 次の左右リピートを受け付ける時刻（ミリ秒）。
 
-    inline static int activeCount_ = 0;
-    inline static RECT editorViewport_{};
-    inline static bool hasEditorViewport_ = false;
+    inline static std::int32_t sActiveCount = 0;
+    inline static RECT sEditorViewport{};
+    inline static bool sHasEditorViewport = false;
 };

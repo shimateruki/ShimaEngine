@@ -58,7 +58,7 @@ class Character : public engine::Object3D {
     void SetMaxFallSpeed(float maxFallSpeed);
 
     /// <summary>衝突情報に基づいて押し戻しと速度補正を適用する。</summary>
-    void ApplyPhysicsCollision(const CollisionInfo& info, uint32_t attribute);
+    void ApplyPhysicsCollision(const engine::CollisionInfo& info, uint32_t attribute);
 
     /// <summary>Character自身の配置と移動状態を複製する。</summary>
     /// <returns>派生型から呼ばれた場合はnullptr。派生側でCloneを実装する。</returns>
@@ -81,12 +81,12 @@ class Character : public engine::Object3D {
     void RestoreReplayCustomState(const json& state) override;
 
 private:
-    engine::Vector3 velocity_ = engine::Vector3::ZERO; // 現在速度。
+    engine::Vector3 velocity_ = engine::Vector3::kZero; // 現在速度。
     bool isGrounded_ = false;               // 最後の更新で接地しているか。
     bool motorSuspended_ = false;            // 演出が座標を直接決めるフレームだけ有効。
 
 private:
-    engine::Vector3 externalImpulseVelocity_ = engine::Vector3::ZERO;
+    engine::Vector3 externalImpulseVelocity_ = engine::Vector3::kZero;
     float externalImpulseTimer_ = 0.0f;
     float externalImpulseDuration_ = 0.0f;
     CharacterMotor characterMotor_;

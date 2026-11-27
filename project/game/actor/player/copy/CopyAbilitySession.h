@@ -6,7 +6,7 @@
 #include <memory>
 #include <utility>
 
-namespace CopyAbilityDetail {
+namespace copyAbilityDetail {
 // コピー中の能力ごとの状態と演出を持つ境界。攻撃設定は値で保持し、解除時は Cancel で後始末する。
 // 関連：PlayerCopyAbilityControllerが保持する、能力ごとの入力・更新・解放の契約。
 // 主な入口：ProcessInput / Update / Cancel
@@ -28,7 +28,7 @@ class ICopyAbilitySession {
     virtual void NotifyDamageStarted(Player&) {}
 
     // 通常描画用。能力に表示物がなければ既定の空実装を使う。
-    virtual void Draw(Player&, ID3D12Resource*, ID3D12Resource*, engine::Camera*, int) {}
+    virtual void Draw(Player&, ID3D12Resource*, ID3D12Resource*, engine::Camera*, std::int32_t) {}
 
     virtual bool HasOwnedVisuals() const { return false; }
 
@@ -37,7 +37,7 @@ class ICopyAbilitySession {
     virtual void SetPreviewAttackId(const std::string&) {}
 
     // 深度・画面コピーを必要とする表示物の専用パス。通常描画との二重描画を避ける。
-    virtual void DrawOwnedVisuals(Player&, uint32_t, uint32_t, engine::Camera*, int) {}
+    virtual void DrawOwnedVisuals(Player&, uint32_t, uint32_t, engine::Camera*, std::int32_t) {}
 
     // ガード成立時の追加演出を処理した場合のみ true を返します。
     virtual bool NotifyGuardedHit(Player&, const engine::Vector3&) { return false; }
@@ -63,4 +63,4 @@ std::unique_ptr<ICopyAbilitySession> CreateThunderSlimeCopyAbility(const EnemyAt
 std::unique_ptr<ICopyAbilitySession> CreateWindSlimeCopyAbility(const EnemyAttackProfile& profile);
 std::unique_ptr<ICopyAbilitySession> CreateBomberCopyAbility(const EnemyAttackProfile& profile);
 std::unique_ptr<ICopyAbilitySession> CreateCrownCopyAbility(const EnemyAttackProfile& profile);
-} // namespace CopyAbilityDetail
+} // namespace copyAbilityDetail

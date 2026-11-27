@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "ParticleSystem.h"
 #include "RenderStats.h"
 #include "ParticleCommon.h"
@@ -11,11 +12,10 @@
 #include <string>
 #include <numbers>
 
-// 乱数とMathインスタンス
+// 粒子の軸別のばらつきに使う、-1から1までの乱数分布。
 static std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
-static engine::Math math;
+static engine::Math sMath;
 
-// 板ポリゴン頂点
 // 担当：粒子の描画矩形一頂点分の位置とUV。
 // 関連：ParticleSystemの内部処理だけで使う補助型。
 struct ParticleVertex {
@@ -23,23 +23,26 @@ struct ParticleVertex {
     engine::Vector2 texcoord;
 };
 
+// 描画基盤を借用し、画像とGPUバッファを用意する。連続放出は停止した状態で始める。
 void engine::ParticleSystem::Initialize(engine::ParticleCommon* common, const std::string& texturePath) {
     assert(common);
     common_ = common;
 
+    // プリセットに画像が指定されていない場合は、初期化時に受け取った画像パスを使う。
     if (params_.textureName.empty()) {
         params_.textureName = texturePath;
     }
 
-    SetTexture(params_.textureName); // ここでロード＆ハンドル取得
+    SetTexture(params_.textureName);
 
+    // 画像のハンドルと描画用バッファを用意してから、CPU粒子の格納領域と乱数を初期化する。
     assert(textureHandle_ != 0);
     CreateResources();
     particles_.reserve(kMaxParticles);
     std::random_device seedGenerator;
     randomEngine_.seed(seedGenerator());
 
-    // Emitterの初期設定
+    // 連続放出の端数を消し、発生を開始する操作を待つ。
     spawnTimer_ = 0.0f;
     params_.isEmitting = false;
 }
@@ -52,6 +55,7 @@ float engine::ParticleSystem::ResolveEmissionScale(const EmitterParams& params, 
 
     const engine::Camera* camera = CameraManager::GetInstance()->GetActiveCamera();
 
+    // 視点の距離を取れない場合は、LODによる放出量の減少を適用しない。
     if (!camera) {
         return 1.0f;
     }
@@ -73,21 +77,22 @@ std::size_t engine::ParticleSystem::ResolveParticleLimit(const EmitterParams& pa
 }
 
 /// <summary>
-/// 自動エミッターが内部で呼ぶSpawn
+/// 連続放出の設定を使い、エディタープレビューのオフセット込みの位置から1個の生成を試みる。
 /// </summary>
 void engine::ParticleSystem::SpawnFromEmitter() {
     SpawnFromParams(params_, params_.spawnPosition + editorPreviewOffset_);
 }
 
 void engine::ParticleSystem::SpawnFromParams(const EmitterParams& params, const engine::Vector3& origin) {
+    // このエミッターの同時生存数に達していれば、新しい粒子を生成しない。
     if (particles_.size() >= ResolveParticleLimit(params))
         return;
 
     // 出現形状に応じて発生位置と初速を決める。粒子の共通属性は分岐の後で埋める。
     engine::Vector3 pos = origin;
-    engine::Vector3 vel = params.initialVelocity; // 基準速度
+    engine::Vector3 vel = params.initialVelocity;
 
-    if (params.emitterType == EmitterType::Box) {
+    if (params.emitterType == EmitterType::kBox) {
         // Boxは基準位置の各軸へ独立した乱数を加える。
         pos.x += params.spawnArea.x * dis(randomEngine_);
         pos.y += params.spawnArea.y * dis(randomEngine_);
@@ -97,25 +102,27 @@ void engine::ParticleSystem::SpawnFromParams(const EmitterParams& params, const 
         vel.x += params.velocityRandomness.x * dis(randomEngine_);
         vel.y += params.velocityRandomness.y * dis(randomEngine_);
         vel.z += params.velocityRandomness.z * dis(randomEngine_);
-    } else if (params.emitterType == EmitterType::Sphere) {
+    } else if (params.emitterType == EmitterType::kSphere) {
         // Sphereは乱数方向を正規化して球面上の位置を決め、外向きへ飛ばす。
         engine::Vector3 dir = { dis(randomEngine_), dis(randomEngine_), dis(randomEngine_) };
 
-        // 乱数がゼロベクトルになったときは上方向を使う。
         float length = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+        // 一定の長さを持つ乱数方向は、球の半径を掛けられる単位方向へ揃える。
         if (length != 0.0f)
             dir = dir / length;
-        else dir = { 0, 1, 0 }; // ゼロなら上へ
+        // 乱数方向の長さが0なら、球面上の発生方向として上向きを使う。
+        else dir = { 0, 1, 0 };
 
         pos += dir * params.spawnRadius;
 
         // initialVelocityの長さを速度量として使い、方向は球面法線へ置き換える。
         float speed = std::sqrt(vel.x * vel.x + vel.y * vel.y + vel.z * vel.z);
+        // 初速の大きさを受け取っていない場合も、球面から速度1で広がるようにする。
         if (speed == 0)
-            speed = 1.0f; // デフォルトスピード
+            speed = 1.0f;
 
         vel = dir * speed;
-    } else if (params.emitterType == EmitterType::Cone) {
+    } else if (params.emitterType == EmitterType::kCone) {
         // Coneは上方向を基準にX/Zを傾けた方向を作る簡易的な放出形状。
 
         float angleRad = params.coneAngle * (std::numbers::pi_v<float> / 180.0f);
@@ -126,8 +133,8 @@ void engine::ParticleSystem::SpawnFromParams(const EmitterParams& params, const 
         dir.z = dis(randomEngine_) * r;
         dir.y = 1.0f; // 上向き
 
-        // 初速へ使うため方向を正規化する。
         float length = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+        // 方向の長さが0以外なら、円錐の軸へ傾けた方向を正規化する。
         if (length != 0)
             dir = dir / length;
 
@@ -136,6 +143,7 @@ void engine::ParticleSystem::SpawnFromParams(const EmitterParams& params, const 
 
         // 初速の大きさだけ維持し、向きは放出方向へ合わせる。
         float speed = std::sqrt(vel.x * vel.x + vel.y * vel.y + vel.z * vel.z);
+        // 初速の大きさが0の場合は、円錐の放出速度として5を使う。
         if (speed == 0)
             speed = 5.0f;
         vel = dir * speed;
@@ -164,6 +172,7 @@ void engine::ParticleSystem::SpawnFromParams(const EmitterParams& params, const 
     p.sizeOverLife = BakeVfxCurve(params.sizeOverLife, params.startSize);
     p.colorOverLife = BakeVfxGradient(params.colorOverLife, params.startColor);
     p.rotation = 0.0f;
+    // 発生時に選んだ度毎秒の回転速度をラジアン毎秒に変換して保持する。
     float rotSpeedDeg = params.initialRotationSpeed + dis(randomEngine_) * params.rotationSpeedRandomness;
     p.rotationSpeed = rotSpeedDeg * (std::numbers::pi_v<float> / 180.0f);
 
@@ -171,52 +180,56 @@ void engine::ParticleSystem::SpawnFromParams(const EmitterParams& params, const 
 }
 
 /// <summary>
-///手動で（単発で）発生させる関数
+/// ワールド座標の一点から単発で発生させる。方向は省略でき、広がり角はラジアン、寿命は秒で指定する。
 /// </summary>
-void engine::ParticleSystem::SpawnParticles(const engine::Vector3& position, int count,
+void engine::ParticleSystem::SpawnParticles(const engine::Vector3& position, std::int32_t count,
     float initialSpeed, const engine::Vector3* direction, float spreadAngle,
     engine::Vector4 initialColor, engine::Vector4 endColor,
     float lifeTimeMin, float lifeTimeMax,
-    float startSize, float endSize)
-{
+    float startSize, float endSize) {
     // カメラ距離等の放出倍率を先に適用し、上限数を越える前に粒子を止める。
     const float emissionScale = ResolveEmissionScale(params_, position);
 
+    // LODで放出倍率がほぼ0になった場合は、一括の発生処理を行わない。
     if (emissionScale <= 0.0001f) {
         return;
     }
 
-    const int scaledCount = (std::max)(
-        1, static_cast<int>(std::lround(static_cast<float>(count) * emissionScale)));
+    // LODで調整した個数は、放出を許可された場合は最低1個にする。寿命は指定された秒数の範囲で選ぶ。
+    const std::int32_t scaledCount = (std::max)(
+        1, static_cast<std::int32_t>(std::lround(static_cast<float>(count) * emissionScale)));
     const std::size_t particleLimit = ResolveParticleLimit(params_);
     std::uniform_real_distribution<float> lifeDist(lifeTimeMin, lifeTimeMax);
 
-    for (int i = 0; i < scaledCount; ++i) {
+    for (std::int32_t i = 0; i < scaledCount; ++i) {
+        // 生成中に同時生存上限へ達した場合は、残りの生成を打ち切る。
         if (particles_.size() >= particleLimit) {
-            break; // 最大数
+            break;
         }
 
         engine::Vector3 spawnDir;
 
-        if (direction) { // 指定方向に二軸の角度揺れを加える。
+        if (direction) { // 方向の指定があれば、その向きをばらつきの基準にする。
             spawnDir = *direction;
 
+            // 角度の幅が正の場合だけ、指定された発生方向をX軸・Y軸へ揺らす。
             if (spreadAngle > 0.0f) {
                 std::uniform_real_distribution<float> angleDist(-spreadAngle / 2.0f, spreadAngle / 2.0f);
-                engine::Matrix4x4 rotX = math.MakeRotateXMatrix(angleDist(randomEngine_));
-                engine::Matrix4x4 rotY = math.MakeRotateYMatrix(angleDist(randomEngine_));
-                spawnDir = math.TransformNormal(spawnDir, rotX * rotY);
+                engine::Matrix4x4 rotX = sMath.MakeRotateXMatrix(angleDist(randomEngine_));
+                engine::Matrix4x4 rotY = sMath.MakeRotateYMatrix(angleDist(randomEngine_));
+                spawnDir = sMath.TransformNormal(spawnDir, rotX * rotY);
             }
-        } else { // 方向指定なし (ランダム)
+        } else { // 方向を省略した場合は、三軸の乱数から向きを作る。
             std::uniform_real_distribution<float> distance(-1.0f, 1.0f);
             spawnDir = { distance(randomEngine_), distance(randomEngine_), distance(randomEngine_) };
         }
 
-        if (math.Length(spawnDir) < 0.001f) {
-            spawnDir = { 0.0f, 1.0f, 0.0f }; // ゼロベクトル対策
+        // 乱数や入力から有効な向きを得られない場合は、上向きを既定値にする。
+        if (sMath.Length(spawnDir) < 0.001f) {
+            spawnDir = { 0.0f, 1.0f, 0.0f };
         }
 
-        spawnDir = math.Normalize(spawnDir);
+        spawnDir = sMath.Normalize(spawnDir);
 
         // 発生時点の属性と、寿命中に評価するカーブを一粒子分作る。
         Particle p;
@@ -249,45 +262,44 @@ void engine::ParticleSystem::EmitOneShot(const EmitterParams& params, const engi
     // カメラ距離によるLOD倍率と粒子上限を反映して単発放出数を決める。
     const float emissionScale = ResolveEmissionScale(params, position);
 
+    // 指定した発生位置でLOD倍率がほぼ0なら、プリセットからの発生を省く。
     if (emissionScale <= 0.0001f) {
         return;
     }
 
-    const int scaledCount = static_cast<int>(std::lround(static_cast<float>(params.emitCount) * emissionScale));
-    const int count = std::clamp(scaledCount, 1, static_cast<int>(ResolveParticleLimit(params)));
+    const std::int32_t scaledCount = static_cast<std::int32_t>(std::lround(static_cast<float>(params.emitCount) * emissionScale));
+    const std::int32_t count = std::clamp(scaledCount, 1, static_cast<std::int32_t>(ResolveParticleLimit(params)));
     const std::size_t particleLimit = ResolveParticleLimit(params);
 
-    for (int i = 0; i < count && particles_.size() < particleLimit; ++i) {
+    for (std::int32_t i = 0; i < count && particles_.size() < particleLimit; ++i) {
         SpawnFromParams(params, position);
     }
 }
 
 /// <summary>
-/// パーティクル全体の更新
+/// 連続放出を時間に応じて進め、生存粒子の位置と描画用データを更新する。deltaTimeは秒。
 /// </summary>
 void engine::ParticleSystem::Update(float deltaTime) {
     const auto cpuStart = std::chrono::high_resolution_clock::now();
     deltaTime *= simulationTimeScale_;
 
-    // 連続放出は端数を次フレームへ持ち越し、指定秒間レートを維持する。
+    // 放出中で秒間レートが正の場合だけ、LODと経過秒数に応じて連続放出を進める。
     if (params_.isEmitting && params_.particlesPerSecond > 0.0f) {
-        // 1フレームでの発生数を計算
         const engine::Vector3 emitterPosition = params_.spawnPosition + editorPreviewOffset_;
         const float emissionScale = ResolveEmissionScale(params_, emitterPosition);
         float particlesToSpawn = params_.particlesPerSecond * emissionScale * deltaTime;
         spawnTimer_ += particlesToSpawn;
 
-        // 整数個分だけ発生させる
+        // 一フレームで複数個の発生時点を跨いだ場合も順に消費し、1個未満を次回へ残す。
         while (spawnTimer_ >= 1.0f) {
             spawnTimer_ -= 1.0f;
             SpawnFromEmitter();
         }
     }
 
-    // カメラ行列がなければ描画姿勢を作れないため、計測値を残してここで戻る。
     const engine::Camera* camera = CameraManager::GetInstance()->GetActiveCamera();
 
-    // カメラが無い場合の安全対策 (必要に応じて)
+    // カメラがなければ連続放出までで止め、個々の粒子の寿命・姿勢とGPU転送は次回に回す。
     if (!camera) {
         const auto cpuEnd = std::chrono::high_resolution_clock::now();
         lastUpdateCpuTimeMs_ = std::chrono::duration<float, std::milli>(cpuEnd - cpuStart).count();
@@ -297,15 +309,13 @@ void engine::ParticleSystem::Update(float deltaTime) {
     const engine::Matrix4x4& viewMatrix = camera->GetViewMatrix();
     const engine::Matrix4x4& projectionMatrix = camera->GetProjectionMatrix();
 
-    // 定数バッファ用のVP行列更新
-    // ※ matrixData_ がMapされている前提
+    // カメラ行列の転送先が用意できている場合だけ、ビュー射影行列を書き込む。
     if (matrixData_) {
         matrixData_->viewProjection = viewMatrix * projectionMatrix;
     }
 
-    // ビルボード行列計算 (カメラの回転を打ち消す行列)
-    // ビュー行列の逆行列を作り、平行移動成分を消すことで回転成分だけ抽出
-    engine::Matrix4x4 billboardMatrix = math.Inverse(viewMatrix);
+    // ビュー行列の逆行列からカメラの回転を取り出し、粒子を視点へ向ける。
+    engine::Matrix4x4 billboardMatrix = sMath.Inverse(viewMatrix);
     billboardMatrix.m[3][0] = 0.0f;
     billboardMatrix.m[3][1] = 0.0f;
     billboardMatrix.m[3][2] = 0.0f;
@@ -319,14 +329,15 @@ void engine::ParticleSystem::Update(float deltaTime) {
         Particle& p = *it;
         p.currentTime += deltaTime;
 
-        // 寿命尽きチェック
+        // 経過時間が寿命以上になった粒子は、そのフレームの描画データから外す。
         if (p.currentTime >= p.lifeTime) {
-            it = particles_.erase(it); // 寿命で削除
+            it = particles_.erase(it);
             continue;
         }
 
         // 寿命の進行度 (0.0:生まれたて -> 1.0:死ぬ直前)
         float lifeRatio = p.currentTime / p.lifeTime;
+        // 寿命に対する進行率が1を越えた場合は、補間終点へ丸める。
         if (lifeRatio > 1.0f)
             lifeRatio = 1.0f;
 
@@ -345,11 +356,12 @@ void engine::ParticleSystem::Update(float deltaTime) {
         currentColor.y *= p.hdrIntensity;
         currentColor.z *= p.hdrIntensity;
 
-        // サイズも新しいカーブを優先し、旧形式の固定10点グラフへ戻せるようにする。
-        // 旧形式の10点サイズカーブを寿命の進行率から選びます。
-        int graphIndex = (int)(lifeRatio * 9.0f);
+        // 旧形式では寿命の進行率を10点のサイズ表の位置へ変換する。
+        std::int32_t graphIndex = (std::int32_t)(lifeRatio * 9.0f);
+        // 進行率から計算した添字が負なら、サイズ曲線の先頭を使う。
         if (graphIndex < 0)
             graphIndex = 0;
+        // 添字が曲線の末尾を越えたら、最後の点を使う。
         if (graphIndex > 9)
             graphIndex = 9;
 
@@ -371,12 +383,12 @@ void engine::ParticleSystem::Update(float deltaTime) {
 
 
         // 粒子面をカメラへ向けたまま、その面内だけで回転させる。
-        engine::Matrix4x4 scaleMatrix = math.MakeScaleMatrix({ currentSize * p.baseScale.x, currentSize * p.baseScale.y, currentSize });
+        engine::Matrix4x4 scaleMatrix = sMath.MakeScaleMatrix({ currentSize * p.baseScale.x, currentSize * p.baseScale.y, currentSize });
 
         // ビルボード回転より前に Z 回転を置き、常にカメラへ向いた面の中で回します。
-        engine::Matrix4x4 rotateMatrix = math.MakeRotateZMatrix(p.rotation);
+        engine::Matrix4x4 rotateMatrix = sMath.MakeRotateZMatrix(p.rotation);
 
-        engine::Matrix4x4 translateMatrix = math.MakeTranslateMatrix(p.position);
+        engine::Matrix4x4 translateMatrix = sMath.MakeTranslateMatrix(p.position);
 
         // 行列の順序はサイズ、面内回転、カメラ向き、配置位置。
         engine::Matrix4x4 worldMatrix = scaleMatrix * rotateMatrix * billboardMatrix * translateMatrix;
@@ -387,7 +399,6 @@ void engine::ParticleSystem::Update(float deltaTime) {
             instancingData_[particleCount_].world = worldMatrix;
             instancingData_[particleCount_].color = currentColor;
 
-            // カウントアップ
             particleCount_++;
         }
 
@@ -399,6 +410,7 @@ void engine::ParticleSystem::Update(float deltaTime) {
 }
 
 void engine::ParticleSystem::Draw() {
+    // 転送した描画対象が0個なら、描画時間を0にしコマンドを発行しない。
     if (particleCount_ == 0) {
         lastDrawCpuTimeMs_ = 0.0f;
         return;
@@ -417,7 +429,7 @@ void engine::ParticleSystem::Draw() {
     commandList->IASetIndexBuffer(&indexBufferView_);
 
     commandList->SetGraphicsRootConstantBufferView(0, matrixResource_->GetGPUVirtualAddress());
-    SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 1, textureHandle_);
+    engine::SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 1, textureHandle_);
 
     commandList->DrawIndexedInstanced(6, particleCount_, 0, 0, 0);
     dxCommon->EndGpuProfile("Particle CPU pass");
@@ -428,10 +440,11 @@ void engine::ParticleSystem::Draw() {
     lastDrawCpuTimeMs_ = std::chrono::duration<float, std::milli>(cpuEnd - cpuStart).count();
 }
 
+// 一枚の四角形を共有し、粒子ごとのワールド行列と色を別バッファへ書く構成を作る。
 void engine::ParticleSystem::CreateResources() {
     engine::DirectXCommon* dxCommon = common_->GetDxCommon();
 
-    // --- 頂点バッファ (四角形) ---
+    // 単位サイズの四角形と画像のUVを頂点バッファに用意する。
     vertexResource_ = dxCommon->CreateBufferResource(sizeof(ParticleVertex) * 4);
     vertexBufferView_ = { vertexResource_->GetGPUVirtualAddress(), sizeof(ParticleVertex) * 4, sizeof(ParticleVertex) };
     ParticleVertex* vertexData = nullptr;
@@ -442,7 +455,7 @@ void engine::ParticleSystem::CreateResources() {
     vertexData[3] = { {  0.5f,  0.5f, 0.0f, 1.0f }, { 1.0f, 0.0f } }; // 右上
     vertexResource_->Unmap(0, nullptr);
 
-    // --- インデックスバッファ ---
+    // 四角形を三角形2枚として描く頂点順を登録する。
     indexResource_ = dxCommon->CreateBufferResource(sizeof(uint32_t) * 6);
     indexBufferView_ = { indexResource_->GetGPUVirtualAddress(), sizeof(uint32_t) * 6, DXGI_FORMAT_R32_UINT };
     uint32_t* indexData = nullptr;
@@ -455,17 +468,18 @@ void engine::ParticleSystem::CreateResources() {
     indexData[5] = 3;
     indexResource_->Unmap(0, nullptr);
 
-    // --- インスタンシング用リソース ---
+    // 最大数までの粒子の描画姿勢と色をまとめて書き込む。
     instancingResource_ = dxCommon->CreateBufferResource(sizeof(ParticleForGpu) * kMaxParticles);
     instancingBufferView_ = { instancingResource_->GetGPUVirtualAddress(), sizeof(ParticleForGpu) * kMaxParticles, sizeof(ParticleForGpu) };
     // 毎フレーム粒子ごとの行列と色を書き込むため、インスタンス用バッファをマップしたまま保持する。
     instancingResource_->Map(0, nullptr, reinterpret_cast<void**>(&instancingData_));
 
-    // --- カメラ行列用リソース ---
+    // 全粒子で共通のビュー射影行列の書き込み先をマップする。
     matrixResource_ = dxCommon->CreateBufferResource(sizeof(TransformationMatrix));
     matrixResource_->Map(0, nullptr, reinterpret_cast<void**>(&matrixData_));
 }
 
+// 表示中の粒子と放出の端数を破棄する。次の更新でも放出設定自体は引き継ぐ。
 void engine::ParticleSystem::Clear() {
     particles_.clear();
     particleCount_ = 0;
@@ -489,6 +503,7 @@ size_t engine::ParticleSystem::GetEstimatedMemoryBytes() const {
     };
 
     for (ID3D12Resource* resource : resources) {
+        // 作成済みのバッファだけを、GPUメモリの推定に含める。
         if (resource) {
             bytes += static_cast<size_t>(resource->GetDesc().Width);
         }
@@ -498,21 +513,22 @@ size_t engine::ParticleSystem::GetEstimatedMemoryBytes() const {
 }
 
 void engine::ParticleSystem::SetTexture(const std::string& texturePath) {
-    // パラメータに名前を記憶
+    // 設定上の画像名も更新し、TextureManagerから描画用ハンドルを取得する。
     params_.textureName = texturePath;
 
-    // テクスチャ読み込み (TextureManagerが重複ロードを防止してくれる前提)
-    textureHandle_ = TextureManager::GetInstance()->Load(texturePath);
+    textureHandle_ = engine::TextureManager::GetInstance()->Load(texturePath);
 }
 
+// ヒット位置に留まって短時間で透明になる、等間隔の光条を並べる。
 void engine::ParticleSystem::SpawnPrimitiveHitEffect(const engine::Vector3& position) {
     std::uniform_real_distribution<float> angleDist(0.0f, std::numbers::pi_v<float>);
     float baseRotation = angleDist(randomEngine_);
 
-    // ① 星型の閃光 (4本のラインで十字を作る)
-    int lineCount = 4;
+    // ランダムな基準角を起点に、半回転の範囲へ4本を等間隔で並べる。
+    std::int32_t lineCount = 4;
 
-    for (int i = 0; i < lineCount; ++i) {
+    for (std::int32_t i = 0; i < lineCount; ++i) {
+        // 全体の粒子数が固定上限へ達した時点で、残りの線を生成しない。
         if (particles_.size() >= kMaxParticles)
             break;
 
@@ -538,24 +554,21 @@ void engine::ParticleSystem::SpawnPrimitiveHitEffect(const engine::Vector3& posi
         particles_.push_back(p);
     }
 
-        // ★ ②の中心のまるフラッシュは削除しました
 }
 
-// ==============================================================
-// ★課題エフェクト①: ランダムZ回転で星型ヒットエフェクト
-//   楕円パーティクルを8個、-π〜πのランダム回転で配置 → 星型/閃光
-// ==============================================================
+// 楕円の粒子を異なるZ回転で重ね、星型のヒット演出を作る。
 void engine::ParticleSystem::SpawnStarHitEffect(const engine::Vector3& position) {
     // Z回転をランダムに (-π〜π)
     std::uniform_real_distribution<float> distRotate(
         -std::numbers::pi_v<float>, std::numbers::pi_v<float>);
 
-    // 縦方向スケールをランダムに (1.0〜3.5) ← 大きめ
+    // 光条ごとの縦倍率をばらつかせ、同じ方向・長さが揃わないようにする。
     std::uniform_real_distribution<float> distScale(1.0f, 3.5f);
 
-    constexpr int kCount = 8;
+    constexpr std::int32_t kCount = 8;
 
-    for (int i = 0; i < kCount; ++i) {
+    for (std::int32_t i = 0; i < kCount; ++i) {
+        // 固定の容量を使い切った場合は、残りの星の光条を生成しない。
         if (particles_.size() >= kMaxParticles)
             break;
 
@@ -568,13 +581,13 @@ void engine::ParticleSystem::SpawnStarHitEffect(const engine::Vector3& position)
         p.startColor = { 1.0f, 1.0f, 1.0f, 1.0f };
         p.endColor   = { 1.0f, 1.0f, 1.0f, 0.0f };
 
-        p.startSize  = 1.5f;   // ← 大きく
-        p.endSize    = 14.0f;  // ← かなり大きく広がる
+        p.startSize  = 1.5f;
+        p.endSize    = 14.0f;
 
         p.rotation      = distRotate(randomEngine_);
         p.rotationSpeed = 0.0f;
         p.acceleration  = { 0.0f, 0.0f, 0.0f };
-        p.hdrIntensity  = 5.0f; // ← 強発光
+        p.hdrIntensity  = 5.0f;
 
         p.baseScale = { 0.04f, distScale(randomEngine_) };
 
@@ -582,20 +595,18 @@ void engine::ParticleSystem::SpawnStarHitEffect(const engine::Vector3& position)
     }
 }
 
-// ==============================================================
-// ★課題エフェクト②: ランダムY-scaleで斬撃エフェクト
-//   縦長パーティクルを3個、Yスケールランダム → 斬撃/スラッシュ
-// ==============================================================
+// 縦長の粒子を重ね、Yスケールのばらつきで斬撃の幅を出す。
 void engine::ParticleSystem::SpawnSlashEffect(const engine::Vector3& position, float baseRotation) {
-    // 縦方向スケールをランダムに (1.5〜4.0) ← 大きめ
+    // 各光条の長さを変えるため、縦倍率を1.5から4.0の範囲で選ぶ。
     std::uniform_real_distribution<float> distScale(1.5f, 4.0f);
 
-    // 回転のゆらぎ
+    // 基準角と光条間の角度にラジアン単位の揺れを加える。
     std::uniform_real_distribution<float> distRotJitter(-0.4f, 0.4f);
 
-    constexpr int kCount = 3;
+    constexpr std::int32_t kCount = 3;
 
-    for (int i = 0; i < kCount; ++i) {
+    for (std::int32_t i = 0; i < kCount; ++i) {
+        // 固定の容量を使い切った時点で、残りの斬撃片を生成しない。
         if (particles_.size() >= kMaxParticles)
             break;
 
@@ -608,8 +619,8 @@ void engine::ParticleSystem::SpawnSlashEffect(const engine::Vector3& position, f
         p.startColor = { 0.8f, 0.9f, 1.0f, 1.0f };
         p.endColor   = { 0.2f, 0.3f, 1.0f, 0.0f };
 
-        p.startSize  = 1.2f;   // ← 大きく
-        p.endSize    = 12.0f;  // ← かなり大きく
+        p.startSize  = 1.2f;
+        p.endSize    = 12.0f;
 
         float randomY   = distScale(randomEngine_);
         p.baseScale     = { 0.06f, randomY }; // X:細い線, Y:ランダム長さ
@@ -617,7 +628,7 @@ void engine::ParticleSystem::SpawnSlashEffect(const engine::Vector3& position, f
         p.rotation      = baseRotation + (i * (std::numbers::pi_v<float> / 3.0f)) + distRotJitter(randomEngine_);
         p.rotationSpeed = 0.0f;
         p.acceleration  = { 0.0f, 0.0f, 0.0f };
-        p.hdrIntensity  = 6.0f; // ← 強い刃の輝き
+        p.hdrIntensity  = 6.0f;
 
         particles_.push_back(p);
     }
@@ -625,20 +636,24 @@ void engine::ParticleSystem::SpawnSlashEffect(const engine::Vector3& position, f
 
 #ifdef USE_IMGUI
 void engine::ParticleSystem::BeginEditorSession() {
+    // すでに編集セッションを開始していれば、退避した通常状態を上書きしない。
     if (editorSession_) return;
     // 通常再生を同じ粒子状態から再開できるよう、乱数の進みと連続放出の端数も退避する。
     savedEditorParams_ = params_; savedEditorRandom_ = randomEngine_;
     savedEditorScale_ = simulationTimeScale_; savedEditorTimer_ = spawnTimer_; savedEditorTexture_ = textureHandle_;
+    // 通常の粒子を退避してから編集用の粒子をゼロにし、専用の初期乱数へ戻す。
     particles_.swap(savedEditorParticles_); ResetSimulation();
     params_.isEmitting = false; simulationTimeScale_ = 1; editorSession_ = true;
 }
 void engine::ParticleSystem::EndEditorSession() {
+    // 編集セッションを開始していなければ、復元する通常状態もないので戻る。
     if (!editorSession_) return;
+    // 編集中に生成した粒子を消し、通常時の粒子と設定を取り戻す。
     Clear(); particles_.swap(savedEditorParticles_);
     params_ = savedEditorParams_; randomEngine_ = savedEditorRandom_;
     simulationTimeScale_ = savedEditorScale_; spawnTimer_ = savedEditorTimer_; textureHandle_ = savedEditorTexture_;
     editorSession_ = false;
-    // GPUのインスタンス転送は通常の時間0更新で復元する。
+    // 経過時間0で更新し、アクティブカメラがあれば通常のGPU用インスタンスを組み直す。
     Update(0.0f);
 }
 #endif

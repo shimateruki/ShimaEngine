@@ -13,6 +13,7 @@ constexpr uint32_t kCrownMovieHiddenReason = 1u << 8;
 }
 
 bool GamePlayScene::BeginCrownMoviePreview(bool defeat) {
+    // プレビューを開いている場合は、元の配置やカメラを重ねて退避せず、そのまま成功を返す。
     if (crownMoviePreview_.active)
         return true;
     // 編集中の配置を借りるため、すでにプレイ中か本編演出が準備済みの場合は始めません。
@@ -22,8 +23,10 @@ bool GamePlayScene::BeginCrownMoviePreview(bool defeat) {
     bool hasFloor = false;
 
     for (const auto& object : GetObjects()) {
+        // エディター内部の実体とリプレイ上で消えている実体を、元の役者や床の候補から外す。
         if (object->IsEditorInternal() || object->IsReplayRemoved())
             continue;
+        // 偽王スライムを見つけたら、専用のプレビュー役者を複製する元として控える。
         if (auto* boss = dynamic_cast<EnemyFalseKingSlime*>(object.get()))
             sourceBoss = boss;
         hasFloor |= object->GetName().find("Stage3_HighCrown_ArenaFloor_") != std::string::npos;
@@ -31,6 +34,7 @@ bool GamePlayScene::BeginCrownMoviePreview(bool defeat) {
 
     // 複製元の役者と床を確認し、見つかった場合だけ元の編集カメラを退避します。
     engine::Camera* camera = CameraManager::GetInstance()->GetMainCamera();
+    // 偽王、闘技場の床、メインカメラのどれかが無ければ、元の配置を変更せず開始を見送る。
     if (!sourceBoss || !hasFloor || !camera)
         return false;
     auto& p = crownMoviePreview_;
@@ -53,14 +57,18 @@ bool GamePlayScene::BeginCrownMoviePreview(bool defeat) {
 
     // 生成前に走査を終え、元のScene保存値から表示だけを一時的に分離します。
     for (const auto& object : GetObjects()) {
+        // 編集用の内部物、リプレイから削除されたもの、カメラを一時非表示の対象から外す。
         if (object->IsEditorInternal() || object->IsReplayRemoved() || object->IsCameraObject())
             continue;
         p.hiddenObjects.push_back(object.get());
+        // 元プレイヤーは隠す対象だけに含め、プレビュー側では別途新規作成する。
         if (object.get() == player_)
             continue;
+        // 複製対象は偽王とStage3_HighCrown_で始まる闘技場の配置に限る。
         if (object.get() != sourceBoss && object->GetName().rfind("Stage3_HighCrown_", 0) != 0)
             continue;
         auto copy = object->Clone();
+        // 複製できない配置物は飛ばし、ボスを複製できたかは走査後に確認する。
         if (!copy)
             continue;
         // 複製は保存・操作・実戦の当たり判定から外し、プレビューの表示に限定します。
@@ -72,6 +80,7 @@ bool GamePlayScene::BeginCrownMoviePreview(bool defeat) {
         copy->SetCollisionAttribute(0);
         copy->SetCollisionMask(0);
 
+        // 偽王の複製だけは演出の役者として控え、待機状態の表示を解除する。
         if (object.get() == sourceBoss) {
             previewBoss = dynamic_cast<EnemyFalseKingSlime*>(copy.get());
             copy->SetIsVisible(true);
@@ -135,12 +144,14 @@ bool GamePlayScene::BeginCrownMoviePreview(bool defeat) {
         EndCrownMoviePreview();
         return false;
     }
+    // 撃破演出を確認する場合は、先に継承を完了させて撃破開始時の闘技場を組み立てる。
     if (defeat) {
         // 継承完了時の実際の闘技場を用意し、同じ配置・能力で撃破を確認します。
         UpdateCrownFinale(0, crownFinale_.duration);
         FinishCrownFinale(true);
         CameraManager::GetInstance()->SetActiveCamera(p.camera.get());
 
+        // 撃破演出を開始できないときは、プレビュー全体を終了して編集状態へ戻す。
         if (!StartCrownDefeat(previewBoss)) {
             EndCrownMoviePreview();
             return false;
@@ -208,6 +219,7 @@ void GamePlayScene::StepCrownMoviePreview(float deltaTime) {
         return;
     }
 
+    // プレビューと継承演出の両方が動いている場合に限り、継承の時計を進める。
     if (!crownMoviePreview_.active || !crownFinale_.active)
         return;
     UpdateCrownFinale(deltaTime);
@@ -223,6 +235,7 @@ void GamePlayScene::StepCrownMoviePreview(float deltaTime) {
 void GamePlayScene::EndCrownMoviePreview() {
     // プレビューで変更したワールド状態を片付け、通常の更新へ戻す。
     auto& p = crownMoviePreview_;
+    // プレビューを既に閉じている場合は、借用した参照を改めて復元しない。
     if (!p.active)
         return;
     // プレビュー用の演出を停止し、複製がまだ有効な間に演出側が借りた参照を片付けます。
@@ -249,7 +262,8 @@ void GamePlayScene::EndCrownMoviePreview() {
         camera->SetEye(p.eye);
         camera->SetTarget(p.target);
         camera->SetRotation(p.rotation);
-        if (p.followMode == engine::Camera::FollowMode::FixedPoint)
+        // 固定点追従だった場合は、固定点用に保持する位置と回転も戻す。
+        if (p.followMode == engine::Camera::FollowMode::kFixedPoint)
             camera->ConfigFixedPoint(p.eye, p.rotation);
         camera->SetFovY(p.fov);
         camera->SetInputEnabled(true);

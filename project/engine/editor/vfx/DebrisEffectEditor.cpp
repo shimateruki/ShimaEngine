@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "DebrisEffectEditor.h"
 #include "engine/graphics/3d/material/MaterialRenderPolicy.h"
 
@@ -17,6 +18,7 @@
 namespace {
 constexpr const char* kDebrisPresetDirectory = "Resources/json/debris/";
 
+// ImGui の固定長欄にテキストを収める。長い入力は終端を残して切り詰める。
 void CopyToBuffer(std::array<char, 128>& buffer, const std::string& text) {
     std::fill(buffer.begin(), buffer.end(), '\0');
     strncpy_s(buffer.data(), buffer.size(), text.c_str(), _TRUNCATE);
@@ -30,10 +32,11 @@ std::string GetBufferText(const std::array<char, 128>& buffer) {
 void DrawModelCombo(const char* label, std::array<char, 128>& buffer, const std::vector<std::string>& modelList) {
 #ifdef USE_IMGUI
     // 登録済みモデルの選択とパスの直接入力を両立し、未登録素材も試せるようにする。
-    int currentIndex = -1;
+    std::int32_t currentIndex = -1;
     std::string current = GetBufferText(buffer);
 
-    for (int i = 0; i < static_cast<int>(modelList.size()); ++i) {
+    for (std::int32_t i = 0; i < static_cast<std::int32_t>(modelList.size()); ++i) {
+        // 直接入力済みの名前が候補一覧にあれば、対応する項目を選択状態にする。
         if (modelList[i] == current) {
             currentIndex = i;
             break;
@@ -47,9 +50,12 @@ void DrawModelCombo(const char* label, std::array<char, 128>& buffer, const std:
         names.push_back(modelName.c_str());
     }
 
+    // 候補一覧が空の場合は直接入力だけを残す。
     if (!names.empty()) {
-        if (ImGui::Combo(label, &currentIndex, names.data(), static_cast<int>(names.size()))) {
-            if (currentIndex >= 0 && currentIndex < static_cast<int>(modelList.size())) {
+        // 選択が変わった場合に、候補の名前を入力欄へ反映する。
+        if (ImGui::Combo(label, &currentIndex, names.data(), static_cast<std::int32_t>(names.size()))) {
+            // 未選択や範囲外の番号では現在の直接入力を保つ。
+            if (currentIndex >= 0 && currentIndex < static_cast<std::int32_t>(modelList.size())) {
                 CopyToBuffer(buffer, modelList[currentIndex]);
             }
         }
@@ -64,26 +70,30 @@ void DrawModelCombo(const char* label, std::array<char, 128>& buffer, const std:
 }
 
 // 定義済み材質を選択肢に出し、未知の番号も数値編集で保持します。
-void DrawMaterialTypeCombo(int& materialType) {
+void DrawMaterialTypeCombo(std::int32_t& materialType) {
 #ifdef USE_IMGUI
     // 定義済みタイプは選択式にし、未知値は失わず直接調整できるようにする。
-    constexpr int kMaterialTypeCount = static_cast<int>(MaterialRenderPolicy::kLegacyMaterials.size());
-    std::array<const char*, MaterialRenderPolicy::kLegacyMaterials.size()> names{};
+    constexpr std::int32_t kMaterialTypeCount = static_cast<std::int32_t>(materialRenderPolicy::kLegacyMaterials.size());
+    std::array<const char*, materialRenderPolicy::kLegacyMaterials.size()> names{};
     for (std::size_t i = 0; i < names.size(); ++i)
-        names[i] = MaterialRenderPolicy::kLegacyMaterials[i].displayName;
-    int currentMaterialType = materialType;
+        names[i] = materialRenderPolicy::kLegacyMaterials[i].displayName;
+    std::int32_t currentMaterialType = materialType;
 
+    // 未知の番号を選択欄の添字に使えない場合は、表示用の番号だけを0にする。
     if (currentMaterialType < 0 || currentMaterialType >= kMaterialTypeCount) {
         currentMaterialType = 0;
     }
 
+    // 既知の項目を選んだ場合に、設定値を列挙番号に置き換える。
     if (ImGui::Combo("マテリアルタイプ", &currentMaterialType, names.data(), kMaterialTypeCount)) {
         materialType = currentMaterialType;
     }
 
+    // 未知の番号は現在値を警告付きで表示し、数値入力で調整できるようにする。
     if (materialType < 0 || materialType >= kMaterialTypeCount) {
         ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.35f, 1.0f), "未知のマテリアルタイプ: %d", materialType);
         ImGui::DragInt("数値を直接調整", &materialType, 1, 0, 32);
+    // 範囲内なら登録済みの名称と番号を表示する。
     } else {
         ImGui::TextDisabled("現在: %d / %s", materialType, names[materialType]);
     }
@@ -114,6 +124,7 @@ void DebrisEffectEditor::Update(float deltaTime) {
         return;
     }
 
+    // 最大寿命を範囲の終端とし、再生位置を選ぶための最低0.1秒を確保する。
     const float previewDuration = (std::max)(config_.lifetimeMax, 0.1f);
     auto restartPreviewAt = [&](float seekTime) {
         // 破片を再生成し、一定刻みと端数の更新で指定時刻へ追いつく。
@@ -132,6 +143,7 @@ void DebrisEffectEditor::Update(float deltaTime) {
             previewTime_ += 1.0f / 60.0f;
         }
 
+        // 固定刻みで残った時間がある場合、その端数だけ物理を進めて目標時刻で止める。
         if (targetTime > previewTime_) {
             manager->Update(targetTime - previewTime_);
             previewTime_ = targetTime;
@@ -146,6 +158,7 @@ void DebrisEffectEditor::Update(float deltaTime) {
         restartPreviewAt(0.0f);
     }
 
+    // 停止要求が変わった場合は破片と二つの時計をリセットする。
     if (previewStage->GetStopRequestSerial() != lastStageStopRequestSerial_) {
         lastStageStopRequestSerial_ = previewStage->GetStopRequestSerial();
         manager->ResetEditorPreview();
@@ -153,6 +166,7 @@ void DebrisEffectEditor::Update(float deltaTime) {
         loopTimer_ = 0.0f;
     }
 
+    // シーク要求が変わった場合は、指定時刻へ破片を再生成して進める。
     if (previewStage->GetSeekRequestSerial() != lastStageSeekRequestSerial_) {
         lastStageSeekRequestSerial_ = previewStage->GetSeekRequestSerial();
         restartPreviewAt(previewStage->GetSeekTargetTime());
@@ -166,18 +180,23 @@ void DebrisEffectEditor::Update(float deltaTime) {
     if (loopPreview_ && scaledDelta > 0.0f) {
         loopTimer_ += scaledDelta;
 
+        // ツール固有の繰り返し間隔を超えた場合は、先頭から発生し直す。
         if (loopTimer_ >= loopInterval_) {
             loopTimer_ = 0.0f;
             restartPreviewAt(0.0f);
         }
     }
 
+    // 停止中など実効経過が0以下の場合は、表示位置を進めない。
     if (scaledDelta > 0.0f) {
         previewTime_ += scaledDelta;
 
+        // 最大寿命に達したら、Stage 側のループ設定で末尾以降の扱いを選ぶ。
         if (previewTime_ >= previewDuration) {
+            // Stage のループが有効なら新たに破片を発生し、時刻を先頭へ戻す。
             if (previewStage->IsLoopEnabled()) {
                 restartPreviewAt(0.0f);
+            // ループしない場合は、表示時刻だけを末尾に固定する。
             } else {
                 previewTime_ = previewDuration;
             }
@@ -190,7 +209,7 @@ void DebrisEffectEditor::Update(float deltaTime) {
     events.push_back({ "Debris lifetime", 0.0f, previewDuration, engine::Vector4{ 0.75f, 0.55f, 0.35f, 1.0f } });
     events.push_back({ "Fade", previewDuration * std::clamp(config_.fadeStartRatio, 0.0f, 1.0f), previewDuration, engine::Vector4{ 0.9f, 0.45f, 0.25f, 1.0f } });
     previewStage->ReportToolState(
-        EffectPreviewStage::ToolKind::Debris,
+        EffectPreviewStage::ToolKind::kDebris,
         "Debris",
         previewTime_,
         previewDuration,
@@ -205,18 +224,21 @@ void DebrisEffectEditor::DrawImGui() {
     ImGui::Text("3D破片エフェクト Editor");
     ImGui::TextDisabled("爆発、破壊、着地衝撃などで飛び散る3D破片を調整します。");
 
+    // 更新ボタンでモデル名とプリセットの再取得を要求する。
     if (ImGui::Button(ICON_FA_SYNC " 一覧更新")) {
         RefreshLists();
     }
 
     ImGui::SameLine();
 
+    // 消去ボタンで発生中の破片を全消去する。
     if (ImGui::Button(ICON_FA_BROOM " 再生中の破片を消す")) {
         DebrisEffectManager::GetInstance()->Clear();
     }
 
     ImGui::Separator();
 
+    // 雛形の欄が開いているときに、現在の編集設定を置き換える候補を表示する。
     if (ImGui::CollapsingHeader(ICON_FA_BOLT " クイックプリセット", ImGuiTreeNodeFlags_DefaultOpen)) {
         // 雛形を適用した後はモデル入力欄も同期し、表示と保存設定を一致させる。
         if (ImGui::Button("岩の爆発", ImVec2(120.0f, 28.0f))) {
@@ -226,6 +248,7 @@ void DebrisEffectEditor::DrawImGui() {
 
         ImGui::SameLine();
 
+        // 木片を選んだ場合は破片数や色を差し替え、モデル入力欄も同期する。
         if (ImGui::Button("木片の飛散", ImVec2(120.0f, 28.0f))) {
             ApplyQuickPresetWood();
             SyncModelBuffersFromConfig();
@@ -233,18 +256,22 @@ void DebrisEffectEditor::DrawImGui() {
 
         ImGui::SameLine();
 
+        // 小石を選んだ場合は小粒の散布用設定とモデルを反映する。
         if (ImGui::Button("小石の散り", ImVec2(120.0f, 28.0f))) {
             ApplyQuickPresetPebble();
             SyncModelBuffersFromConfig();
         }
 
+        // プリズム破砕はコード上の雛形ではなく、敵用の保存プリセットを読み込む。
         if (ImGui::Button("プリズム破砕", ImVec2(120.0f, 28.0f))) {
+            // 読込が成功した場合だけ、プリセットのファイル選択も同期する。
             if (Load(std::filesystem::path(kDebrisPresetDirectory) / "enemy/prism_slime/prism_crystal_shatter.json"))
                 files_.SetDocument("enemy/prism_slime/prism_crystal_shatter.json");
 
         }
     }
 
+    // モデル欄を開いた場合に、ランダム選択に使うモデルを最大四枠編集できる。
     if (ImGui::CollapsingHeader(ICON_FA_CUBE " 破片モデル", ImGuiTreeNodeFlags_DefaultOpen)) {
         DrawModelCombo("モデル 1", modelBuffer0_, modelList_);
         DrawModelCombo("モデル 2", modelBuffer1_, modelList_);
@@ -253,6 +280,7 @@ void DebrisEffectEditor::DrawImGui() {
         ImGui::TextDisabled("空欄のモデル枠は使いません。複数入れるとランダムで混ざります。");
     }
 
+    // 発生・速度の欄を開いた場合に、初回発生の位置・方向・速さの範囲を調整できる。
     if (ImGui::CollapsingHeader(ICON_FA_RANDOM " 発生と速度", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::DragInt("発生数", &config_.spawnCount, 1, 1, 256);
         ImGui::DragFloat3("発生オフセット", &config_.spawnOffset.x, 0.05f);
@@ -267,6 +295,7 @@ void DebrisEffectEditor::DrawImGui() {
         ImGui::DragFloat("回転速度 最大", &config_.angularSpeedMax, 0.1f, 0.0f, 80.0f);
     }
 
+    // 疑似物理欄を開いた場合に、飛散後の重力・空気抵抗・床での反応を調整できる。
     if (ImGui::CollapsingHeader(ICON_FA_WEIGHT_HANGING " 疑似物理", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::DragFloat("重力", &config_.gravity, 0.2f, -50.0f, 120.0f);
         ImGui::DragFloat("空気抵抗", &config_.airDrag, 0.005f, 0.0f, 4.0f);
@@ -276,6 +305,7 @@ void DebrisEffectEditor::DrawImGui() {
         ImGui::DragFloat("地面摩擦", &config_.friction, 0.02f, 0.0f, 1.0f);
     }
 
+    // 見た目の欄を開いた場合に、各破片の大きさ、寿命、消え方と材質を調整できる。
     if (ImGui::CollapsingHeader(ICON_FA_PALETTE " 見た目と寿命", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::DragFloat("スケール 最小", &config_.scaleMin, 0.01f, 0.01f, 10.0f);
         ImGui::DragFloat("スケール 最大", &config_.scaleMax, 0.01f, 0.01f, 10.0f);
@@ -289,6 +319,7 @@ void DebrisEffectEditor::DrawImGui() {
         ImGui::DragFloat("金属度", &config_.metallic, 0.01f, 0.0f, 1.0f);
         ImGui::Checkbox("環境反射を使う", &config_.enableEnvMap);
 
+        // 環境反射を使う場合だけ強度を表示し、無効時は入力値を保つ。
         if (config_.enableEnvMap) {
             ImGui::DragFloat("環境反射の強さ", &config_.envIntensity, 0.02f, 0.0f, 4.0f);
         }
@@ -296,15 +327,18 @@ void DebrisEffectEditor::DrawImGui() {
         ImGui::DragFloat("発光", &config_.emissive, 0.05f, 0.0f, 20.0f);
     }
 
+    // プレビュー欄を開いた場合に、再生時だけ使用する距離と再生方法を調整できる。
     if (ImGui::CollapsingHeader(ICON_FA_PLAY " プレビュー", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::DragFloat("カメラ前のプレビュー距離", &previewDistance_, 0.1f, 1.0f, 80.0f);
         ImGui::Checkbox("再生前に前回の破片を消す", &clearBeforePreview_);
         ImGui::Checkbox("ループ再生", &loopPreview_);
 
+        // 繰り返しを有効にした場合だけ、発生間隔を入力できる。
         if (loopPreview_) {
             ImGui::DragFloat("ループ間隔", &loopInterval_, 0.05f, 0.2f, 10.0f);
         }
 
+        // 単発再生ボタンで、現在のモデル入力を確定して破片を発生させる。
         if (ImGui::Button(ICON_FA_PLAY " 1回再生", ImVec2(ImGui::GetContentRegionAvail().x, 30.0f))) {
             Preview();
         }
@@ -345,6 +379,7 @@ bool DebrisEffectEditor::Save(const std::filesystem::path& path, const std::stri
 bool DebrisEffectEditor::Load(const std::filesystem::path& path) {
     // 読込先を一時設定にし、失敗時は現在の設定もモデル入力欄も保持する。
     DebrisEffectConfig loaded;
+    // 一時設定の読込に失敗した場合、編集中の状態を置き換えない。
     if (!DebrisEffectManager::GetInstance()->LoadConfig(path, loaded)) return false;
     config_ = std::move(loaded);
     SyncModelBuffersFromConfig();
@@ -355,6 +390,7 @@ void DebrisEffectEditor::Preview() {
     // 必要なら前回の破片を消してから、現在の編集値を指定位置で一度再生します。
     SyncConfigFromModelBuffers();
 
+    // 前回の破片を消す指定がある場合だけ、次の発生前に全消去する。
     if (clearBeforePreview_) {
         DebrisEffectManager::GetInstance()->Clear();
     }
@@ -366,12 +402,14 @@ engine::Vector3 DebrisEffectEditor::GetPreviewPosition() const {
     // 専用Stageが有効ならその中心を優先し、なければ現在カメラから位置を決めます。
     EffectPreviewStage* previewStage = EffectPreviewStage::GetInstance();
 
+    // 専用ステージが有効なら、カメラの向きに依存しないステージのプレビュー点を返す。
     if (previewStage && previewStage->IsEnabled()) {
         return previewStage->GetPreviewPosition();
     }
 
     const engine::Camera* camera = CameraManager::GetInstance()->GetActiveCamera();
 
+    // 有効なカメラがなければ、ワールド原点の上2単位を代用する。
     if (!camera) {
         return { 0.0f, 2.0f, 0.0f };
     }
@@ -380,6 +418,7 @@ engine::Vector3 DebrisEffectEditor::GetPreviewPosition() const {
     engine::Vector3 target = camera->GetTargetPoint();
     engine::Vector3 forward = engine::Math::Normalize(target - eye);
 
+    // 視点と注視点が重なるなど向きを作れなかった場合は、ワールドの+Zを使う。
     if (engine::Math::Length(forward) < 0.001f) {
         forward = { 0.0f, 0.0f, 1.0f };
     }
@@ -412,6 +451,7 @@ void DebrisEffectEditor::SyncConfigFromModelBuffers() {
     for (const auto* buffer : buffers) {
         std::string modelName = GetBufferText(*buffer);
 
+        // 空欄はモデルの抽選候補に入れない。
         if (!modelName.empty()) {
             config_.modelNames.push_back(modelName);
         }

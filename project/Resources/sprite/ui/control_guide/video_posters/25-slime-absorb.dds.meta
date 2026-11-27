@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "a0f5151c1af409c8b34eb3185e4b3e48",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/sprite/ui/control_guide/video_posters/25-slime-absorb.dds",
+  "version": 1
+}

@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 // EnemyMagmaSlimeの分割実装で共有する定数と攻撃用の計算。進行状態はEnemyMagmaSlimeが保持する。
 
@@ -10,14 +11,14 @@
 #include <string>
 
 // マグマボスの複数実装ファイルで共有する攻撃ID、タイミング、演出資産です。
-namespace EnemyMagmaSlimeImplementation {
-constexpr const char* kMagmaMortarAttackId = MagmaAttackVfx::kMortar.attackId;
+namespace enemyMagmaSlimeImplementation {
+constexpr const char* kMagmaMortarAttackId = magmaAttackVfx::kMortar.attackId;
 constexpr const char* kLavaRushAttackId = "lava_rush";
 constexpr const char* kVolcanicSlamAttackId = "volcanic_slam";
 constexpr const char* kEruptionFieldAttackId = "eruption_field";
 constexpr const char* kLavaSpiralAttackId = "lava_spiral";
-constexpr const char* kFireColumnAttackId = MagmaAttackVfx::kFireColumn.attackId;
-constexpr const char* kMagmaFloodAttackId = MagmaAttackVfx::kFlood.attackId;
+constexpr const char* kFireColumnAttackId = magmaAttackVfx::kFireColumn.attackId;
+constexpr const char* kMagmaFloodAttackId = magmaAttackVfx::kFlood.attackId;
 
 constexpr const char* kFireChantEffect = "Resources/json/effect/shared/effect_boss_chant_fire.json";
 constexpr const char* kFireColumnLinkEffect = "Resources/json/effect/enemy/magma_slime/effect_magma_fire_column_link.json";
@@ -42,9 +43,9 @@ constexpr const char* kSpiralSurgePreset = "enemy/magma_slime/magma_slime_spiral
 constexpr const char* kSpiralTrailPreset = "enemy/magma_slime/magma_slime_spiral_trail";
 
 
-constexpr int kMagmaMaterialType = 9;
-constexpr int kFireMaterialType = 11;
-constexpr int kShockwaveMaterialType = 14;
+constexpr std::int32_t kMagmaMaterialType = 9;
+constexpr std::int32_t kFireMaterialType = 11;
+constexpr std::int32_t kShockwaveMaterialType = 14;
 
 constexpr float kPi = std::numbers::pi_v<float>;
 constexpr float kMagmaSlimeModelYawOffset = kPi;
@@ -65,29 +66,29 @@ constexpr float kPoolDamageInterval = 0.72f;
 // 地面の演出に対し、標的が上下に離れすぎているかを判定する許容距離。
 constexpr float kPoolVerticalTolerance = 2.8f;
 
-constexpr int kEncounterControlledActionMode = 1;
+constexpr std::int32_t kEncounterControlledActionMode = 1;
 constexpr float kDefaultEncounterAppearanceDuration = 1.16f;
 // 登場開始時に配置位置から上へずらす距離。演出の進行に合わせて戻す。
 constexpr float kEncounterAppearanceRise = 2.35f;
 
-using CombatMath::NormalizePlanar;
+using combatMath::NormalizePlanar;
 
-using CombatMath::PlanarDistance;
+using combatMath::PlanarDistance;
 
-using CombatMath::SmoothStep01;
+using combatMath::SmoothStep01;
 
-using CombatMath::EaseOutCubic;
+using combatMath::EaseOutCubic;
 
-using CombatMath::LerpVector3;
+using combatMath::LerpVector3;
 
 inline StatusEffectApplication MakeBurningStatus(float duration, float tickInterval, float tickDamage,
                                           const std::string& vfxPreset) {
     StatusEffectApplication status;
-    status.type = StatusEffectType::Burning;
+    status.type = StatusEffectType::kBurning;
     status.duration = duration;
     status.tickInterval = tickInterval;
     status.tickDamage = tickDamage;
     status.vfxPreset = vfxPreset;
     return status;
 }
-} // namespace EnemyMagmaSlimeImplementation
+} // namespace enemyMagmaSlimeImplementation

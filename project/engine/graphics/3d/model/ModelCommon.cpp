@@ -6,15 +6,18 @@
 #include <cassert>
 
 void ModelCommon::Initialize(engine::DirectXCommon* dxCommon) {
+    // 初期化済みのDirectX基盤を借用し、頂点変形に使うComputeパイプラインを準備する。
     assert(dxCommon);
     dxCommon_ = dxCommon;
     CreateComputeSkinningPipeline();
 }
 
 void ModelCommon::CreateComputeSkinningPipeline() {
+    // 再初期化時に古いPSOとルートシグネチャを持ち越さない。
     computeSkinningRootSignature_.Reset();
     computeSkinningPipelineState_.Reset();
 
+    // 入力頂点・ボーン行列用のSRVと、変形後の頂点を書き込むUAVをシェーダーと同じ順に割り当てる。
     RootSignatureBuilder rootSignatureBuilder;
     rootSignatureBuilder.AddSrv(0);
     rootSignatureBuilder.AddSrv(1);
@@ -27,6 +30,7 @@ void ModelCommon::CreateComputeSkinningPipeline() {
         computeSkinningRootSignature_.GetAddressOf(),
         D3D12_ROOT_SIGNATURE_FLAG_NONE);
 
+    // ルートパラメーターを確定してから、Computeシェーダーのバイトコードを取得する。
     auto computeShader = dxCommon_->CompileShader(
         L"Resources/shader/object3d/Skinning.CS.hlsl",
         L"cs_6_0");
@@ -38,6 +42,7 @@ void ModelCommon::CreateComputeSkinningPipeline() {
         computeShader->GetBufferSize()
     };
 
+    // バイトコードとルート構成からGPU側のパイプラインを作り、生成失敗はアサートで検出する。
     const HRESULT result = dxCommon_->GetDevice()->CreateComputePipelineState(
         &pipelineDesc,
         IID_PPV_ARGS(computeSkinningPipelineState_.GetAddressOf()));

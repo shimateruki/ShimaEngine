@@ -17,10 +17,12 @@ void Character::Update(float deltaTime) {
         return;
     }
 
+    // HPが0以下に達したときに死亡状態を設定する。
     if (GetParameters()->hp <= 0) {
         SetDead(true);
     }
 
+    // 直接移動がモーターを停止している間は、重力と押し戻しで演出軌道を変えないようここで終える。
     if (motorSuspended_) {
         // 直接移動の終点へ重力を重ねると、着地や突進の補間軌道がずれる。
         return;
@@ -38,6 +40,7 @@ void Character::Update(float deltaTime) {
         velocity_.x = engine::Math::Lerp(velocity_.x, externalImpulseVelocity_.x, weight);
         velocity_.z = engine::Math::Lerp(velocity_.z, externalImpulseVelocity_.z, weight);
 
+        // 鉛直の外力は予約された最初の更新でだけ、現在の上向き速度を下げない形で適用する。
         if (externalImpulseVerticalPending_) {
             velocity_.y = (std::max)(velocity_.y, externalImpulseVelocity_.y);
             externalImpulseVerticalPending_ = false;
@@ -53,7 +56,7 @@ void Character::Update(float deltaTime) {
 }
 
 void Character::SyncCharacterMotorSettings() {
-    // ステータスの移動設定を毎フレーム Motor へ同期し、編集値を即座に反映する。
+    // 物理設定が存在する場合だけ、その値を毎フレームモーターに同期する。
     if (!GetParameters().has_value()) {
         return;
     }
@@ -65,7 +68,7 @@ void Character::SyncCharacterMotorSettings() {
     settings.stepHeight = GetParameters()->motorStepHeight;
     settings.groundProbeDistance = GetParameters()->motorGroundProbeDistance;
     settings.skinWidth = GetParameters()->motorSkinWidth;
-    settings.collisionMask = CollisionCategories::Get("ground");
+    settings.collisionMask = engine::collisionCategories::Get("ground");
     characterMotor_.SetSettings(settings);
 }
 
@@ -73,6 +76,7 @@ void Character::ApplyExternalImpulse(const engine::Vector3& velocity, float dura
     // 連続被弾では弱い水平外力で強いノックバックを上書きせず、上方向だけ維持できる。
     const float safeDuration = (std::max)(0.01f, duration);
 
+    // 有効な外力がまだ無ければ、一定時間だけ効く外力を新規登録する。
     if (externalImpulseTimer_ <= 0.0f) {
         externalImpulseVelocity_ = velocity;
         externalImpulseDuration_ = safeDuration;
@@ -86,8 +90,10 @@ void Character::ApplyExternalImpulse(const engine::Vector3& velocity, float dura
                                   externalImpulseVelocity_.z * externalImpulseVelocity_.z;
     const float nextPlanarSq = velocity.x * velocity.x + velocity.z * velocity.z;
 
+    // 次の水平速度の二乗が現在の72%以上なら、外力を新しい値へ差し替える。
     if (nextPlanarSq >= currentPlanarSq * 0.72f) {
         externalImpulseVelocity_ = velocity;
+    // 弱い衝撃では水平の外力を維持し、上向き成分だけ強い方を残す。
     } else {
         externalImpulseVelocity_.y = (std::max)(externalImpulseVelocity_.y, velocity.y);
     }
@@ -108,8 +114,9 @@ void Character::Draw(ID3D12Resource* pointLightResource, ID3D12Resource* spotLig
 // =================================================================
 
 bool Character::OnCollision(engine::Object3D* other) {
-    CollisionInfo info = CheckCollision(other);
+    engine::CollisionInfo info = CheckCollision(other);
 
+    // 実際の接触が無ければ、押し戻しや速度の補正は行わない。
     if (!info.isColliding) {
         return false;
     }
@@ -120,9 +127,9 @@ bool Character::OnCollision(engine::Object3D* other) {
     return info.isColliding;
 }
 
-void Character::ApplyPhysicsCollision(const CollisionInfo& info, uint32_t attribute) {
+void Character::ApplyPhysicsCollision(const engine::CollisionInfo& info, uint32_t attribute) {
     // 地面や壁(ソリッド属性)以外は物理的な押し出しを行わない
-    if (!(attribute & CollisionCategories::Get("ground"))) {
+    if (!(attribute & engine::collisionCategories::Get("ground"))) {
         return;
     }
 
@@ -145,6 +152,7 @@ std::unique_ptr<engine::Object3D> Character::Clone() const {
     newObj->Initialize(GetObjectCommon());
 
     // 表示と Transform を元の配置から複製します。
+    // 元にモデル名がある場合は、複製にも同じモデルを割り当てる。
     if (!GetModelName().empty()) {
         newObj->SetModel(GetModelName());
     }
@@ -162,6 +170,7 @@ std::unique_ptr<engine::Object3D> Character::Clone() const {
     // ステータスと現在の移動状態を引き継ぎます。
     newObj->SetEventType(GetEventType());
 
+    // 元にステータスがある場合だけ、個体の設定を複製に引き継ぐ。
     if (GetParameters().has_value()) {
         newObj->SetParameters(GetParameters().value());
     }
@@ -176,6 +185,7 @@ std::unique_ptr<engine::Object3D> Character::Clone() const {
     newObj->SetAnimationLoop(IsAnimationLoop());
 
     // 経路設定を複製し、再生器は複製先専用に作り直します。
+    // 経路移動コンポーネントがある場合だけ、再生モードや位相を複製する。
     if (HasPathMoverComponent()) {
         newObj->EnsurePathMoverComponent();
         newObj->SetRecordPathName(GetRecordPathName());
@@ -187,7 +197,7 @@ std::unique_ptr<engine::Object3D> Character::Clone() const {
 
     newObj->InitializeRecorder(nullptr);
 
-    // パス名が設定されていれば自動再生を開始
+    // 経路名と複製専用のレコーダーの両方がそろった場合だけ、自動再生を始める。
     if (!newObj->GetRecordPathName().empty() && newObj->GetRecorder()) {
         bool isCinematic = newObj->IsCameraObject();
         newObj->GetRecorder()->Play(newObj->GetRecordPathName(), newObj->IsRecordLoop(), newObj->IsRecordRelative(),
@@ -197,8 +207,9 @@ std::unique_ptr<engine::Object3D> Character::Clone() const {
     return newObj;
 }
 
-// ゲーム設定の有無を維持し、指定した物理項目だけを更新する。
+// 物理設定が無ければ既定値を用意してから、重力だけを更新する。
 void Character::SetGravity(float gravity) {
+    // 既定値を作るのは、現在のパラメータが未作成の場合だけ。
     if (!this->GetParameters().has_value()) {
         this->ResetParameters();
     }
@@ -206,6 +217,7 @@ void Character::SetGravity(float gravity) {
 }
 
 void Character::SetMaxFallSpeed(float maxFallSpeed) {
+    // 物理設定をまだ持たない場合に限り、既定値を用意してから最大落下速度を変える。
     if (!this->GetParameters().has_value()) {
         this->ResetParameters();
     }

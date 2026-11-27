@@ -2,22 +2,22 @@
 #include "Object3D.h"
 #include <string>
 
-// 全てのギミックが共有する初期化、更新、衝突処理の基底クラス
-// 関連：Object3dの配置・衝突基盤を使う。固有の反応は各ギミックが上書きする。
+// シーンに配置するギミックの共通モデル、衝突情報、保存時の種類を初期化する。
+// Transformや標準の描画はObject3Dを使い、固有の接触・動作・複製は派生クラスが担当する。
 // 主な入口：Initialize / Update / OnCollision
 class BaseGimmick : public engine::Object3D {
   public:
     virtual ~BaseGimmick() = default;
 
-    // モデル名を指定してギミック本体を初期化する
+    // 指定モデルを読み込み、既定形状と衝突の属性・マスクを設定する。
     virtual void Initialize(engine::Object3DCommon* common, const std::string& modelName);
 
-    // ギミック共通の更新処理
+    // 秒単位のdeltaTimeをObject3Dの共通更新へ渡す。
     virtual void Update(float deltaTime) override;
 
-    // ギミック共通の衝突処理
+    // 基底の接触処理は状態を変更せずfalseを返す。
     virtual bool OnCollision(engine::Object3D* other) override;
 
-    // 派生型を基底型として複製しない。各派生クラスが自分の複製を担当する。
+    // 実体がBaseGimmickなら同じモデル・設定の複製を返す。派生型ならnullptrを返す。
     std::unique_ptr<engine::Object3D> Clone() const override;
 };

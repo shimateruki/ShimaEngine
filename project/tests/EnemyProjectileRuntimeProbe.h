@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #ifdef USE_IMGUI
 #include "game/scene/gameplay/GamePlayScene.h"
 #include "game/actor/enemy/ranged/EnemyBomber.h"
@@ -14,12 +15,13 @@
 #include <cstring>
 
 // 明示起動した専用プロセスで、地形接触と個別所有モデルのGPU描画を確認する。
-namespace EnemyProjectileRuntimeProbe {
+namespace enemyProjectileRuntimeProbe {
 inline bool Enabled() { return GetEnvironmentVariableA("CG2_ENEMY_PROJECTILE_TEST",nullptr,0)>0; }
 inline void Require(bool value,const char* message) { if(!value)throw std::runtime_error(message); }
+/// <summary>ボンバーを投擲準備状態に進め、手持ちの爆弾と期待位置を検証コードへ取り出す。</summary>
 struct Access {
     static void Hold(EnemyBomber* actor) {
-        actor->throwState_=EnemyBomber::ThrowState::Windup;
+        actor->throwState_=EnemyBomber::ThrowState::kWindup;
         actor->windupTimer_=0.55f;
         actor->throwBombReleased_=false;
         actor->UpdateHeldBombVisual(0);
@@ -28,19 +30,19 @@ struct Access {
     static engine::Vector3 Expected(EnemyBomber* actor) { return actor->ComputeHeldBombPosition(actor->GetThrowProgress()); }
     static void Release(EnemyBomber* actor) {
         actor->ThrowBomb();actor->throwBombReleased_=true;
-        actor->throwState_=EnemyBomber::ThrowState::Landing;actor->throwLandingTimer_=10;
+        actor->throwState_=EnemyBomber::ThrowState::kLanding;actor->throwLandingTimer_=10;
     }
 };
 inline bool Same(const engine::Matrix4x4& a,const engine::Matrix4x4& b,float tolerance=0.01f) {
-    for(int i=0;i<4;++i)for(int j=0;j<4;++j)if(std::abs(a.m[i][j]-b.m[i][j])>tolerance)return false;
+    for(std::int32_t i=0;i<4;++i)for(std::int32_t j=0;j<4;++j)if(std::abs(a.m[i][j]-b.m[i][j])>tolerance)return false;
     return true;
 }
 inline void FireCases(BaseScene* scene,std::ostream& log) {
-    auto* bullets=BulletManager::GetInstance();auto* collisions=CollisionManager::GetInstance();bullets->Clear();
+    auto* bullets=BulletManager::GetInstance();auto* collisions=engine::CollisionManager::GetInstance();bullets->Clear();
     auto floor=std::make_unique<engine::Object3D>();floor->Initialize(scene->GetObject3DCommon());
     floor->SetTranslate({0,1000,10});floor->SetScale({1,1,1});
-    engine::Object3D::ColliderConfig box;box.type=ColliderType::Aabb;box.size={8,0.1f,16};box.center={0,0,0};floor->SetColliderConfig(box);
-    floor->SetCollisionAttribute(CollisionCategories::Get("ground"));floor->SetCollisionMask(~0u);floor->UpdateWorldMatrix(true);collisions->AddObject(floor.get());
+    engine::Object3D::ColliderConfig box;box.type=engine::ColliderType::kAabb;box.size={8,0.1f,16};box.center={0,0,0};floor->SetColliderConfig(box);
+    floor->SetCollisionAttribute(engine::collisionCategories::Get("ground"));floor->SetCollisionMask(~0u);floor->UpdateWorldMatrix(true);collisions->AddObject(floor.get());
     EnemyAttackProfile profile;std::string error;Require(profile.LoadForEnemy("FireSlime",&error),"fire profile load failed");
     const auto* fire=profile.FindAttack("fireball");Require(fire && fire->sequence.enabled,"missing fire sequence");
     for(float step:{1.0f/60.0f,0.25f}) {
@@ -56,7 +58,7 @@ inline void FireCases(BaseScene* scene,std::ostream& log) {
     }
     // 無害な比較表示と大砲の地形非衝突は、今回の火球指定に巻き込まない。
     BulletVisualConfig preview;preview.previewOnly=true;preview.destroyOnSolidCastHit=true;
-    bullets->Fire({0,1002,0},{0,-10,0},CollisionCategories::Get("enemy_attack"),CollisionCategories::Get("ground"),"Primitives/sphere",0.3f,3,preview);
+    bullets->Fire({0,1002,0},{0,-10,0},engine::collisionCategories::Get("enemy_attack"),engine::collisionCategories::Get("ground"),"Primitives/sphere",0.3f,3,preview);
     bullets->Update(0.4f);Require(bullets->GetBullets().size()==1,"preview collided with ground");bullets->Clear();
     auto disabled=*fire;
     for(auto& event:disabled.sequence.events)if(event.operation=="projectile")event.projectile.collisionEnabled=false;
@@ -64,22 +66,22 @@ inline void FireCases(BaseScene* scene,std::ostream& log) {
     Require(disabledSequence.Start(disabled,context),"disabled fire sequence failed");disabledSequence.Update(0.44f,context);bullets->Update(1.0f);
     Require(bullets->GetBullets().size()==1,"disabled collision fireball vanished on ground");bullets->Clear();
     BulletVisualConfig cannon;
-    bullets->Fire({0,1002,0},{0,-10,0},CollisionCategories::Get("enemy_attack"),CollisionCategories::Get("player"),"Primitives/sphere",0.3f,3,cannon);
+    bullets->Fire({0,1002,0},{0,-10,0},engine::collisionCategories::Get("enemy_attack"),engine::collisionCategories::Get("player"),"Primitives/sphere",0.3f,3,cannon);
     bullets->Update(0.4f);Require(bullets->GetBullets().size()==1 && bullets->GetBullets().front()->GetTranslate().y<1000,"cannon ground pass changed");bullets->Clear();
     collisions->RemoveObject(floor.get());
     log<<"PASS preview/disabled collision and cannon ground-pass unchanged"<<std::endl;
 }
 inline void BombPhysicsCases(BaseScene* scene,std::ostream& log) {
-    auto* collisions=CollisionManager::GetInstance();
+    auto* collisions=engine::CollisionManager::GetInstance();
     auto floor=std::make_unique<engine::Object3D>();floor->Initialize(scene->GetObject3DCommon());floor->SetTranslate({0,1000,0});
-    engine::Object3D::ColliderConfig box;box.type=ColliderType::Aabb;box.size={100,0.1f,100};box.center={0,0,0};floor->SetColliderConfig(box);floor->SetCollisionAttribute(CollisionCategories::Get("ground"));floor->SetCollisionMask(~0u);floor->UpdateWorldMatrix(true);collisions->AddObject(floor.get());
+    engine::Object3D::ColliderConfig box;box.type=engine::ColliderType::kAabb;box.size={100,0.1f,100};box.center={0,0,0};floor->SetColliderConfig(box);floor->SetCollisionAttribute(engine::collisionCategories::Get("ground"));floor->SetCollisionMask(~0u);floor->UpdateWorldMatrix(true);collisions->AddObject(floor.get());
     float shortest=10000,longest=0;
     for(bool playerOwned:{false,true})for(bool placed:{false,true})for(float deltaTime:{1.0f/30.0f,1.0f/60.0f,1.0f/144.0f,0.1f}) {
         auto actor=EnemyFactory::GetInstance()->CreateEnemy("Bomb",scene->GetObject3DCommon());auto* bomb=dynamic_cast<EnemyBomb*>(actor.get());Require(bomb,"missing bomb factory");
         bomb->SetTarget(nullptr);bomb->SetPlayerOwned(playerOwned);bomb->Ignite(8);bomb->SetTranslate({0,placed?1000.52f:1002.0f,0});
         bomb->BeginThrown(placed?engine::Vector3{0,1.8f,0}:engine::Vector3{0,8,24});bomb->UpdateWorldMatrix(true);
         const float radius=bomb->GetCollider()->GetRadius();bool landed=false;float landTime=0,landZ=0,landY=0;float elapsed=0;
-        for(int i=0;elapsed<3.0f;++i) {
+        for(std::int32_t i=0;elapsed<3.0f;++i) {
             bomb->Update(deltaTime);bomb->OnCollision(floor.get());elapsed+=deltaTime;
             Require(std::abs(bomb->GetCollider()->GetRadius()-radius)<0.0001f,"bomb pulse changed collider radius");
             Require(!bomb->IsThrownPhysics(),"bomb entered generic slime bounce physics");
@@ -96,11 +98,11 @@ inline void BombPhysicsCases(BaseScene* scene,std::ostream& log) {
         log<<"PASS bomb physics owner="<<playerOwned<<" placed="<<placed<<" dt="<<deltaTime<<" land="<<landTime<<" slide="<<bomb->GetTranslate().z-landZ<<" finalZ="<<bomb->GetTranslate().z<<std::endl;
     }
     Require(longest-shortest<0.35f,"bomb throw range depended on frame rate");
-    auto wall=std::make_unique<engine::Object3D>();wall->Initialize(scene->GetObject3DCommon());box.size={8,3,0.10f};wall->SetColliderConfig(box);wall->SetTranslate({0,1003,6});wall->SetCollisionAttribute(CollisionCategories::Get("ground"));wall->SetCollisionMask(~0u);wall->UpdateWorldMatrix(true);collisions->AddObject(wall.get());
+    auto wall=std::make_unique<engine::Object3D>();wall->Initialize(scene->GetObject3DCommon());box.size={8,3,0.10f};wall->SetColliderConfig(box);wall->SetTranslate({0,1003,6});wall->SetCollisionAttribute(engine::collisionCategories::Get("ground"));wall->SetCollisionMask(~0u);wall->UpdateWorldMatrix(true);collisions->AddObject(wall.get());
     for(bool playerOwned:{false,true}) {
         auto actor=EnemyFactory::GetInstance()->CreateEnemy("Bomb",scene->GetObject3DCommon());auto* bomb=dynamic_cast<EnemyBomb*>(actor.get());bomb->SetTarget(nullptr);bomb->SetPlayerOwned(playerOwned);bomb->Ignite(8);bomb->SetTranslate({0,1002,0});bomb->BeginThrown({0,8,24});bomb->UpdateWorldMatrix(true);
         bomb->Update(0.1f);Require(std::abs(bomb->GetVelocity().y-2.0f)<0.01f && std::abs(bomb->GetTranslate().z-2.4f)<0.01f,"gravity doubled or air velocity changed");
-        for(int i=0;i<120;++i){bomb->Update(1.0f/60.0f);bomb->OnCollision(floor.get());bomb->OnCollision(wall.get());}
+        for(std::int32_t i=0;i<120;++i){bomb->Update(1.0f/60.0f);bomb->OnCollision(floor.get());bomb->OnCollision(wall.get());}
         Require(bomb->GetTranslate().z<5.7f && bomb->GetTranslate().z>0 && bomb->IsGrounded(),"wall contact tunneled or launched bomb");
     }
     collisions->RemoveObject(wall.get());collisions->RemoveObject(floor.get());
@@ -108,12 +110,13 @@ inline void BombPhysicsCases(BaseScene* scene,std::ostream& log) {
 }
 // 爆弾モデルの縮小率・起爆経路が異なっても、同じワールド範囲へ一度だけ命中する。
 inline void BombExplosionCases(BaseScene* scene, std::ostream& log) {
-    auto* collisions = CollisionManager::GetInstance();
+    auto* collisions = engine::CollisionManager::GetInstance();
     const engine::Vector3 origin{2000.0f, 1000.0f, 2000.0f};
     for (float scale : {0.16f, 0.30f, 2.0f}) for (bool direct : {false, true}) {
         std::vector<std::unique_ptr<engine::Object3D>> objects;
+        /// <summary>検証中に登録した衝突対象を記録し、スコープを抜ける際にまとめて登録解除する。</summary>
         struct Registration {
-            CollisionManager* manager;
+            engine::CollisionManager* manager;
             std::vector<engine::Object3D*> values;
             ~Registration() { for (auto* object : values) manager->RemoveObject(object); }
         } registration{collisions, {}};
@@ -126,10 +129,10 @@ inline void BombExplosionCases(BaseScene* scene, std::ostream& log) {
             enemy->SetScale({1, 1, 1});
             enemy->SetTranslate(origin + offset);
             engine::Object3D::ColliderConfig shape;
-            shape.type = ColliderType::Sphere; shape.size = {0.25f, 0.25f, 0.25f};
+            shape.type = engine::ColliderType::kSphere; shape.size = {0.25f, 0.25f, 0.25f};
             enemy->SetColliderConfig(shape);
-            enemy->SetCollisionAttribute(CollisionCategories::Get("enemy"));
-            enemy->SetCollisionMask(CollisionCategories::Get("player_attack"));
+            enemy->SetCollisionAttribute(engine::collisionCategories::Get("enemy"));
+            enemy->SetCollisionMask(engine::collisionCategories::Get("player_attack"));
             enemy->UpdateWorldMatrix(true);
             collisions->AddObject(enemy); registration.values.push_back(enemy);
             objects.push_back(std::move(actor));
@@ -142,7 +145,7 @@ inline void BombExplosionCases(BaseScene* scene, std::ostream& log) {
         wall->Initialize(scene->GetObject3DCommon(), "Stages/bomb_break_block");
         wall->SetScale({1, 1, 1}); wall->SetTranslate(origin + engine::Vector3{-4.4f, 0, 0});
         engine::Object3D::ColliderConfig box;
-        box.type = ColliderType::Aabb; box.size = {0.25f, 0.25f, 0.25f};
+        box.type = engine::ColliderType::kAabb; box.size = {0.25f, 0.25f, 0.25f};
         wall->SetColliderConfig(box); wall->UpdateWorldMatrix(true);
         auto* breakable = wall.get();
         collisions->AddObject(breakable); registration.values.push_back(breakable);
@@ -179,20 +182,20 @@ inline void BombExplosionCases(BaseScene* scene, std::ostream& log) {
     }
 }
 inline void AfterDraw(SceneManager* manager,const std::string& path) {
-    static std::ofstream log(path,std::ios::trunc);static ULONGLONG start=GetTickCount64();
-    static int phase=0,frames=0;static bool done=false;static EnemyBomber* bomber=nullptr;static EnemyBomb* thrown=nullptr;
-    static std::unique_ptr<engine::Camera> camera;static engine::Camera* previous=nullptr;static engine::Vector3 base{},target{},release{};
-    static engine::Matrix4x4 initialWvp{},initialViewProjection{};
-    if(done || !manager)return;
-    auto finish=[&](const std::string& message){log<<message<<std::endl;done=true;CameraManager::GetInstance()->SetActiveCamera(previous);WinApp::CloseNow();};
+    static std::ofstream log(path,std::ios::trunc);static ULONGLONG sStart=GetTickCount64();
+    static std::int32_t sPhase=0,sFrames=0;static bool sDone=false;static EnemyBomber* sBomber=nullptr;static EnemyBomb* sThrown=nullptr;
+    static std::unique_ptr<engine::Camera> sCamera;static engine::Camera* sPrevious=nullptr;static engine::Vector3 sBase{},sTarget{},sRelease{};
+    static engine::Matrix4x4 sInitialWvp{},sInitialViewProjection{};
+    if(sDone || !manager)return;
+    auto finish=[&](const std::string& message){log<<message<<std::endl;sDone=true;CameraManager::GetInstance()->SetActiveCamera(sPrevious);WinApp::CloseNow();};
     try {
-        Require(GetTickCount64()-start<360000,"enemy projectile probe timeout");
+        Require(GetTickCount64()-sStart<360000,"enemy projectile probe timeout");
         if(manager->IsTransitioning())return;
-        if(phase==0) { StageManager::GetInstance()->SetCurrentStageById("stage1");manager->ChangeScene("GAMEPLAY");phase=1;return; }
+        if(sPhase==0) { StageManager::GetInstance()->SetCurrentStageById("stage1");manager->ChangeScene("GAMEPLAY");sPhase=1;return; }
         auto* scene=dynamic_cast<GamePlayScene*>(manager->GetCurrentScene());if(!scene)return;
         auto* player=GetScenePlayer(scene);if(!player)return;
-        if(phase==1) {
-            if(++frames<12 || !player->IsControlActive() || player->IsCinematicLocked())return;
+        if(sPhase==1) {
+            if(++sFrames<12 || !player->IsControlActive() || player->IsCinematicLocked())return;
             BombExplosionCases(scene,log);
             if (GetEnvironmentVariableA("CG2_BOMB_EXPLOSION_TEST", nullptr, 0) > 0) {
                 finish("PASS: player bomb world radius, fuse/contact splash, breakable walls and single damage");
@@ -200,53 +203,53 @@ inline void AfterDraw(SceneManager* manager,const std::string& path) {
             }
             FireCases(scene,log);
             BombPhysicsCases(scene,log);
-            Require(CannonDamageRuntimeProbe::RunCase(manager,0,0.6f,0,false,false,log),"cannon damage regression");
-            Require(CannonDamageRuntimeProbe::RunPlayerProjectileCase(manager,log),"player projectile damage regression");
+            Require(cannonDamageRuntimeProbe::RunCase(manager,0,0.6f,0,false,false,log),"cannon damage regression");
+            Require(cannonDamageRuntimeProbe::RunPlayerProjectileCase(manager,log),"player projectile damage regression");
             manager->SetIsPlaying(true);
-            base=player->GetWorldPosition()+engine::Vector3{0,2,8};target=base+engine::Vector3{0,0,12};
+            sBase=player->GetWorldPosition()+engine::Vector3{0,2,8};sTarget=sBase+engine::Vector3{0,0,12};
             auto created=EnemyFactory::GetInstance()->CreateEnemy("Bomber",scene->GetObject3DCommon());
-            bomber=dynamic_cast<EnemyBomber*>(created.get());Require(bomber,"bomber factory failed");
-            bomber->SetTranslate(base);bomber->ApplyManagedScale({2,2,2});bomber->SetTarget(player);
-            bomber->SetGravity(0);bomber->SetMaxFallSpeed(0);bomber->SetParameter(&engine::EntityParameter::gravity, bomber->SetParameter(&engine::EntityParameter::maxFallSpeed, bomber->SetParameter(&engine::EntityParameter::speed, 0)));
-            bomber->SetParameter(&engine::EntityParameter::hp, bomber->SetParameter(&engine::EntityParameter::maxHp, 200));bomber->SetVelocity({0,0,0});bomber->UpdateWorldMatrix(true);
-            bomber->SetSpawnCallback([scene](std::unique_ptr<BaseEnemy> object){thrown=dynamic_cast<EnemyBomb*>(object.get());scene->AddObject(std::move(object));});
+            sBomber=dynamic_cast<EnemyBomber*>(created.get());Require(sBomber,"bomber factory failed");
+            sBomber->SetTranslate(sBase);sBomber->ApplyManagedScale({2,2,2});sBomber->SetTarget(player);
+            sBomber->SetGravity(0);sBomber->SetMaxFallSpeed(0);sBomber->SetParameter(&engine::EntityParameter::gravity, sBomber->SetParameter(&engine::EntityParameter::maxFallSpeed, sBomber->SetParameter(&engine::EntityParameter::speed, 0)));
+            sBomber->SetParameter(&engine::EntityParameter::hp, sBomber->SetParameter(&engine::EntityParameter::maxHp, 200));sBomber->SetVelocity({0,0,0});sBomber->UpdateWorldMatrix(true);
+            sBomber->SetSpawnCallback([scene](std::unique_ptr<BaseEnemy> object){sThrown=dynamic_cast<EnemyBomb*>(object.get());scene->AddObject(std::move(object));});
             scene->AddObject(std::move(created));
-            previous=CameraManager::GetInstance()->GetActiveCameraOverride();camera=std::make_unique<engine::Camera>();camera->Initialize();camera->SetFovY(0.65f);
-            engine::Camera::CameraOverrideParams view;view.duration=0;view.fixedEyePos=base+engine::Vector3{0,4,-13};view.fixedTargetPos=base+engine::Vector3{0,1,0};view.trackTargetX=view.trackTargetY=view.trackTargetZ=false;camera->StartOverride(view);camera->Update();CameraManager::GetInstance()->GetMainCamera()->StartOverride(view);CameraManager::GetInstance()->SetActiveCamera(camera.get());
-            Access::Hold(bomber);phase=2;frames=0;return;
+            sPrevious=CameraManager::GetInstance()->GetActiveCameraOverride();sCamera=std::make_unique<engine::Camera>();sCamera->Initialize();sCamera->SetFovY(0.65f);
+            engine::Camera::CameraOverrideParams view;view.duration=0;view.fixedEyePos=sBase+engine::Vector3{0,4,-13};view.fixedTargetPos=sBase+engine::Vector3{0,1,0};view.trackTargetX=view.trackTargetY=view.trackTargetZ=false;sCamera->StartOverride(view);sCamera->Update();CameraManager::GetInstance()->GetMainCamera()->StartOverride(view);CameraManager::GetInstance()->SetActiveCamera(sCamera.get());
+            Access::Hold(sBomber);sPhase=2;sFrames=0;return;
         }
-        if(phase==2) {
-            auto* held=Access::Held(bomber);Require(held && held->GetIsVisible(),"held bomb disappeared");
-            const auto expected=Access::Expected(bomber);
+        if(sPhase==2) {
+            auto* held=Access::Held(sBomber);Require(held && held->GetIsVisible(),"held bomb disappeared");
+            const auto expected=Access::Expected(sBomber);
             Require(engine::Math::Length(held->GetWorldPosition()-expected)<0.002f,"held bomb did not follow final owner pose");
             auto* resource=held->GetMeshRenderer()->GetWvpResource();void* address=nullptr;D3D12_RANGE range{0,sizeof(engine::MeshRenderer::TransformationMatrix)};
             Require(SUCCEEDED(resource->Map(0,&range,&address)),"held bomb render buffer map failed");engine::MeshRenderer::TransformationMatrix gpu;std::memcpy(&gpu,address,sizeof(gpu));D3D12_RANGE noWrite{0,0};resource->Unmap(0,&noWrite);
             Require(Same(gpu.world,held->GetWorldMatrix()),"held bomb world was not uploaded");
             const auto wvp=engine::Math::Multiply(held->GetWorldMatrix(),CameraManager::GetInstance()->GetActiveCamera()->GetViewProjectionMatrix());
             Require(Same(gpu.wvp,wvp,0.05f),"held bomb camera matrix was stale");
-            if(++frames==8) {
-                initialWvp=gpu.wvp;initialViewProjection=CameraManager::GetInstance()->GetActiveCamera()->GetViewProjectionMatrix();GateEntryRuntimeProbe::Capture(path+".held-camera-a.png");
-                engine::Camera::CameraOverrideParams view;view.duration=0;view.fixedEyePos=base+engine::Vector3{6,5,-11};view.fixedTargetPos=base+engine::Vector3{0,1,0};view.trackTargetX=view.trackTargetY=view.trackTargetZ=false;camera->StartOverride(view);camera->Update();CameraManager::GetInstance()->GetMainCamera()->StartOverride(view);
-                bomber->SetTranslate(base+engine::Vector3{2,0,0});
+            if(++sFrames==8) {
+                sInitialWvp=gpu.wvp;sInitialViewProjection=CameraManager::GetInstance()->GetActiveCamera()->GetViewProjectionMatrix();gateEntryRuntimeProbe::Capture(path+".held-camera-a.png");
+                engine::Camera::CameraOverrideParams view;view.duration=0;view.fixedEyePos=sBase+engine::Vector3{6,5,-11};view.fixedTargetPos=sBase+engine::Vector3{0,1,0};view.trackTargetX=view.trackTargetY=view.trackTargetZ=false;sCamera->StartOverride(view);sCamera->Update();CameraManager::GetInstance()->GetMainCamera()->StartOverride(view);
+                sBomber->SetTranslate(sBase+engine::Vector3{2,0,0});
             }
-            if(frames==16) {
-                Require(!Same(initialViewProjection,CameraManager::GetInstance()->GetActiveCamera()->GetViewProjectionMatrix(),0.01f),"test camera did not move");
-                Require(!Same(initialWvp,gpu.wvp,0.05f),"held bomb stayed fixed on screen after camera moved");
-                GateEntryRuntimeProbe::Capture(path+".held-camera-b.png");
+            if(sFrames==16) {
+                Require(!Same(sInitialViewProjection,CameraManager::GetInstance()->GetActiveCamera()->GetViewProjectionMatrix(),0.01f),"test camera did not move");
+                Require(!Same(sInitialWvp,gpu.wvp,0.05f),"held bomb stayed fixed on screen after camera moved");
+                gateEntryRuntimeProbe::Capture(path+".held-camera-b.png");
                 log<<"PASS held bomb GPU world/WVP follow final owner and moving camera"<<std::endl;
-                Access::Release(bomber);Require(!Access::Held(bomber)->GetIsVisible(),"held model remained after release");Require(thrown && !thrown->IsExploded(),"real bomb did not spawn");release=thrown->GetTranslate();phase=3;frames=0;return;
+                Access::Release(sBomber);Require(!Access::Held(sBomber)->GetIsVisible(),"held model remained after release");Require(sThrown && !sThrown->IsExploded(),"real bomb did not spawn");sRelease=sThrown->GetTranslate();sPhase=3;sFrames=0;return;
             }
-            Access::Hold(bomber);return;
+            Access::Hold(sBomber);return;
         }
-        if(phase==3) {
-            Require(!Access::Held(bomber)->GetIsVisible(),"held model reappeared after throw");
-            if(++frames<15)return;
-            Require(thrown && !thrown->IsExploded() && engine::Math::Length(thrown->GetTranslate()-release)>0.1f,"thrown bomb did not fly in world");
-            GateEntryRuntimeProbe::Capture(path+".thrown.png");
+        if(sPhase==3) {
+            Require(!Access::Held(sBomber)->GetIsVisible(),"held model reappeared after throw");
+            if(++sFrames<15)return;
+            Require(sThrown && !sThrown->IsExploded() && engine::Math::Length(sThrown->GetTranslate()-sRelease)>0.1f,"thrown bomb did not fly in world");
+            gateEntryRuntimeProbe::Capture(path+".thrown.png");
             log<<"PASS release hides held model and launches real world-space bomb"<<std::endl;
             finish("PASS: enemy fireball ground expiry, bomb physics, cannon regression and bomber moving-camera presentation");
         }
-    }catch(const std::exception& error){GateEntryRuntimeProbe::Capture(path+".failed.png");finish(std::string("FAIL: ")+error.what());}
+    }catch(const std::exception& error){gateEntryRuntimeProbe::Capture(path+".failed.png");finish(std::string("FAIL: ")+error.what());}
 }
-} // namespace EnemyProjectileRuntimeProbe
+} // namespace enemyProjectileRuntimeProbe
 #endif

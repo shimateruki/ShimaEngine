@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #ifdef USE_IMGUI
 #include "game/scene/tutorial/TutorialScene.h"
 #include "game/system/tutorial/TutorialDirector.h"
@@ -11,10 +12,11 @@
 #include <stdexcept>
 
 // 専用起動で実シーンを使い、到着・再挑戦・停止・入場演出とGPU描画を確認する。
-namespace TutorialExitGuideRuntimeProbe {
-inline bool Enabled() { static const bool value = GetEnvironmentVariableA("CG2_TUTORIAL_EXIT_GUIDE_TEST", nullptr, 0) > 0; return value; }
+namespace tutorialExitGuideRuntimeProbe {
+inline bool Enabled() { static const bool kValue = GetEnvironmentVariableA("CG2_TUTORIAL_EXIT_GUIDE_TEST", nullptr, 0) > 0; return kValue; }
 inline bool play = false;
 inline bool WantsPlay() { return play; }
+/// <summary>検証コードから案内の更新を呼び出し、チュートリアルの進行と目的地ガイドを参照する。</summary>
 struct Access {
     static TutorialDirector* Director(TutorialScene& scene) { return scene.tutorialDirector_.get(); }
     static void Update(TutorialScene& scene, float deltaTime) { scene.UpdateExitGuide(deltaTime); }
@@ -93,15 +95,15 @@ inline void GenericCases(engine::Object3D& arrow, const std::string& path, std::
 }
 inline void AfterDraw(SceneManager* manager, const std::string& path) {
     static std::ofstream log(path,std::ios::trunc);
-    static int phase=0, frames=0;
-    static bool done=false;
-    static ULONGLONG start=GetTickCount64();
-    auto finish=[&](const std::string& message) { log << message << std::endl; done=true; play=false; WinApp::CloseNow(); };
-    if (done) return;
+    static std::int32_t sPhase=0, sFrames=0;
+    static bool sDone=false;
+    static ULONGLONG sStart=GetTickCount64();
+    auto finish=[&](const std::string& message) { log << message << std::endl; sDone=true; play=false; WinApp::CloseNow(); };
+    if (sDone) return;
     try {
-        Require(GetTickCount64()-start<240000,"tutorial guide loading timeout");
+        Require(GetTickCount64()-sStart<240000,"tutorial guide loading timeout");
         if (manager->IsTransitioning()) return;
-        if (phase==0) { manager->ChangeScene("TUTORIAL"); phase=1; return; }
+        if (sPhase==0) { manager->ChangeScene("TUTORIAL"); sPhase=1; return; }
         auto* scene=dynamic_cast<TutorialScene*>(manager->GetCurrentScene());
         if (!scene || !scene->GetPlayer()) return;
         auto* player=scene->GetPlayer();
@@ -118,8 +120,8 @@ inline void AfterDraw(SceneManager* manager, const std::string& path) {
             player->SetParameter(&engine::EntityParameter::gravity, 0); player->SetCollisionAttribute(0); player->SetCollisionMask(0); player->UpdateWorldMatrix(true);
             Access::Update(*scene,kFixedDeltaTime);
         };
-        if (phase==1) {
-            if (++frames<3) return;
+        if (sPhase==1) {
+            if (++sFrames<3) return;
             Require(!arrow->GetIsVisible(),"guide shown before final tutorial step");
             Require(arrow->GetCollisionAttribute()==0 && arrow->GetCollisionMask()==0 && arrow->IsEditorInternal(),
                     "guide participates in collisions or scene serialization");
@@ -131,14 +133,14 @@ inline void AfterDraw(SceneManager* manager, const std::string& path) {
             prepare(); Require(arrow->GetIsVisible(),"final tutorial step did not show guide");
             auto* camera=CameraManager::GetInstance()->GetActiveCamera();
             const auto p=player->GetWorldPosition();
-            CameraEditor::GetInstance()->SetMode(CameraEditor::Mode::Editor);
+            CameraEditor::GetInstance()->SetMode(CameraEditor::Mode::kEditor);
             camera->SetInputEnabled(false); camera->SetFollowTarget(nullptr);
             camera->SetEye(p+engine::Vector3{-7,9,-12}); camera->SetTarget(p+engine::Vector3{4,1,0}); camera->Update(kFixedDeltaTime);
             log << "OK actual final-step activation; gate at " << gate->GetWorldPosition().x << ',' << gate->GetWorldPosition().y << ',' << gate->GetWorldPosition().z << std::endl;
-            frames=0; phase=2; play=true; return;
+            sFrames=0; sPhase=2; play=true; return;
         }
-        if (phase==2) {
-            if (++frames<12 || !Fade::GetInstance()->IsFinished()) return;
+        if (sPhase==2) {
+            if (++sFrames<12 || !Fade::GetInstance()->IsFinished()) return;
             Require(arrow->GetIsVisible(),"guide disappeared during final-step play");
             auto toGate=gate->GetWorldPosition()-arrow->GetWorldPosition();
             const float length=std::hypot(toGate.x,toGate.z);
@@ -177,7 +179,7 @@ inline void AfterDraw(SceneManager* manager, const std::string& path) {
             Require(arrow->GetIsVisible(),"new tutorial attempt retained arrived state");
             log << "OK actual follow, orientation, pause, death, automatic arrival and restart" << std::endl;
             // 最後に実際のゲート入場を開始し、早期return経路でも矢印が残らないことを確認する。
-            manager->SetIsPlaying(true); player->SetCollisionAttribute(CollisionCategories::Get("player"));
+            manager->SetIsPlaying(true); player->SetCollisionAttribute(engine::collisionCategories::Get("player"));
             Require(gate->OnCollision(player),"gate entry did not start");
             scene->Update(kFixedDeltaTime); Require(!arrow->GetIsVisible(),"gate entry presentation left guide visible");
             finish("PASS: tutorial exit guide visibility, follow, gate direction, arrival latch, pause, death, restart, settings and gate entry");

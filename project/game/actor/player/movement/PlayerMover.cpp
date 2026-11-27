@@ -16,16 +16,17 @@
 #include "game/system/rules/GameplayStatusManager.h"
 #include "engine/utility/math/AnimationInterpolation.h"
 
-// 移動入力と接地状態を統合します。ジャンプ入力はPlayer本体で先に採取し、更新順による取りこぼしを避けます。
+// ジャンプ入力は Player が SampleJumpInput() に先に渡す。Update() はその予約と接地状態を使って速度を決める。
 
 PlayerMover::PlayerMover() = default;
 
 PlayerMover::~PlayerMover() {
-    // 念のためデストラクタでも子の衝突属性を復帰する
+    // プレイヤーを関連付けている場合は、破棄時にも子の衝突属性を復元する。
     if (player_) {
         for (auto& kv : childOriginalAttributes_) {
             engine::Object3D* child = kv.first;
             uint32_t attr = kv.second;
+            // 保存した子の参照が有効な場合だけ、衝突属性を元へ戻す。
             if (child)
                 child->SetCollisionAttribute(attr);
         }
@@ -35,7 +36,7 @@ PlayerMover::~PlayerMover() {
 }
 
 void PlayerMover::StopDashOnImpact() {
-    // 衝突でダッシュが途切れたら、移動速度だけでなく無敵と子の衝突属性も戻す。
+    // ダッシュ中に限り、残り時間・無敵・子の衝突属性を終了状態へ戻す。
     if (!isDashing_) {
         return;
     }
@@ -43,6 +44,7 @@ void PlayerMover::StopDashOnImpact() {
     isDashing_ = false;
     dashTimer_ = 0.0f;
 
+    // プレイヤーが設定済みなら、ダッシュ中だけの無敵を解除する。
     if (player_) {
         player_->SetDashInvincible(false);
     }
@@ -50,6 +52,7 @@ void PlayerMover::StopDashOnImpact() {
     for (auto& kv : childOriginalAttributes_) {
         engine::Object3D* child = kv.first;
 
+        // 復元先の子がある場合だけ、ダッシュ前の衝突属性を書き戻す。
         if (child) {
             child->SetCollisionAttribute(kv.second);
         }
@@ -59,7 +62,6 @@ void PlayerMover::StopDashOnImpact() {
 }
 
 void PlayerMover::ResetTransientState() {
-    // ワープ・演出復帰で前の足場やダッシュの補正を次の場面へ持ち込まない。
     // 乗っていた床や能力の速度を破棄し、次の移動更新では通常の入力速度から計算します。
     platformVelocity_ = {};
     platformAirVelocity_ = {};
@@ -84,30 +86,33 @@ void PlayerMover::ResetTransientState() {
     airborneMaxDownSpeed_ = 0.0f;
     landingDustCooldown_ = 0.0f;
 
+    // プレイヤーが設定済みなら、見た目の溜め量とダッシュ無敵も消す。
     if (player_) {
         player_->SetSlimeJumpCharge(0.0f);
         player_->SetDashInvincible(false);
     }
 }
 
+// プレイヤーと入力・演出の参照を受け取り、標準の3D移動戦略を用意します。
 void PlayerMover::Initialize(Player* player, engine::InputManager* inputManager, engine::ParticleSystem* particleSystem) {
     player_ = player;
     inputManager_ = inputManager;
     particleSystem_ = particleSystem;
 
-    // デフォルト戦略
     strategy_ = std::make_unique<MoveStrategy3D>();
 
-    // 基本スケールを保存 (基準は2.0)
     baseScale_ = {2.0f, 2.0f, 2.0f};
+    // プレイヤーが設定されている場合だけ、基準のスケールを反映する。
     if (player_)
         player_->SetScale(baseScale_);
 }
 
 void PlayerMover::SampleJumpInput(float deltaTime, bool discard) {
     // 操作停止中も予約の寿命を管理し、無効な場面の入力だけを明示的に破棄する。
+    // プレイヤーまたは入力管理が未準備なら、ジャンプ要求を採取できない。
     if (!player_ || !inputManager_)
         return;
+    // 呼び出し側が入力破棄を指示した場合は、接地を調べる前に予約と溜めを消す。
     if (discard) {
         jumpRequest_.Reset();
         isJumpCharging_ = false;
@@ -116,8 +121,10 @@ void PlayerMover::SampleJumpInput(float deltaTime, bool discard) {
         return;
     }
 
+    // 計測時間が有限かつ正の場合だけ、予約の期限や溜めの進行を更新する。
     if (deltaTime <= 0.0f || !std::isfinite(deltaTime))
         return;
+    // 現時点の入力、上昇中でない接地、ピンク形態かどうかを要求管理へ渡す。
     const bool hadRequest = jumpRequest_.BufferRemaining() > 0.0f;
     jumpRequest_.Advance(deltaTime, inputManager_->IsActionPressed("Jump"), inputManager_->IsActionTriggered("Jump"),
                          player_->IsGrounded() && player_->GetVelocity().y <= 0.0f, player_->IsPinkSlimeMorphed());
@@ -126,12 +133,14 @@ void PlayerMover::SampleJumpInput(float deltaTime, bool discard) {
             ? "溜め中"
             : (jumpRequest_.BufferRemaining() > 0.0f ? "入力予約：接地または操作復帰待ち" : "入力待ち／予約期限切れ");
 #ifdef USE_IMGUI
+    // ジャンプ入力が押されたフレームだけ、接地と操作許可の状態を記録する。
     if (inputManager_->IsActionTriggered("Jump")) {
         DebugConsole::GetInstance()->AddLog(std::string("[Jump] 入力受付 / ") +
                                             (player_->IsGrounded() ? "接地" : "空中") +
                                             (player_->IsControlActive() ? " / 操作有効" : " / 操作制限中"));
     }
 
+    // 進める前は予約があり、更新後に残り時間がなくなった場合は期限切れを記録する。
     if (hadRequest && jumpRequest_.BufferRemaining() <= 0.0f) {
         DebugConsole::GetInstance()->AddLog("[Jump] 予約期限切れ：接地または操作復帰が間に合いませんでした");
     }
@@ -140,6 +149,7 @@ void PlayerMover::SampleJumpInput(float deltaTime, bool discard) {
 
 engine::Vector3 PlayerMover::GetMoveInputDirection() {
     // 速度を適用せず、現在の移動戦略と同じカメラ基準の向きだけを攻撃側へ渡す。
+    // 対象または移動戦略がない場合は、移動方向なしを返す。
     if (!player_ || !strategy_) {
         return {};
     }
@@ -152,10 +162,11 @@ engine::Vector3 PlayerMover::GetMoveInputDirection() {
 
 // 水平移動とジャンプ要求を確定します。重力・衝突を含む Character の更新は呼び出し側で行います。
 void PlayerMover::Update(float deltaTime) {
+    // 処理に必要な参照が未準備か、経過秒数が有限かつ正でなければ速度を更新しない。
     if (!player_ || !inputManager_ || !strategy_ || !std::isfinite(deltaTime) || deltaTime <= 0.0f)
         return;
 
-    // 死亡時も落下速度は維持し、水平移動だけ止めます。
+    // HPを参照でき、その値が0以下なら、落下速度を保って水平移動だけ止める。
     if (player_->GetParameters().has_value() && player_->GetParameters()->hp <= 0.0f) {
         engine::Vector3 v = player_->GetVelocity();
         player_->SetVelocity({0.0f, v.y, 0.0f});
@@ -166,20 +177,36 @@ void PlayerMover::Update(float deltaTime) {
     engine::Vector3 velocity = player_->GetVelocity();
 
     const auto attackMovement = player_->GetAttackMovement();
-    engine::Vector3 inputMove = strategy_->CalculateVelocity(player_);
+    const engine::Vector3 inputMove = strategy_->CalculateVelocity(player_);
 
-    // パネルの効果時間を先に減らし、有効なフレームにだけ移動と旋回の倍率を渡す。
-    if (dashPanelTimer_ > 0.0f) {
-        dashPanelTimer_ = (std::max)(0.0f, dashPanelTimer_ - deltaTime);
-    }
-
-    const bool isDashPanelActive = dashPanelTimer_ > 0.0f;
+    // 解除されるまでパネルの移動・旋回倍率を通常移動へ渡す。
+    const bool isDashPanelActive = IsDashPanelBoostActive();
     const float moveSpeedMultiplier = isDashPanelActive ? dashPanelSpeedMultiplier_ : 1.0f;
     const float turnMultiplier = isDashPanelActive ? dashPanelTurnMultiplier_ : 1.0f;
 
-    // ダッシュ中は入力より既存の進行方向を優先し、終了時に通常移動へ戻します。
-    if (isDashing_) {
-        float tRatio = dashTimer_ / currentDashDuration_; // 1.0 -> 0.0
+    // 攻撃の強い硬直へ入ったら通常ダッシュの押し出しを終了し、下の攻撃制限を適用する。
+    if (attackMovement.blocksMovementActions && isDashing_)
+        StopDashOnImpact();
+
+    // パネル中は入力から速度の大きさを作らず、踏んだ向きの前方だけ操舵する。
+    if (isDashPanelActive) {
+        constexpr float kMaxSteeringRadians = 0.52f;
+        constexpr float kFullTurnRadians = 6.28318530718f;
+        if (std::hypot(inputMove.x, inputMove.z) > 0.001f) {
+            const float targetYaw = std::atan2(inputMove.x, inputMove.z);
+            const float relativeYaw = std::remainder(targetYaw - dashPanelEntryYaw_, kFullTurnRadians);
+            // 逆入力では現在の進行を保つ。横入力は最大で約30度まで寄せる。
+            if (std::abs(relativeYaw) <= kFullTurnRadians * 0.25f) {
+                const float steerYaw = dashPanelEntryYaw_ + std::clamp(relativeYaw, -kMaxSteeringRadians, kMaxSteeringRadians);
+                dashPanelYaw_ = animationInterpolation::DampAngle(dashPanelYaw_, steerYaw, 6.5f * turnMultiplier, deltaTime);
+            }
+        }
+        const float speed = player_->GetMoveSpeed() * moveSpeedMultiplier;
+        velocity.x = std::sin(dashPanelYaw_) * speed;
+        velocity.z = std::cos(dashPanelYaw_) * speed;
+    // 通常ダッシュは記録済みの方向へ進み、残り時間の割合の二乗で減速する。
+    } else if (isDashing_) {
+        float tRatio = dashTimer_ / currentDashDuration_;
         float currentSpeed = currentDashSpeed_ * (tRatio * tRatio);
 
         velocity.x = dashDirection_.x * currentSpeed;
@@ -187,10 +214,11 @@ void PlayerMover::Update(float deltaTime) {
 
         dashTimer_ -= deltaTime;
 
-        // 残り時間分の速度を適用し終えてから、ダッシュ状態の終了処理を呼ぶ。
+        // ダッシュ速度の算出後、残り秒数が0以下なら無敵と衝突属性を戻す。
         if (dashTimer_ <= 0.0f) {
             StopDashOnImpact();
         }
+    // 通常移動では、前回加えた外力を除いてから水平速度を組み立てる。
     } else {
         // 前回加えた床・爆風の速度を除き、通常の加速へ外力を二重に持ち込まない。
         {
@@ -201,41 +229,41 @@ void PlayerMover::Update(float deltaTime) {
             velocity.x = removeExternal(velocity.x, previousAddedAirVelocity_.x);
             velocity.z = removeExternal(velocity.z, previousAddedAirVelocity_.z);
         }
+        // 攻撃側が移動制御を有効にしていれば、その地上制限と空中補間を使う。
         if (attackMovement.enabled) {
-            // 攻撃中の地上制限と空中補間は、攻撃側で編集した設定をそのまま優先する。
             velocity = attackMovement.Apply(velocity, inputMove * moveSpeedMultiplier, player_->IsGrounded(), deltaTime);
+        // 攻撃による制御が無ければ、地上・空中の通常加減速を使う。
         } else {
-            // 攻撃による制限がない場合は、現在の操作と地上・空中向けの加速設定から速度を求める。
             const auto& movement = GameplayStatusManager::GetInstance()->GetPlayerLocomotion();
             velocity = movement.Apply(velocity, inputMove * moveSpeedMultiplier,
                                       player_->GetMoveSpeed() * moveSpeedMultiplier, player_->IsGrounded(), deltaTime);
         }
     }
 
-    // ロック中は横移動・後退しても敵を正面に捉えます。遮蔽で照準が無効なら通常の移動方向へ戻します。
+    // 有効なロックオン照準がある場合は、横移動や後退中も照準方向へ向き直す。
     if (player_->HasLockOnAimPoint()) {
         const engine::Vector3 facing = player_->GetLockOnAttackDirection();
         const float targetAngle = std::atan2(facing.x, facing.z);
         const float currentY = player_->GetMoveYaw();
-        player_->SetMoveYaw(AnimationInterpolation::DampAngle(currentY, targetAngle, 18.0f, deltaTime));
+        player_->SetMoveYaw(animationInterpolation::DampAngle(currentY, targetAngle, 18.0f, deltaTime));
+    // ロックオンが無く水平速度が十分なら、ダッシュパネルの旋回倍率込みで進行方向へ向く。
     } else if (std::abs(velocity.x) > 0.001f || std::abs(velocity.z) > 0.001f) {
-        // ロックしていない時の旋回とダッシュパネルの応答は従来どおりにします。
         const float targetAngle = std::atan2(velocity.x, velocity.z);
         const float currentY = player_->GetMoveYaw();
         const float turnResponse = 6.5f * turnMultiplier;
-        player_->SetMoveYaw(AnimationInterpolation::DampAngle(currentY, targetAngle, turnResponse, deltaTime));
+        player_->SetMoveYaw(animationInterpolation::DampAngle(currentY, targetAngle, turnResponse, deltaTime));
     }
 
-    // 空中ダッシュ権は現在の接地で戻し、着地演出は物理更新後に確定します。
     bool isGrounded = player_->IsGrounded();
 
+    // 接地している場合は足場の空中慣性を消し、空中ダッシュを再び使えるようにする。
     if (isGrounded) {
         platformAirVelocity_ = {};
 
         // 離陸直後は接地情報が一フレーム残るため、上昇速度がある間は爆風を消さない。
         if (velocity.y <= 0.0f)
             abilityAirVelocity_ = {};
-        hasAirDashed_ = false; // 地面に着いたら空中ダッシュ権をリセット
+        hasAirDashed_ = false;
     }
 
     // 入力側で判定済みの溜め状態を読み、ピンク形態では溜め量も見た目に反映する。
@@ -244,10 +272,12 @@ void PlayerMover::Update(float deltaTime) {
     jumpChargeTimer_ = jumpRequest_.Charge();
     player_->SetSlimeJumpCharge(jumpChargeTimer_);
 
+    // 溜め中は空中用の変形をアニメーターに指定する。
     if (isJumpCharging_) {
-        player_->SetSlimeAnimationMode(PlayerSlimeAnimator::Mode::Jump);
+        player_->SetSlimeAnimationMode(PlayerSlimeAnimator::Mode::kJump);
 
-        if (!isDashing_) {
+        // ダッシュ中でなければ、溜め中の水平速度を2割に落とす。
+        if (!isDashing_ && !isDashPanelActive) {
             velocity.x *= 0.2f;
             velocity.z *= 0.2f;
         }
@@ -255,8 +285,8 @@ void PlayerMover::Update(float deltaTime) {
 
     float chargeRatio = 0.0f;
 
-    // ジャンプ要求は一度だけ消費し、踏み切りの速度と通知を同じフレームに出す。
-    if (jumpRequest_.Consume(chargeRatio)) {
+    // 攻撃の硬直が明けてから予約とジャンプ権を消費し、上向き速度と踏み切り演出をまとめて出す。
+    if (!attackMovement.blocksMovementActions && jumpRequest_.Consume(chargeRatio)) {
         velocity.y = player_->GetJumpPower() * (usePinkSlimeJumpAbility ? (1.0f + chargeRatio * 0.65f) : 1.0f);
         player_->TriggerSlimeJumpTakeoff();
         player_->IncrementJumpCount();
@@ -269,35 +299,34 @@ void PlayerMover::Update(float deltaTime) {
 #endif
         player_->SetSlimeJumpCharge(0.0f);
 
-        // ピンクの溜めジャンプは専用の踏み切り演出を地表に出し、それ以外は共通の砂煙を使う。
+        // ピンク形態で専用エフェクトを呼べる場合は、地表に踏み切りのリングを出す。
         if (usePinkSlimeJumpAbility && MeshEffectManager::GetInstance()) {
             engine::Vector3 effectPos = GroundEffectLocator::ResolveGroundPosition(player_->GetWorldPosition());
             effectPos.y += 0.08f;
             MeshEffectManager::GetInstance()->SpawnEffectAt(
                 "Resources/json/effect/player/copy/pink/effect_pink_slime_launch_kick_ring.json", effectPos, {0.0f, 0.0f, 0.0f},
                 {1.25f, 0.9f, 1.25f});
+        // 専用リングを使わない場合は、共通のジャンプ砂煙を出す。
         } else {
             EmitGroundDust("player/base/player_jump_dust", 0.035f);
         }
 
-        // 踏み切りでは確定済みの水平速度を保ち、加速途中のジャンプで最高速へ飛ばさない。
 
-        // 下降速度は渡さない。水平の勢いだけを残し、空中操作も維持する。
+        // 踏み切り前の水平速度を保ち、足場速度の水平成分だけを0.55倍して空中へ持ち越す。
         platformAirVelocity_ = platformVelocity_ * 0.55f;
         platformAirVelocity_.y = 0.0f;
         const float carrySpeed = std::sqrt(platformAirVelocity_.x * platformAirVelocity_.x +
                                            platformAirVelocity_.z * platformAirVelocity_.z);
+        // 足場由来の水平速度が24を超える場合は、方向を保ったまま上限へ収める。
         if (carrySpeed > 24.0f)
             platformAirVelocity_ = platformAirVelocity_ * (24.0f / carrySpeed);
         player_->ChangeState(std::make_unique<PlayerStateJump>());
     }
 
-    // 歩行演出で物理ジャンプを発生させない。
-    // 旧ホッピングは接地を途切れさせ、同フレームのジャンプ速度も上書きしていました。
-    // 見た目の伸縮はPlayerSlimeAnimatorが担当します。
+    // 歩行時の伸縮はPlayerSlimeAnimatorが担当し、物理の接地とジャンプ速度を保持する。
 
-    // 足場と能力の勢いはダッシュ以外で合成し、次の通常更新で差し引くために今回の加算量を記録する。
     previousAddedAirVelocity_ = {};
+    // ダッシュ中以外は足場と能力の慣性を速度へ加え、次フレームに取り除く量も記録する。
     if (!isDashing_) {
         previousAddedAirVelocity_ = platformAirVelocity_ + abilityAirVelocity_;
         velocity += platformAirVelocity_;
@@ -312,7 +341,9 @@ void PlayerMover::Update(float deltaTime) {
     player_->SetVelocity(velocity);
 }
 
+// 物理更新後の接地で着地を判定する。prePhysicsVelocityY は衝突で上書きされる前の鉛直速度で、戻り値は見た目用の強度。
 float PlayerMover::UpdateLandingFeedback(float prePhysicsVelocityY, float deltaTime, bool allowFeedback) {
+    // プレイヤーが未設定か経過時間が0以下の場合は着地履歴を進めない。
     if (!player_ || deltaTime <= 0.0f) {
         return 0.0f;
     }
@@ -321,13 +352,14 @@ float PlayerMover::UpdateLandingFeedback(float prePhysicsVelocityY, float deltaT
     landingDustCooldown_ = (std::max)(0.0f, landingDustCooldown_ - deltaTime);
     const bool grounded = player_->IsGrounded();
     const float downwardSpeed = (std::max)({-prePhysicsVelocityY, -player_->GetVelocity().y, 0.0f});
+    // まだ空中にいれば、滞空秒数と最大の下降速度を記録する。
     if (!grounded) {
         airborneDuration_ += deltaTime;
         airborneMaxDownSpeed_ = (std::max)(airborneMaxDownSpeed_, downwardSpeed);
     }
 
-    // 前回まで空中だったフレームから接地に変わった時だけ、演出へ渡す着地の強さを計算する。
     float impactRate = 0.0f;
+    // 演出が許可され、接地履歴を持ち、0.06秒以上の空中状態から接地に変わった場合にだけ着地強度を求める。
     if (allowFeedback && hasGroundedHistory_ && !wasGroundedLastFrame_ && grounded &&
         airborneDuration_ >= 0.06f) {
         // 衝突解決がPlayer更新後に行われても、前フレームの下降速度を失わないようにします。
@@ -336,13 +368,14 @@ float PlayerMover::UpdateLandingFeedback(float prePhysicsVelocityY, float deltaT
         // 小さな着地を切り捨てるしきい値を引き、現在のジャンプ初速を基準に演出用の強度へ換算します。
         const float impactRange = (std::max)(jumpPower - 3.5f, 1.0f);
         impactRate = std::clamp((impactSpeed - 3.5f) / impactRange, 0.0f, 1.65f);
+        // 着地強度が0.18以上で再発生の待機時間も終わっていれば、砂煙を出す。
         if (impactRate >= 0.18f && landingDustCooldown_ <= 0.0f) {
             EmitGroundDust("shared/player_land_dust", 0.035f);
             landingDustCooldown_ = 0.12f;
         }
     }
 
-    // 今回の着地判定に使った滞空履歴を捨て、次に地面を離れる時点から集め直す。
+    // 接地した場合は空中の計測値を消し、次に地面を離れる時点から集め直す。
     if (grounded) {
         airborneDuration_ = 0.0f;
         airborneMaxDownSpeed_ = 0.0f;
@@ -353,14 +386,16 @@ float PlayerMover::UpdateLandingFeedback(float prePhysicsVelocityY, float deltaT
 }
 
 void PlayerMover::EmitGroundDust(const char* presetName, float yOffset) const {
-    // プレイヤー中心ではなく接地面から発生させ、段差やジャンプ時の浮きを防ぐ。
+    // 対象のプレイヤーか粒子設定名が無ければ、発生位置と粒子を決定できない。
     if (!player_ || !presetName)
         return;
 
     GpuParticleManager* particleManager = GpuParticleManager::GetInstance();
+    // GPU粒子の管理が未初期化なら、砂煙の発生要求を送らない。
     if (!particleManager || !particleManager->IsInitialized())
         return;
 
+    // プレイヤーの中心位置から接地面を求め、指定の高さを足して粒子を出す。
     engine::Vector3 emitPos = GroundEffectLocator::ResolveGroundPosition(player_->GetWorldPosition());
     emitPos.y += yOffset;
     particleManager->Emit(presetName, emitPos);
@@ -371,40 +406,52 @@ void PlayerMover::SetStrategy(std::unique_ptr<IMoveStrategy> strategy) {
     strategy_ = std::move(strategy);
 }
 
+// ダッシュパネルの加速と旋回倍率を等倍へ戻します。
 void PlayerMover::CancelDashPanelBoost() {
-    dashPanelTimer_ = 0.0f;
+    dashPanelBoostActive_ = false;
     dashPanelSpeedMultiplier_ = 1.0f;
     dashPanelTurnMultiplier_ = 1.0f;
 }
 
-void PlayerMover::ApplyDashPanelBoost(float duration, float speedMultiplier, float turnMultiplier) {
-    // 連続してパネルを踏んでも効果時間は短縮せず、速度だけ不足分を補う。
-    dashPanelTimer_ = (std::max)(dashPanelTimer_, duration);
+void PlayerMover::ApplyDashPanelBoost(float speedMultiplier, float turnMultiplier) {
+    // 同じパネルとの接触が続いても進行基準を取り直さず、操舵範囲を維持する。
+    const bool starting = !dashPanelBoostActive_;
+    dashPanelBoostActive_ = true;
     dashPanelSpeedMultiplier_ = (std::max)(1.0f, speedMultiplier);
     dashPanelTurnMultiplier_ = std::clamp(turnMultiplier, 0.05f, 1.0f);
+    if (starting && player_) {
+        StopDashOnImpact();
+        const auto velocity = player_->GetVelocity();
+        dashPanelEntryYaw_ = std::hypot(velocity.x, velocity.z) > 0.05f
+            ? std::atan2(velocity.x, velocity.z) : player_->GetMoveYaw();
+        dashPanelYaw_ = dashPanelEntryYaw_;
+    }
 
+    // プレイヤーが未設定なら倍率だけ保存し、現在速度へは適用しない。
     if (!player_)
         return;
 
-    engine::Vector3 velocity = player_->GetVelocity();
-    float horizontalSpeed = std::sqrt(velocity.x * velocity.x + velocity.z * velocity.z);
-    float targetSpeed = player_->GetMoveSpeed() * dashPanelSpeedMultiplier_;
-    if (horizontalSpeed >= targetSpeed)
+    // 踏んだ瞬間だけ速度を入れる。被弾中は吹き飛びを優先し、復帰後にUpdate()が再開する。
+    if (!starting || !player_->IsControlActive())
         return;
-
-    // 動いている間は現在の進行方向を保ち、ほぼ停止している場合だけ向いている方へ加速します。
-    engine::Vector3 dir{};
-
-    if (horizontalSpeed > 0.05f) {
-        dir.x = velocity.x / horizontalSpeed;
-        dir.z = velocity.z / horizontalSpeed;
-    } else {
-        float yaw = player_->GetMoveYaw();
-        dir.x = std::sin(yaw);
-        dir.z = std::cos(yaw);
-    }
-
-    velocity.x = dir.x * targetSpeed;
-    velocity.z = dir.z * targetSpeed;
+    auto velocity = player_->GetVelocity();
+    const float speed = (std::max)(std::hypot(velocity.x, velocity.z), player_->GetMoveSpeed() * dashPanelSpeedMultiplier_);
+    velocity.x = std::sin(dashPanelYaw_) * speed;
+    velocity.z = std::cos(dashPanelYaw_) * speed;
     player_->SetVelocity(velocity);
+}
+
+bool PlayerMover::IsDashPanelWall(const engine::Vector3& normal) const {
+    // 上下面や坂、ほぼ平行な壁沿いの接触は停止の原因にしない。
+    if (!dashPanelBoostActive_ || std::abs(normal.y) >= 0.60f)
+        return false;
+    return std::sin(dashPanelYaw_) * normal.x + std::cos(dashPanelYaw_) * normal.z
+        < -0.20f * std::hypot(normal.x, normal.z);
+}
+
+void PlayerMover::StopDashPanelAtWall() {
+    // 壁接触で残る接線方向の速度も止める。ジャンプや落下の縦速度は保持する。
+    CancelDashPanelBoost();
+    if (player_)
+        player_->SetVelocity({0.0f, player_->GetVelocity().y, 0.0f});
 }

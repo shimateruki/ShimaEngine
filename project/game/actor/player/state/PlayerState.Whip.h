@@ -115,7 +115,7 @@ private:
     void BeginRecovery();
     void CollectCandidates(Player* player);
     // 捕捉候補の借用参照と探索時の境界。specialは箱境界だけで候補を除外できない形状を示す。
-    struct QueryCandidate { const engine::Object3D* object; Aabb bounds; bool special; };
+    struct QueryCandidate { const engine::Object3D* object; engine::Aabb bounds; bool special; };
     std::vector<QueryCandidate> queryCandidates_;
     PlayerWhipSettings settings_;
     engine::Vector3 origin_{};

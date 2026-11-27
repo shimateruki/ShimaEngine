@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "c4b22a4eda68c0405a56e58a6d91fb33",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/sprite/ui/result/clear/japanese/digits_light.png",
+  "version": 1
+}

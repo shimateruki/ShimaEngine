@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "Sprite.h"
 #include "DirectXCommon.h"
 #include "WinApp.h"
@@ -17,7 +18,7 @@ std::atomic<uint64_t> gNextSpriteReplayId{ 0x8000000000000001ull };
 engine::Matrix4x4 MakeSpriteLocalMatrix(const Sprite* sprite) {
 	// Sprite未指定時も親子行列の計算に使える単位姿勢を返す。
 	engine::Math math;
-	engine::Vector2 position = sprite ? sprite->GetPosition() : engine::Vector2::ZERO;
+	engine::Vector2 position = sprite ? sprite->GetPosition() : engine::Vector2::kZero;
 	float rotation = sprite ? sprite->GetRotation() : 0.0f;
 	return math.MakeAffineMatrix(
 		{ 1.0f, 1.0f, 1.0f },
@@ -31,6 +32,7 @@ engine::Matrix4x4 MakeSpriteWorldMatrix(const Sprite* sprite) {
 	engine::Matrix4x4 localMatrix = MakeSpriteLocalMatrix(sprite);
 	Sprite* parent = sprite ? sprite->GetParent() : nullptr;
 
+	// 親がなければローカル変換がそのまま画面上の変換になる。
 	if (!parent) {
 		return localMatrix;
 	}
@@ -41,6 +43,7 @@ engine::Matrix4x4 MakeSpriteWorldMatrix(const Sprite* sprite) {
 // 親Spriteの連鎖に指定対象が含まれるか確認し、親子循環を防ぎます。
 bool HasParentInChain(Sprite* sprite, const Sprite* parent) {
 	for (Sprite* current = sprite; current != nullptr; current = current->GetParent()) {
+		// たどった親の一つが指定のSpriteなら、親子の循環を作る指定として検出する。
 		if (current == parent) {
 			return true;
 		}
@@ -51,14 +54,16 @@ bool HasParentInChain(Sprite* sprite, const Sprite* parent) {
 
 // テクスチャ未指定時は白DDS、取得できなければ白PNGのハンドルを返します。
 uint32_t ResolveSpriteTextureHandle(uint32_t textureHandle) {
+	// 画像ハンドルが指定されていれば、その画像を優先する。
 	if (textureHandle != 0) {
 		return textureHandle;
 	}
 
 	// 未指定テクスチャは白画像で描き、DDSがない環境ではPNGへフォールバックする。
-	TextureManager* textureManager = TextureManager::GetInstance();
+	engine::TextureManager* textureManager = engine::TextureManager::GetInstance();
 	uint32_t fallback = textureManager->Load("Resources/sprite/common/white.dds", false, false);
 
+	// 白DDSを取得できなかった場合だけ白PNGを読み込む。
 	if (fallback == 0) {
 		fallback = textureManager->Load("Resources/sprite/common/white.png", false, false);
 	}
@@ -72,6 +77,7 @@ Sprite::~Sprite() {
 	SetParent(nullptr, false);
 
 	for (Sprite* child : children_) {
+		// まだ有効な子の親参照を解除し、破棄するSpriteが残らないようにする。
 		if (child) {
 			child->parent_ = nullptr;
 		}
@@ -80,17 +86,13 @@ Sprite::~Sprite() {
 	children_.clear();
 }
 
-/// <summary>
-/// 初期化 (ファイルパス指定)
-/// </summary>
+// 画像をファイルから読み込み、ハンドルを使う共通の初期化へ進む。
 void Sprite::Initialize(engine::SpriteCommon* common, const std::string& textureFilePath) {
-	uint32_t handle = TextureManager::GetInstance()->Load(textureFilePath);
+	uint32_t handle = engine::TextureManager::GetInstance()->Load(textureFilePath);
 	Initialize(common, handle);
 }
 
-/// <summary>
-/// 初期化 (テクスチャハンドル指定)
-/// </summary>
+// 共有描画機能を借り、画像と矩形のGPU資源を作る。初期化に失敗した資源がある場合は非表示にする。
 void Sprite::Initialize(engine::SpriteCommon* common, uint32_t textureHandle) {
 	assert(common);
 	common_ = common;
@@ -98,6 +100,7 @@ void Sprite::Initialize(engine::SpriteCommon* common, uint32_t textureHandle) {
 
 	textureHandle_ = ResolveSpriteTextureHandle(textureHandle);
 
+	// 画像ハンドルを取得できた場合は画像全体の寸法を初期表示に使う。
 	if (textureHandle_ != 0) {
 		AdjustTextureSize(); // テクスチャサイズに合わせてスプライトのサイズも調整
 	}
@@ -113,6 +116,7 @@ void Sprite::Initialize(engine::SpriteCommon* common, uint32_t textureHandle) {
 	wvpData_ = nullptr;
 	materialData_ = nullptr;
 	vertexResource_ = dxCommon_->CreateBufferResource(sizeof(VertexData) * 4);
+	// 頂点バッファを作成またはマップできなければ、矩形の位置を更新できないため非表示で終了する。
 	if (!vertexResource_ || FAILED(vertexResource_->Map(0, nullptr, reinterpret_cast<void**>(&vertexData_))) || !vertexData_) {
 		isVisible_ = false;
 		return;
@@ -121,6 +125,7 @@ void Sprite::Initialize(engine::SpriteCommon* common, uint32_t textureHandle) {
 
 	indexResource_ = dxCommon_->CreateBufferResource(sizeof(uint32_t) * 6);
 	uint32_t* indexData = nullptr; // マッピング用のポインタ
+	// インデックスの書き込み先が使えなければ、矩形を構成する三角形を登録できない。
 	if (!indexResource_ || FAILED(indexResource_->Map(0, nullptr, reinterpret_cast<void**>(&indexData))) || !indexData) {
 		isVisible_ = false;
 		return;
@@ -136,6 +141,7 @@ void Sprite::Initialize(engine::SpriteCommon* common, uint32_t textureHandle) {
 
 	// 頂点位置と別に、階層変換・投影とマテリアル色をGPUへ渡す。
 	wvpResource_ = dxCommon_->CreateBufferResource(sizeof(TransformationMatrix));
+	// 変換の定数バッファが使えない場合は、描画に必要な行列を書き込む前に終了する。
 	if (!wvpResource_ || FAILED(wvpResource_->Map(0, nullptr, reinterpret_cast<void**>(&wvpData_))) || !wvpData_) {
 		isVisible_ = false;
 		return;
@@ -146,18 +152,17 @@ void Sprite::Initialize(engine::SpriteCommon* common, uint32_t textureHandle) {
 	wvpData_->world = math.MakeIdentity4x4();
 
 	materialResource_ = dxCommon_->CreateBufferResource(sizeof(Material));
+	// マテリアルの定数バッファが使えない場合は、色や発光を設定できないため非表示にする。
 	if (!materialResource_ || FAILED(materialResource_->Map(0, nullptr, reinterpret_cast<void**>(&materialData_))) || !materialData_) {
 		isVisible_ = false;
 		return;
 	}
 	color_ = { 1.0f, 1.0f, 1.0f, 1.0f };
-	materialData_->color = engine::ColorSpace::AuthoringToWorking(color_);
+	materialData_->color = engine::colorSpace::AuthoringToWorking(color_);
 	materialData_->emissive = 1.0f;
 }
 
-/// <summary>
-/// 更新処理
-/// </summary>
+// 再生中のコマ、アンカーからの矩形、親子変換を更新し、描画用バッファへ書き込む。
 void Sprite::Update() {
 	// GPU資源の生成やMapが失敗したSpriteは頂点へ書き込めない。死亡演出などからの直接更新も安全に抜ける。
 	if (!vertexResource_ || !indexResource_ || !wvpResource_ || !materialResource_ ||
@@ -165,9 +170,9 @@ void Sprite::Update() {
 		isVisible_ = false;
 		return;
 	}
-	// 編集用の色を作業色空間へ変換してからGPUデータへ反映する。
+	// マップ済みのマテリアルに、編集色を作業色空間へ変換して書き込む。
 	if (materialData_) {
-		materialData_->color = engine::ColorSpace::AuthoringToWorking(color_);
+		materialData_->color = engine::colorSpace::AuthoringToWorking(color_);
 	}
 
 	// 横一列のスプライトシートを想定し、現在フレームのUV範囲を更新する。
@@ -175,14 +180,18 @@ void Sprite::Update() {
 		// このアニメーションは呼び出し一回を1/60秒として進める。
 		animationTimer_ += 1.0f / 60.0f;
 
+		// 1コマの時間に達した更新で次のコマへ進み、このアニメーションの蓄積を0へ戻す。
 		if (animationTimer_ >= frameDuration_) {
 			// 最終フレームを越えたらループか停止を選ぶ。
 			currentFrame_++;
 			animationTimer_ = 0.0f; // タイマーリセット
 
+			// 最後のコマを越えた場合だけ、繰り返しの設定を調べる。
 			if (currentFrame_ >= totalFrames_) {
+				// ループ設定ではフレーム番号を0へ戻す。
 				if (isLooping_) {
 					currentFrame_ = 0; // ループするなら最初に戻る
+				// ループしない設定では最後のコマを残して再生を止める。
 				} else {
 					currentFrame_ = totalFrames_ - 1; // ループしないなら最後のフレームで止める
 					isPlaying_ = false;
@@ -204,10 +213,12 @@ void Sprite::Update() {
 		float top = (0.0f - anchorPoint_.y) * size_.y;
 		float bottom = (1.0f - anchorPoint_.y) * size_.y;
 
+		// X軸反転を指定されたら、UVを保ったまま矩形の左右の頂点を交換する。
 		if (isFlipX_) {
 			std::swap(left, right);
 		}
 
+		// Y軸反転を指定されたら、矩形の上下の頂点を交換する。
 		if (isFlipY_) {
 			std::swap(top, bottom);
 		}
@@ -221,11 +232,12 @@ void Sprite::Update() {
 
 	// テクスチャ矩形を画像全体の大きさで割り、GPU用の正規化UVへ変換する。
 	{
+		// 画像ハンドルが0なら、寸法を参照できないためUVと行列の更新を省く。
 		if (textureHandle_ == 0) {
 			return;
 		}
 
-		const DirectX::TexMetadata& metadata = TextureManager::GetInstance()->GetMetadata(textureHandle_);
+		const DirectX::TexMetadata& metadata = engine::TextureManager::GetInstance()->GetMetadata(textureHandle_);
 		float texWidth = (float)metadata.width;
 		float texHeight = (float)metadata.height;
 		float texLeft = textureLeftTop_.x / texWidth;
@@ -253,26 +265,29 @@ void Sprite::Update() {
 	materialData_->uvTransform = math.MakeIdentity4x4();
 }
 
+// 編集用の色を保持し、描画資源があれば作業色空間へ変換して送る。
 void Sprite::SetColor(const engine::Vector4& color) {
 	color_ = color;
 
+	// マテリアルがマップ済みなら、その場でGPUに渡す色にも反映する。
 	if (materialData_) {
-		materialData_->color = engine::ColorSpace::AuthoringToWorking(color_);
+		materialData_->color = engine::colorSpace::AuthoringToWorking(color_);
 	}
 }
 
-/// <summary>
-/// 描画
-/// </summary>
+// 表示可能なSpriteの矩形を現在のコマンドリストへ記録し、描画統計を更新する。
 void Sprite::Draw() {
-	// リプレイからの削除状態も含め、描画不能なSpriteはGPUコマンドを出さない。
+	// 共有描画機能を取得できていない場合は、コマンドリストを取得しない。
 	if (!common_ || !dxCommon_)
 		return;
 	assert(common_);
+	// 非表示、リプレイから除外済み、画像なしのいずれかなら描画を行わない。
 	if (!isVisible_ || replayRemoved_ || textureHandle_ == 0)
 		return;
+	// 頂点・インデックス・行列・マテリアルのGPU資源が揃っていなければ描画を省く。
 	if (!vertexResource_ || !indexResource_ || !wvpResource_ || !materialResource_)
 		return;
+	// CPUから更新する頂点とマテリアルのポインターが取得済みであることも確認する。
 	if (!vertexData_ || !materialData_)
 		return;
 	ID3D12GraphicsCommandList* commandList = dxCommon_->GetCommandList();
@@ -283,32 +298,28 @@ void Sprite::Draw() {
 	commandList->IASetIndexBuffer(&indexBufferView_);
 	commandList->SetGraphicsRootConstantBufferView(0, wvpResource_->GetGPUVirtualAddress());
 	commandList->SetGraphicsRootConstantBufferView(1, materialResource_->GetGPUVirtualAddress());
-	SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 2, textureHandle_);
+	engine::SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 2, textureHandle_);
 	commandList->DrawIndexedInstanced(6, 1, 0, 0, 0);
 	engine::RenderStats::GetInstance()->RecordIndexedDraw(6);
 }
 
-/// <summary>
-/// テクスチャサイズに合わせてスプライトのサイズを調整する
-/// </summary>
+// 画像全体を使うよう、表示サイズと切り出し範囲を初期化する。
 void Sprite::AdjustTextureSize() {
-	// 未設定のテクスチャでも後続のUV計算がゼロ除算にならない寸法を保持する。
+	// 画像ハンドルが無効なら、画像情報を参照せず1×1の初期寸法を使う。
 	if (textureHandle_ == 0) {
 		size_ = { 1.0f, 1.0f };
 		textureSize_ = { 1.0f, 1.0f };
 		return;
 	}
 
-	const DirectX::TexMetadata& metadata = TextureManager::GetInstance()->GetMetadata(textureHandle_);
+	const DirectX::TexMetadata& metadata = engine::TextureManager::GetInstance()->GetMetadata(textureHandle_);
 	size_ = { (float)metadata.width, (float)metadata.height };
 	textureSize_ = { (float)metadata.width, (float)metadata.height };
 }
 
-/// <summary>
-/// テクスチャ読み込みの静的ラッパー関数 (ファイルパス省略版)
-/// </summary>
+// Sprite配置用の画像パスを解決し、TextureManagerが返すハンドルを返す。
 uint32_t Sprite::LoadTexture(const std::string& fileName) {
-	return TextureManager::GetInstance()->Load(ResolveTexturePath(fileName));
+	return engine::TextureManager::GetInstance()->Load(ResolveTexturePath(fileName));
 }
 
 std::string Sprite::ResolveTexturePath(const std::string& fileName) {
@@ -316,6 +327,7 @@ std::string Sprite::ResolveTexturePath(const std::string& fileName) {
 	std::string path = fileName;
 	std::replace(path.begin(), path.end(), '\\', '/');
 
+	// 先頭の./を繰り返し外し、リソースの判定に使うパスを揃える。
 	while (path.rfind("./", 0) == 0) {
 		path.erase(0, 2);
 	}
@@ -324,10 +336,9 @@ std::string Sprite::ResolveTexturePath(const std::string& fileName) {
 }
 
 
-/// <summary>
-/// アニメーションの設定
-/// </summary>
-void Sprite::SetAnimation(int frameCount, float duration, bool loop) {
+// 横一列の画像を指定コマ数で分け、再生を止めた状態の初期矩形を用意する。
+void Sprite::SetAnimation(std::int32_t frameCount, float duration, bool loop) {
+	// 画像が未設定なら、コマ寸法を取得できないため今の設定を保つ。
 	if (textureHandle_ == 0)
 		return;
 
@@ -339,33 +350,29 @@ void Sprite::SetAnimation(int frameCount, float duration, bool loop) {
 	currentFrame_ = 0;
 	animationTimer_ = 0.0f;
 
-	// 1フレームのサイズを計算
-	const DirectX::TexMetadata& metadata = TextureManager::GetInstance()->GetMetadata(textureHandle_);
-	frameWidth_ = (int)metadata.width / totalFrames_;
-	frameHeight_ = (int)metadata.height;
+	// 画像の横幅をコマ数で整数除算し、各コマには画像全体の高さを使う。
+	const DirectX::TexMetadata& metadata = engine::TextureManager::GetInstance()->GetMetadata(textureHandle_);
+	frameWidth_ = (std::int32_t)metadata.width / totalFrames_;
+	frameHeight_ = (std::int32_t)metadata.height;
 
 	// テクスチャの初期表示範囲とスプライト自体のサイズを1フレーム分に設定
 	SetTextureRect({ 0.0f, 0.0f }, { (float)frameWidth_, (float)frameHeight_ });
 	SetSize({ (float)frameWidth_, (float)frameHeight_ });
 }
 
-/// <summary>
-/// アニメーションの再生を開始
-/// </summary>
-// 停止位置からの再開ではなく、先頭のコマへ戻して再生を始める。
+// 再生フラグを立て、先頭のコマと0秒から始める。
 void Sprite::Play() {
 	isPlaying_ = true;
 	currentFrame_ = 0;
 	animationTimer_ = 0.0f;
 }
 
-/// <summary>
-/// アニメーションを停止
-/// </summary>
+// 再生を止め、現在のコマと表示範囲を保持する。
 void Sprite::Stop() {
 	isPlaying_ = false;
 }
 
+// 未発行の場合にだけリプレイIDを割り当て、取得済みの同じIDを返す。
 uint64_t Sprite::EnsureReplayId() {
 	if (replayId_ == 0) {
 		// 再生用IDは重複しない番号を発行するだけなので、他のSprite状態の同期には使いません。
@@ -375,6 +382,7 @@ uint64_t Sprite::EnsureReplayId() {
 	return replayId_;
 }
 
+// 表示、アニメーション進行、親のリプレイIDをまとめて取得する。
 Sprite::ReplayState Sprite::CaptureReplayState() const {
 	ReplayState state;
 
@@ -402,6 +410,7 @@ Sprite::ReplayState Sprite::CaptureReplayState() const {
 	state.frameWidth = frameWidth_;
 	state.frameHeight = frameHeight_;
 
+	// 親があれば、復元時の接続に使う親のIDを割り当てて記録する。
 	state.parentReplayId = parent_ ? parent_->EnsureReplayId() : 0;
 	state.replayRemoved = replayRemoved_;
 	return state;
@@ -454,6 +463,7 @@ void Sprite::SetParent(Sprite* parent, bool keepWorldPosition) {
 	// 親変更前の表示位置を保存し、必要なら新しい親のローカル座標へ換算する。
 	engine::Vector2 worldPosition = GetWorldPosition();
 
+	// 旧親がある場合は、その子一覧からこのSpriteを外す。
 	if (parent_) {
 		auto& siblings = parent_->children_;
 		siblings.erase(std::remove(siblings.begin(), siblings.end(), this), siblings.end());
@@ -461,15 +471,19 @@ void Sprite::SetParent(Sprite* parent, bool keepWorldPosition) {
 
 	parent_ = parent;
 
+	// 新しい親がある場合は、その子一覧へ登録する。
 	if (parent_) {
 		auto& siblings = parent_->children_;
 
+		// 登録済みの参照を重複して追加しないよう確認する。
 		if (std::find(siblings.begin(), siblings.end(), this) == siblings.end()) {
 			siblings.push_back(this);
 		}
 	}
 
+	// 表示位置を維持する指定の場合にだけ、新しい親を基準に位置を変換する。
 	if (keepWorldPosition) {
+		// 新しい親がある場合は、逆変換で元の画面上の位置を保つ。
 		if (parent_) {
 			engine::Math math;
 			engine::Matrix4x4 parentWorld = MakeSpriteWorldMatrix(parent_);
@@ -477,12 +491,14 @@ void Sprite::SetParent(Sprite* parent, bool keepWorldPosition) {
 			engine::Matrix4x4 inverseParent = math.Inverse(parentWorld);
 			engine::Vector3 local = math.Transform({ worldPosition.x, worldPosition.y, 0.0f }, inverseParent);
 			position_ = { local.x, local.y };
+		// 親を外した場合は、元の画面上の位置をローカル位置として使う。
 		} else {
 			position_ = worldPosition;
 		}
 	}
 }
 
+// 自分と親の変換を反映したアンカーの画面上のピクセル座標を返す。
 engine::Vector2 Sprite::GetWorldPosition() const {
 	engine::Math math;
 	engine::Vector3 world = math.Transform({ 0.0f, 0.0f, 0.0f }, MakeSpriteWorldMatrix(this));

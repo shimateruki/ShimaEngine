@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "game/actor/enemy/combat/EnemyAttackSelection.h"
 
 #include "BaseEnemy.h"
@@ -15,7 +16,7 @@ class BossChantVisual;
 
 /// <summary>ステージ3の最終ボス。3形態の攻撃と王冠ギミックを管理します。</summary>
 // 関連：BaseEnemyの戦闘基盤を使い、登場・戦闘・撃破と王冠封印をシーンの演出へ接続する。
-// 主な入口：Initialize / Update / SetIntroPresentationActive
+// 主な入口はInitialize()・Update()。シーンとの登場の受け渡しはSetIntroPresentationActive()で行う。
 class EnemyFalseKingSlime final : public BaseEnemy {
   public:
     /// <summary>ボスの攻撃選択と形態遷移の初期状態を作る。</summary>
@@ -27,7 +28,7 @@ class EnemyFalseKingSlime final : public BaseEnemy {
     /// <summary>モデル、攻撃プロファイル、初期姿勢と演出資源を準備する。</summary>
     void Initialize(engine::Object3DCommon* common, const std::string& modelName) override;
 
-    /// <summary>登場、形態遷移、攻撃、撃破の各状態を進める。</summary>
+    /// <summary>専用演出や戦闘状態を先に進め、その結果で通常時のオーラを更新する。deltaTimeは秒。</summary>
     void Update(float deltaTime) override;
 
     /// <summary>ボス本体と所有する攻撃表示物を描画する。</summary>
@@ -35,22 +36,22 @@ class EnemyFalseKingSlime final : public BaseEnemy {
 
     /// <summary>指定カメラ向けにボス本体と攻撃表示物を描画する。</summary>
     void DrawForCamera(engine::Camera* camera, ID3D12Resource* pointLightResource, ID3D12Resource* spotLightResource,
-                       int previewBufferIndex = 0) override;
+                       std::int32_t previewBufferIndex = 0) override;
 
     /// <summary>床の描画後に、所有する加算・半透明の攻撃表示物を描く。</summary>
     void DrawOwnedTransparentVisuals(ID3D12Resource* pointLightResource, ID3D12Resource* spotLightResource) override;
 
     /// <summary>指定カメラの半透明パスへ所有する攻撃表示物を描く。</summary>
     void DrawOwnedTransparentVisualsForCamera(engine::Camera* camera, ID3D12Resource* pointLightResource,
-                                              ID3D12Resource* spotLightResource, int previewBufferIndex = 0) override;
+                                              ID3D12Resource* spotLightResource, std::int32_t previewBufferIndex = 0) override;
 
-    /// <summary>スイッチイベントを受け、ボスの有効状態を切り替える。</summary>
+    /// <summary>遭遇管理を使う場合は起動で待機から登場へ進み、停止で待機に戻る。それ以外はBaseEnemyへ渡す。</summary>
     void OnSwitchEvent(bool active) override;
 
     /// <summary>Editor配置用にボスの設定を複製する。</summary>
     std::unique_ptr<engine::Object3D> Clone() const override;
 
-    /// <summary>管理スケールをボス本体と関連表示へ適用する。</summary>
+    /// <summary>本体とアニメーションの基準倍率を変更し、この倍率で衝突範囲を同期する。</summary>
     void ApplyManagedScale(const engine::Vector3& scale) override;
 
     /// <summary>フック命中による持ち運びを拒否する。</summary>
@@ -64,7 +65,7 @@ class EnemyFalseKingSlime final : public BaseEnemy {
 
     /// <summary>指定カメラ向けに所有表示物の特殊マテリアルパスを描画する。</summary>
     void DrawOwnedSpecialMaterialVisualsForCamera(engine::Camera* camera, uint32_t depthSrvHandle, uint32_t grabSrvHandle,
-                                                  int previewBufferIndex = 0) override;
+                                                  std::int32_t previewBufferIndex = 0) override;
 
     /// <summary>敵攻撃プレビューで指定技だけを繰り返します。</summary>
     /// <param name="attackId">攻撃プロファイルのID。空文字で通常AIに戻します。</param>
@@ -79,20 +80,20 @@ class EnemyFalseKingSlime final : public BaseEnemy {
     /// <summary>現在表示されている攻撃演出Objectの数を返す。</summary>
     size_t GetDebugVisibleAttackVisualCount() const;
 
-    /// <summary>戦闘HUDを表示すべき交戦段階か返す。</summary>
+    /// <summary>遭遇管理対象かつ生存中で、登場中または戦闘開始済みならHUDを表示する。</summary>
     bool IsEncounterHudActive() const;
 
-    /// <summary>戦闘HUDに表示する現在HPを返す。</summary>
+    /// <summary>HUDに表示する現在HPを0以上で返す。パラメーター未設定は0。</summary>
     float GetEncounterCurrentHp() const;
 
-    /// <summary>戦闘HUDに表示する最大HPを返す。</summary>
+    /// <summary>HPバーの分母となる最大HPを1以上で返す。パラメーター未設定は1。</summary>
     float GetEncounterMaximumHp() const;
 
-    /// <summary>登場演出の進行率を返す。</summary>
+    /// <summary>登場の進行率を0～1で返す。待機は0、戦闘開始済みは1。</summary>
     float GetEncounterAppearanceProgress() const;
 
     /// <summary>現在の戦闘形態番号を返す。</summary>
-    int GetBattlePhase() const { return battlePhase_; }
+    std::int32_t GetBattlePhase() const { return battlePhase_; }
 
     /// <summary>形態切り替え演出の進行率を返す。</summary>
     float GetPhaseTransitionProgress() const;
@@ -109,17 +110,19 @@ class EnemyFalseKingSlime final : public BaseEnemy {
     /// <summary>最終撃破をデバッグ開始できるか返す。</summary>
     bool CanTriggerDebugFinalDefeat() const;
 
-    /// <summary>条件を満たす場合に第2形態へデバッグ遷移する。</summary>
+    /// <summary>条件が揃ったときに、UpdateState()で第2形態へ移るデバッグ要求を予約する。</summary>
     void TriggerDebugPhaseTwoTransition();
 
-    /// <summary>条件を満たす場合に王冠封印の幕間をデバッグ開始する。</summary>
+    /// <summary>条件が揃ったときに、UpdateState()で王冠封印の幕間へ進むデバッグ要求を予約する。</summary>
     void TriggerDebugCrownInterlude();
 
-    /// <summary>登場カット中は通常攻撃を抑止し、姿勢の再生時間をTimelineへ合わせる。</summary>
+    /// <summary>シーンから登場Timelineの再生状態と尺を秒で受け取り、停止時はポータルも閉じる。</summary>
     void SetIntroPresentationActive(bool active, float duration = 0.0f);
+    // 登場ポータルの表示を切り替える。無効時はクリップ、ゲートと着地輪を片付ける。
     void EnableIntroPortal(bool enabled);
+    // timeはTimelineの再生秒、frameDeltaTimeは経過秒。ゲート、着地輪、粒子、戦闘オーラへの繋ぎを進める。
     void UpdateIntroPortal(float time, float frameDeltaTime);
-    // Timelineの合図を受け取り、着地・構え・消失の演出を同じ時刻へ揃えます。
+    // 登場・着地・ポーズ・閉鎖・オーラ引き継ぎをTimeline開始からの秒数で指定する。
     void ConfigureIntroTiming(float start, float landing, float pose, float closing, float auraEnd);
 
     /// <summary>形態を飛ばさないよう、HP変更前に最終戦の被ダメージを調整する。</summary>
@@ -153,12 +156,12 @@ class EnemyFalseKingSlime final : public BaseEnemy {
     bool IsCrownInterlude() const { return crownInterlude_; }
 
     /// <summary>破壊された王冠封印の数を返す。</summary>
-    int GetBrokenSealCount() const { return brokenSeals_; }
+    std::int32_t GetBrokenSealCount() const { return brokenSeals_; }
 
-    /// <summary>最後に壊れた封印の位置を、王冠の亀裂演出用に返す。</summary>
+    /// <summary>最後に壊れた封印の上方を返す。まだ壊れていなければボスの配置から既定位置を求める。</summary>
     engine::Vector3 GetLastBrokenCrownSealPosition() const;
 
-    /// <summary>第2形態の詠唱残り秒数をHUD向けに返す。</summary>
+    /// <summary>第2形態で詠唱中の残り秒数。他の形態・段階では0。</summary>
     float GetSealCastRemainingTime() const;
 
     /// <summary>最終戦演出のEditor調整UIを描画する。</summary>
@@ -170,31 +173,32 @@ class EnemyFalseKingSlime final : public BaseEnemy {
     bool finalDefeatHeld_ = false; // シーンの撃破演出が終わるまで敵の最終解放を保留する。
     bool finalDefeatCompleted_ = false;
 
+    // 戦闘入口による制御。通常AIへ直行、開始待機、演出中、戦闘開始済みのいずれか。
     enum class EncounterState {
-        Normal,
-        Dormant,
-        Appearing,
-        Active,
+        kNormal,
+        kDormant,
+        kAppearing,
+        kActive,
     };
 
     enum class AttackKind {
-        None,
-        CrownLanceRain,
-        RoyalShockwave,
-        KingRush,
-        RoyalCross,
-        CrownDominion,
-        UmbraFlame,
-        AstralReaver,
-        NightfallLances,
+        kNone,
+        kCrownLanceRain,
+        kRoyalShockwave,
+        kKingRush,
+        kRoyalCross,
+        kCrownDominion,
+        kUmbraFlame,
+        kAstralReaver,
+        kNightfallLances,
     };
 
     enum class AttackState {
-        Idle,
-        Windup,
-        Active,
-        Recovery,
-        PhaseShift,
+        kIdle,
+        kWindup,
+        kActive,
+        kRecovery,
+        kPhaseShift,
     };
 
     // 槍一本の予告・飛翔・着弾・消滅を追跡する。表示 Object を所有し、各 duration は秒。
@@ -207,6 +211,7 @@ class EnemyFalseKingSlime final : public BaseEnemy {
         engine::Vector3 portalPosition{};
         engine::Vector3 flightDirection{0.0f, -1.0f, 0.0f};
 
+        // この槍を追加してからの秒数と、予兆が始まるまでの遅延秒数。
         float age = 0.0f;
         float delay = 0.0f;
 
@@ -244,7 +249,7 @@ class EnemyFalseKingSlime final : public BaseEnemy {
         bool hitTarget = false;
     };
 
-    // 回転ビームの表示と寿命・再ダメージ用時計。angle と angularSpeed は回転計算に使う。
+    // 回転ビームの表示・寿命・再命中を追跡する。角度はラジアン、角速度はラジアン毎秒。
     struct RoyalBeam {
         std::unique_ptr<engine::Object3D> visual;
         std::unique_ptr<engine::Object3D> glow;
@@ -346,6 +351,13 @@ class EnemyFalseKingSlime final : public BaseEnemy {
     /// <param name="targetDirection">攻撃開始時の標的方向。</param>
     void StartAttack(AttackKind kind, const engine::Vector3& targetDirection);
 
+    /// <summary>衝撃波の予兆用に、力が中心へ収束する輪を生成する。</summary>
+    void PrepareRoyalShockwave();
+
+    /// <summary>予兆の輪を更新し、実行中は跳躍と着地時の衝撃波へ処理を渡す。</summary>
+    /// <param name="progress">予兆の進行率。0で開始、1で予兆終了。</param>
+    void UpdateRoyalShockwave(bool windup, float progress, float deltaTime, engine::Vector3& velocity);
+
     /// <summary>攻撃の予備・発動・硬直を進め、技固有の処理へ振り分ける。</summary>
     void UpdateAttack(float deltaTime, const engine::Vector3& targetDirection, float targetDistance, engine::Vector3& velocity);
 
@@ -373,7 +385,7 @@ class EnemyFalseKingSlime final : public BaseEnemy {
     AttackKind ResolveDebugAttack() const;
 
     /// 本編とプレビューが共有する攻撃種別・IDの対応表を返す。
-    std::span<const EnemyAttackSelection::Entry<AttackKind>> GetAttackEntries() const;
+    std::span<const enemyAttackSelection::Entry<AttackKind>> GetAttackEntries() const;
 
     /// <summary>攻撃種別に対応するプロファイルIDを返す。</summary>
     const char* GetAttackId(AttackKind kind) const;
@@ -382,10 +394,10 @@ class EnemyFalseKingSlime final : public BaseEnemy {
     const EnemyAttackDefinition& GetCurrentAttackDefinition() const;
 
     /// <summary>HPと演出状態から移るべき戦闘形態を返す。</summary>
-    int ResolveDesiredBattlePhase() const;
+    std::int32_t ResolveDesiredBattlePhase() const;
 
     /// <summary>指定形態への切り替え演出を開始する。</summary>
-    void BeginPhaseShift(int nextPhase);
+    void BeginPhaseShift(std::int32_t nextPhase);
 
     /// <summary>形態切り替え演出を進め、その間の移動速度を調整する。</summary>
     void UpdatePhaseShift(float deltaTime, engine::Vector3& velocity);
@@ -421,7 +433,7 @@ class EnemyFalseKingSlime final : public BaseEnemy {
     void BeginRush();
 
     /// <summary>指定番号の突進段階を開始する。</summary>
-    void BeginRushStep(int step);
+    void BeginRushStep(std::int32_t step);
 
     /// <summary>突進の移動と命中判定を進める。</summary>
     void UpdateRush(float deltaTime, const engine::Vector3& targetDirection, engine::Vector3& velocity);
@@ -466,7 +478,7 @@ class EnemyFalseKingSlime final : public BaseEnemy {
     void UpdateSealNightfallSatellites(float deltaTime, bool active);
 
     /// <summary>指定モデルと材質設定の王冠攻撃用Objectを生成する。</summary>
-    std::unique_ptr<engine::Object3D> CreateRoyalVisual(const std::string& name, const std::string& model, int materialType,
+    std::unique_ptr<engine::Object3D> CreateRoyalVisual(const std::string& name, const std::string& model, std::int32_t materialType,
                                                 const engine::Vector4& color, float emissive) const;
 
     /// <summary>指定モデルの王冠攻撃用Meshを生成する。</summary>
@@ -518,7 +530,7 @@ class EnemyFalseKingSlime final : public BaseEnemy {
     /// <summary>戦闘開始前の登場・休止状態を初期化する。</summary>
     void InitializeEncounterState();
 
-    /// <summary>Editorプレビュー用にボスの戦闘状態を初期化する。</summary>
+    /// <summary>Play終了時に一時的な攻撃と登場演出を片付け、Editorで保存した配置へ戻す。</summary>
     void ResetForEditor();
 
     /// <summary>休止状態を終え、登場演出を開始する。</summary>
@@ -530,7 +542,7 @@ class EnemyFalseKingSlime final : public BaseEnemy {
     /// <summary>登場演出を完了し、通常の戦闘状態へ移る。</summary>
     void FinishAppearance();
 
-    /// <summary>現在の姿勢とスケールに衝突範囲を同期する。</summary>
+    /// <summary>描画の伸縮から独立した基準倍率で、本体のOBBの寸法と中心を設定する。</summary>
     void SyncCollisionBounds();
 
     /// <summary>登場演出による戦闘制御が有効か返す。</summary>
@@ -539,12 +551,13 @@ class EnemyFalseKingSlime final : public BaseEnemy {
     /// <summary>登場演出の再生時間を秒で返す。</summary>
     float GetAppearanceDuration() const;
 
-    AttackKind currentAttack_ = AttackKind::None;
-    AttackState attackState_ = AttackState::Idle;
+    AttackKind currentAttack_ = AttackKind::kNone;
+    AttackState attackState_ = AttackState::kIdle;
 
     engine::Vector3 baseScale_{1.0f, 1.0f, 1.0f}; // 攻撃・被弾の変形を重ねる前の基準倍率。
 
     engine::Vector3 lockedDirection_{0.0f, 0.0f, 1.0f}; // 攻撃の狙いを確定した水平単位方向。
+    // 予兆の開始時などに固定した標的の位置。技の進行中に標的が動いた場合も基準にする。
     engine::Vector3 lockedTargetPosition_{};
 
     engine::Vector3 attackStartPosition_{};
@@ -584,6 +597,7 @@ class EnemyFalseKingSlime final : public BaseEnemy {
     float actionTimer_ = 0.0f; // 技内の次の発生処理までの残り秒数。
     float effectTimer_ = 0.0f; // 次の粒子・表示更新までの残り秒数。
 
+    // 形態移行の経過秒数と全体の長さ。進行率は両者の比率で求める。
     float phaseTransitionTimer_ = 0.0f;
     float phaseTransitionDuration_ = 1.55f;
 
@@ -597,27 +611,27 @@ class EnemyFalseKingSlime final : public BaseEnemy {
     float dominionLanceTimer_ = 0.0f;
     float ambientSparkTimer_ = 0.0f; // 周囲の火花の発生までの残り秒数。
 
-    int actionIndex_ = 0; // 技内で次に発生させる弾・着弾点の番号。
-    int lanceSpawnSerial_ = 0;
-    int automaticAttackSerial_ = 0; // 自動選択した技の通算番号。攻撃周期をまたいで進む。
+    std::int32_t actionIndex_ = 0; // 技内で次に発生させる弾・着弾点の番号。
+    std::int32_t lanceSpawnSerial_ = 0;
+    std::int32_t automaticAttackSerial_ = 0; // 自動選択した技の通算番号。攻撃周期をまたいで進む。
 
     // 一巡するまで技を再選択しないシャッフル袋です。
     std::array<AttackKind, 8> attackCycle_{};
     std::size_t attackCycleCount_ = 0;
     std::size_t attackCycleIndex_ = 0;
-    int attackCyclePhase_ = 0;
-    AttackKind lastAutomaticAttack_ = AttackKind::None;
+    std::int32_t attackCyclePhase_ = 0;
+    AttackKind lastAutomaticAttack_ = AttackKind::kNone;
     std::mt19937 attackRandom_{std::random_device{}()};
-    int battlePhase_ = 1; // 現在の戦闘形態。1から始まる。
-    int pendingBattlePhase_ = 1; // 形態移行演出の完了後に確定する形態番号。
-    int rushStep_ = 0;
+    std::int32_t battlePhase_ = 1; // 現在の戦闘形態。1から始まる。
+    std::int32_t pendingBattlePhase_ = 1; // 形態移行演出の完了後に確定する形態番号。
+    std::int32_t rushStep_ = 0;
     bool rushDamageApplied_ = false;
     bool shockwaveLanded_ = false;
     bool warningTriggered_ = false; // 現在の技で予告の強調を一度だけ発生させるための印。
     bool hasBaseScale_ = false; // モデルの基準倍率を一度取得したか。
     std::string debugPreviewAttackId_;
 
-    EncounterState encounterState_ = EncounterState::Normal;
+    EncounterState encounterState_ = EncounterState::kNormal;
 
     engine::Vector3 authoredPosition_{};
     engine::Vector3 authoredScale_{1.0f, 1.0f, 1.0f};
@@ -627,16 +641,17 @@ class EnemyFalseKingSlime final : public BaseEnemy {
     uint32_t authoredCollisionAttribute_ = 0;
     uint32_t authoredCollisionMask_ = 0;
 
-    int authoredMaterialType_ = 0;
+    std::int32_t authoredMaterialType_ = 0;
     float authoredEmissive_ = 1.0f;
 
+    // 遭遇状態へ移ってからの経過秒数。登場時は専用Timelineまたは既定の尺と比較する。
     float encounterTimer_ = 0.0f;
     float idleTimer_ = 0.0f; // 待機中の見た目に使う経過秒数。
     float travelPhase_ = 0.0f;
     bool scriptedMovementThisFrame_ = false;
 
-    enum class LocomotionPhase { None, Windup, Travel, Landing };
-    LocomotionPhase locomotionPhase_ = LocomotionPhase::None;
+    enum class LocomotionPhase { kNone, kWindup, kTravel, kLanding };
+    LocomotionPhase locomotionPhase_ = LocomotionPhase::kNone;
     engine::Vector3 locomotionStart_{};
     engine::Vector3 locomotionEnd_{};
     engine::Vector3 locomotionDirection_{};
@@ -645,7 +660,7 @@ class EnemyFalseKingSlime final : public BaseEnemy {
     float locomotionTravelDuration_ = 0.0f;
     float locomotionArcHeight_ = 0.0f;
     bool locomotionLeap_ = false;
-    unsigned int locomotionStepSerial_ = 0;
+    std::uint32_t locomotionStepSerial_ = 0;
 
     bool initializedForPlay_ = false;
     bool authoredStateCaptured_ = false;
@@ -662,20 +677,22 @@ class EnemyFalseKingSlime final : public BaseEnemy {
         engine::Vector3 position{};
         bool broken = false;
         float breakAge = 0.0f;
+        float previousHp = 0.0f; // 前フレームに確定したHP。
+        float hitFlash = 0.0f; // HPが減ったときに白く光る残り秒数。
     };
 
     std::array<CrownSeal, 3> crownSeals_;
-    int brokenSeals_ = 0;
-    float sealAttackTimer_ = 0.0f;
+    std::int32_t brokenSeals_ = 0;
+    float sealVisualAge_ = 0.0f; // 結晶の生成からの秒数。詠唱開始では戻さない。
     float sealPressureDamage_ = 0.0f;
-    int sealAttackSerial_ = 0;
+    std::int32_t sealAttackSerial_ = 0;
 
-    enum class SealState { Reveal, Chant, Attack, Recover, Broken };
+    enum class SealState { kReveal, kChant, kAttack, kRecover, kBroken };
 
-    SealState sealState_ = SealState::Reveal;
+    SealState sealState_ = SealState::kReveal;
     float sealStateTimer_ = 0.0f;
     float sealVfxTimer_ = 0.0f;
-    int sealAttackStage_ = 0;
+    std::int32_t sealAttackStage_ = 0;
     bool sealImpactPlayed_ = false;
 
     float armorOpenTimer_ = 0.0f;
@@ -686,10 +703,15 @@ class EnemyFalseKingSlime final : public BaseEnemy {
 
     bool pendingDebugSeals_ = false;
     bool introPresentationActive_ = false;
+    // このフレームの登場、各形態の行動、撃破を処理し、共通更新へ渡すか決める。
     void UpdateState(float deltaTime);
+    // 通常戦闘の状態に合うオーラを更新する。登場中はUpdateIntroPortal()側で更新する。
     void UpdateBossAura(float deltaTime);
+    // 板状のオーラを強さとポーズの強調に合わせ、発生間隔を満たせば粒子を出す。
     void UpdateAuraVisual(float strength, float poseBurst, float deltaTime);
+    // 描画先のカメラに横方向で正対するよう、オーラの板を移動・回転する。
     void AlignBossAura(engine::Camera* camera);
+    // オーラの表示と発生時計、モデルから取得した寸法を解放する。
     void ClearBossAura();
     float bossAuraStrength_ = 0.0f;
     float bossAuraTime_ = 0.0f;
@@ -698,7 +720,9 @@ class EnemyFalseKingSlime final : public BaseEnemy {
     std::unique_ptr<engine::Object3D> introPortal_;
     std::unique_ptr<engine::Object3D> bossAura_;
     std::unique_ptr<engine::Object3D> introShockwave_;
+    // 登場時の全身のワールド寸法。0のときは現在のモデルから再取得する。
     float introWidth_ = 0.0f, introHeight_ = 0.0f;
+    // 前回と今回の再生時刻を比較し、着地やポーズの粒子を出すフレームの判定に使う。
     float introPreviousTime_ = 0.0f;
     float introStartTime_ = 1.1f, introLandTime_ = 3.45f, introPoseTime_ = 4.1f;
     float introCloseTime_ = 4.3f, introAuraEndTime_ = 6.0f;
@@ -750,7 +774,7 @@ class EnemyFalseKingSlime final : public BaseEnemy {
     void UpdateCrownSeals(float deltaTime);
 
     /// <summary>着弾点と攻撃段階から封印結晶の破壊を判定する。</summary>
-    void TryBreakCrownSeal(const engine::Vector3& impact, int attackStage = 0, bool force = false);
+    void TryBreakCrownSeal(const engine::Vector3& impact, std::int32_t attackStage = 0, bool force = false);
 
     /// <summary>封印結晶と最終戦演出の一時状態を片付ける。</summary>
     void ResetCrownFinale();

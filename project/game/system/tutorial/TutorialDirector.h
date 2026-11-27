@@ -58,13 +58,14 @@ class TutorialDirector {
 
     /// <summary>完了後の出口をセーブ成功時だけ開けます。</summary>
     void SetCompletionGateEnabled(bool enabled) {
+        // 最後の手順を完了したときだけ、保存の成否を出口ゲートの遷移可否へ反映する。
         if (completed_)
             SetGateTransitionEnabled(enabled);
     }
 
     bool IsCinematicPlaying() const { return cinematicActive_; }
 
-    int GetCurrentStepIndex() const { return currentStepIndex_; }
+    std::int32_t GetCurrentStepIndex() const { return currentStepIndex_; }
 
     /// 現在手順の JSON 上の ID を返す。
     const std::string& GetCurrentStepId() const;
@@ -88,25 +89,25 @@ class TutorialDirector {
 
   private:
     enum class CompletionCondition {
-        Timer,
-        CinematicFinished,
-        MoveDistance,
-        ActionTriggered,
-        TargetLocked,
-        ReachPosition,
-        CarryEnemy,
-        EnemyThrown,
-        EnemiesDefeated,
-        MorphActive,
-        MorphReleased,
-        ControlsGuideOpened,
+        kTimer,
+        kCinematicFinished,
+        kMoveDistance,
+        kActionTriggered,
+        kTargetLocked,
+        kReachPosition,
+        kCarryEnemy,
+        kEnemyThrown,
+        kEnemiesDefeated,
+        kMorphActive,
+        kMorphReleased,
+        kControlsGuideOpened,
     };
 
     // JSON の一手順。完了条件と、その間に表示・生成・解除する対象をまとめます。
     struct Step {
         std::string id;
 
-        CompletionCondition condition = CompletionCondition::Timer;
+        CompletionCondition condition = CompletionCondition::kTimer;
         std::string action;
 
         std::string cinematicPath;
@@ -125,8 +126,8 @@ class TutorialDirector {
         std::vector<std::string> spawnEnemyObjects;
         std::vector<std::string> despawnEnemyObjects;
 
-        engine::Vector3 targetPosition = engine::Vector3::ZERO;
-        engine::Vector3 checkpointPosition = engine::Vector3::ZERO;
+        engine::Vector3 targetPosition = engine::Vector3::kZero;
+        engine::Vector3 checkpointPosition = engine::Vector3::kZero;
 
         float threshold = 0.0f;
         float radius = 3.0f;
@@ -161,7 +162,7 @@ class TutorialDirector {
         std::string objectName;
         nlohmann::json initialDefinition;
         nlohmann::json initialCustomState;
-        engine::Vector3 initialPosition = engine::Vector3::ZERO;
+        engine::Vector3 initialPosition = engine::Vector3::kZero;
         uint32_t collisionAttribute = 0;
         uint32_t collisionMask = 0;
         float maxHpOverride = -1.0f;
@@ -172,9 +173,9 @@ class TutorialDirector {
     // JSON 配置を維持したまま、手順中の表示とフェードだけ更新します。
     struct PromptVisual {
         engine::Sprite* sprite = nullptr;
-        engine::Vector2 basePosition = engine::Vector2::ZERO;
-        engine::Vector2 baseSize = engine::Vector2::ZERO;
-        engine::Vector4 baseColor = engine::Colors::White;
+        engine::Vector2 basePosition = engine::Vector2::kZero;
+        engine::Vector2 baseSize = engine::Vector2::kZero;
+        engine::Vector4 baseColor = engine::colors::kWhite;
         bool requestedVisible = false;
     };
 
@@ -191,7 +192,7 @@ class TutorialDirector {
     void BeginFlowIfNeeded();
 
     /// 指定手順の敵、操作案内、演出を有効にする。
-    void EnterStep(int stepIndex);
+    void EnterStep(std::int32_t stepIndex);
 
     /// 現在手順だけで使う演出と表示を片付ける。
     void LeaveCurrentStep();
@@ -240,7 +241,7 @@ class TutorialDirector {
     void SetAllSpawnEnemiesActive(bool active);
 
     // 指定ステップまでの出現・消去履歴を再適用し、途中再開でも敵の状態を一致させる。
-    void RestoreSpawnEnemyStateBeforeStep(int stepIndex);
+    void RestoreSpawnEnemyStateBeforeStep(std::int32_t stepIndex);
 
     // 名前から現在のシーン内で解決し、前回シーンのポインタを使わない。
     engine::Object3D* FindObjectByName(const std::string& name) const;
@@ -282,12 +283,12 @@ class TutorialDirector {
     std::vector<SpawnEnemySlot> spawnEnemies_;
 
     std::vector<Step> steps_;
-    int currentStepIndex_ = -1;
+    std::int32_t currentStepIndex_ = -1;
 
     float stepTimer_ = 0.0f;
     float conditionSatisfiedTimer_ = 0.0f;
 
-    engine::Vector3 stepStartPosition_ = engine::Vector3::ZERO;
+    engine::Vector3 stepStartPosition_ = engine::Vector3::kZero;
 
     bool started_ = false;
     bool loaded_ = false;

@@ -1,0 +1,8 @@
+{
+  "assetType": "JSON",
+  "guid": "b83ad55bb0a88429743950c710bf26ca",
+  "importSettings": {},
+  "importer": "JsonImporter",
+  "source": "Resources/json/enemy/bomber/attacks.json",
+  "version": 1
+}

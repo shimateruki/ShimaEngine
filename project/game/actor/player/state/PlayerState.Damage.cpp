@@ -9,28 +9,28 @@
 
 // 被弾時のノックバックとスライムらしい変形演出をまとめています。
 
-// ========================================================
 // 被弾・ノックバック状態 (Damage)
-// ========================================================
 void PlayerStateDamage::Enter(Player* player) {
     DebugConsole::GetInstance()->AddLog("Enter: Damage (Knockback)");
 
-    // 被弾で運搬を解除し、変形演出中は入力による移動を止めます。
+    // 対象がいる場合だけ、運搬中の敵を手放して通常操作を止める。
     if (player) {
         player->ReleaseCarriedEnemy(true);
-        player->SetIsControlActive(false); // 操作不能にする
+        player->SetIsControlActive(false);
 
-        // 初速をノックバック方向に与える
+        // 経過時間を0秒に戻し、演出前の大きさと回転を保存する。
         timer_ = 0.0f;
         baseScale_ = player->GetScale();
         baseRotation_ = player->GetRotation();
 
-        // 渡された方向は水平にそろえ、水平成分が無ければプレイヤーの背後へ飛ばします。
+        // ノックバック方向の高さ成分を除き、水平方向の長さを求める。
         knockbackDir_.y = 0.0f;
         float dirLength = engine::Math::Length(knockbackDir_);
 
+        // 水平成分が十分あれば、方向によらず押し出す強さをそろえるため単位化する。
         if (dirLength > 0.001f) {
             knockbackDir_ = knockbackDir_ * (1.0f / dirLength);
+        // 水平成分がほぼ無ければ、プレイヤーの前方を反転して背後へ飛ばす。
         } else {
             engine::Vector3 forward = player->GetForwardDirection();
             knockbackDir_ = {-forward.x, 0.0f, -forward.z};
@@ -44,6 +44,7 @@ void PlayerStateDamage::Enter(Player* player) {
     }
 }
 
+// 被弾後の経過秒数から、つぶれ・跳ね・揺れの段階を選びます。
 void PlayerStateDamage::Update(Player* player, float deltaTime) {
     // 操作対象が無ければ、タイマーも姿勢も更新しません。
     if (!player)
@@ -51,8 +52,9 @@ void PlayerStateDamage::Update(Player* player, float deltaTime) {
 
     timer_ += deltaTime;
 
-    // 被弾開始からの経過を0から1へ収め、変形と回転の基準にする。
+    // 経過秒数を演出時間で割り、演出全体の進行率を求める。
     float t = timer_ / duration_;
+    // 経過が演出時間を超えた場合は、進行率を1で止める。
     if (t > 1.0f)
         t = 1.0f;
 
@@ -61,22 +63,23 @@ void PlayerStateDamage::Update(Player* player, float deltaTime) {
     const float roll = t * (2.0f * std::numbers::pi_v<float>);
     const float rollEaseOut = 1.0f - (1.0f - t) * (1.0f - t);
 
-    // 衝撃を受けた直後はスライムを横へ潰す。
+    // 最初の16%は横に広げて縦をつぶし、衝撃を見せる。
     if (t < 0.16f) {
         float p = t / 0.16f;
         float ease = 1.0f - (1.0f - p) * (1.0f - p);
         targetScale = {baseScale_.x * (1.0f + 0.62f * ease), baseScale_.y * (1.0f - 0.52f * ease),
                        baseScale_.z * (1.0f + 0.62f * ease)};
+    // 16%から48%までは、つぶした形から縦に伸ばして跳ね返りを表す。
     } else if (t < 0.48f) {
-        // 潰れた状態から縦に伸ばし、衝撃で跳ねた反応を見せる。
         float p = (t - 0.16f) / 0.32f;
         float ease = 1.0f - (1.0f - p) * (1.0f - p);
         targetScale = {engine::Math::Lerp(baseScale_.x * 1.62f, baseScale_.x * 0.72f, ease),
                        engine::Math::Lerp(baseScale_.y * 0.48f, baseScale_.y * 1.48f, ease),
                        engine::Math::Lerp(baseScale_.z * 1.62f, baseScale_.z * 0.72f, ease)};
+    // 48%以降は揺れを弱めながら、元の大きさへ近づける。
     } else {
-        // 残り時間で揺れを弱め、基準の大きさへ近づける。
         float p = (t - 0.48f) / 0.52f;
+        // 終盤区間の進行率が1を超えた場合は、揺れの終点で止める。
         if (p > 1.0f)
             p = 1.0f;
         float wobble = std::sin(p * std::numbers::pi_v<float> * 4.0f) * (1.0f - p);
@@ -95,7 +98,7 @@ void PlayerStateDamage::Update(Player* player, float deltaTime) {
     player->SetScale(targetScale);
     player->SetRotation(targetRotation);
 
-    // 時間経過で操作可能に戻し、Idleへ
+    // 経過が演出時間を満たしたら、操作を再開し待機状態へ移る。
     if (timer_ >= duration_) {
         player->SetIsControlActive(true);
         player->ChangeState(std::make_unique<PlayerStateIdle>());
@@ -103,7 +106,7 @@ void PlayerStateDamage::Update(Player* player, float deltaTime) {
 }
 
 void PlayerStateDamage::Exit(Player* player) {
-    // ノックバックの変形を次状態へ持ち越さず、入場前の姿勢へ戻す。
+    // 対象がある場合は、操作と演出前の形・回転を復元する。
     if (player) {
         player->SetIsControlActive(true);
         player->SetScale(baseScale_);

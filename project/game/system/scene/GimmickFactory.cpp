@@ -55,15 +55,16 @@ GimmickFactory::GimmickFactory() {
             object.SetParameter(&engine::EntityParameter::actionMode, GimmickBreakableBlock::kDashPanelOnly);
             object.SetScale({4.0f, 3.0f, 1.0f});
             engine::Object3D::ColliderConfig collider;
-            collider.type = ColliderType::Obb;
+            collider.type = engine::ColliderType::kObb;
             collider.size = {0.5f, 0.5f, 0.08f};
             object.SetColliderConfig(collider);
 
             // 既存の屈折表示を使い、奥の道が透ける乳白色のガラスにします。
             object.SetMaterialType(10);
-            object.SetBlendMode(BlendMode::Normal);
+            object.SetBlendMode(BlendMode::kNormal);
             object.SetCastShadow(false);
             object.SetColor({0.98f, 0.99f, 1.0f, 0.36f});
+            // ガラス用の追加パラメーターを取得できた場合だけ、歪みや光り方の初期値を渡す。
             if (auto* glass = object.GetMeshRenderer()->GetWaterParamData()) {
                 glass->effectType = 1.0f;
                 glass->effectIntensity = 0.22f;
@@ -87,12 +88,12 @@ GimmickFactory::GimmickFactory() {
             object.SetShaderMaterialId("dash_panel_stop");
             // 走路のパネルと同じ寸法で、上面に触れたプレイヤーを検出します。
             engine::Object3D::ColliderConfig collider;
-            collider.type = ColliderType::Obb;
+            collider.type = engine::ColliderType::kObb;
             collider.center = {0.0f, -0.08f, 0.0f};
             collider.size = {8.35f, 0.20f, 2.52f};
             object.SetColliderConfig(collider);
-            object.SetCollisionAttribute(CollisionCategories::Get("trigger"));
-            object.SetCollisionMask(CollisionCategories::Get("player"));
+            object.SetCollisionAttribute(engine::collisionCategories::Get("trigger"));
+            object.SetCollisionMask(engine::collisionCategories::Get("player"));
         });
     RegisterGimmick<GimmickTimedSwitch>("時限スイッチ床");
     RegisterGimmick<GimmickAppearingFloor>("出現床");
@@ -141,27 +142,33 @@ GimmickFactory::GimmickFactory() {
 }
 
 GimmickFactory* GimmickFactory::GetInstance() {
-    static GimmickFactory instance;
-    return &instance;
+    static GimmickFactory sInstance;
+    return &sInstance;
 }
 
+// 保存IDと完全一致する登録がある場合にtrueを返します。
 bool GimmickFactory::IsKnownType(const std::string& type) const {
     return std::any_of(registered_.begin(), registered_.end(), [&](const Entry& entry) { return entry.info.id == type; });
 }
 
 std::string GimmickFactory::GetCreationType(const BaseGimmick& object) const {
     // 同じC++クラスの別名は保存IDを優先します。不一致データだけ実クラスへ戻します。
+    // 保存IDが一致し、現在の実クラスにも合う登録を優先する。
     for (const auto& entry : registered_)
         if (entry.info.id == object.GetGimmickType() && entry.info.matches(object)) return entry.info.id;
     // 型情報を失った仮オブジェクトでは、保存済みの未知IDを保持します。
     if (typeid(object) == typeid(BaseGimmick)) return object.GetGimmickType();
+    // 保存IDと実クラスの組が見つからないときは、実クラスに合う登録を探し直す。
     for (const auto& entry : registered_) if (entry.info.matches(object)) return entry.info.id;
+    // 実クラスも登録から見つからない場合は、オブジェクトに残っている保存IDを返す。
     return object.GetGimmickType();
 }
 
 std::unique_ptr<BaseGimmick> GimmickFactory::CreateGimmick(const std::string& gimmickName, engine::Object3DCommon* common) {
     std::unique_ptr<BaseGimmick> gimmick;
+    // 指定された保存IDの生成関数を見つけた場合は、一件だけ呼び出す。
     for (const auto& entry : registered_) if (entry.info.id == gimmickName) { gimmick = entry.create(common); break; }
+    // 未知IDなどで専用オブジェクトを得られなければ、読み込みを続けるため代替の形状を作る。
     if (!gimmick) {
         // 旧シーンに含まれる未知IDは、従来と同じ仮Objectとして保持します。
         gimmick = std::make_unique<BaseGimmick>();

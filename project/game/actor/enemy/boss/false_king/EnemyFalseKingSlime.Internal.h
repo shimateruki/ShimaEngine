@@ -1,8 +1,8 @@
 ﻿#pragma once
 
 // EnemyFalseKingSlimeの分割実装で共有する定数・計算。ボス個体の状態や所有物は保持しない。
-// 分割実装専用の定数・補助関数。外部からは公開ヘッダーを使用します。
 #define NOMINMAX
+#include <cstdint>
 #include "game/actor/combat/CombatMath.h"
 #include <numbers>
 #include "game/actor/enemy/boss/false_king/EnemyFalseKingSlime.h"
@@ -28,9 +28,9 @@
 #include <cassert>
 #include <cmath>
 
-namespace EnemyFalseKingSlimeImplementation {
+namespace enemyFalseKingSlimeImplementation {
 // 予兆と実弾が同じ本数・幅を参照します。幅は中心線からの半幅です。
-inline int RoyalBeamCount(bool dominion, int phase) { return dominion ? 6 : (phase >= 3 ? 4 : 3); }
+inline std::int32_t RoyalBeamCount(bool dominion, std::int32_t phase) { return dominion ? 6 : (phase >= 3 ? 4 : 3); }
 inline float RoyalBeamHalfWidth(bool dominion, float radius) { return radius * (dominion ? 0.90f : 1.0f); }
 
 // 攻撃プロフィールの ID。JSON 側と一致させます。
@@ -115,13 +115,13 @@ inline constexpr const char* kRushWingsModel = "Effects/false_king_rush_wings";
 inline constexpr const char* kDominionSigilModel = "Effects/false_king_dominion_sigil";
 
 // 素材、攻撃間隔、登場演出に共通する調整値。
-inline constexpr int kEncounterControlledActionMode = 1;
+inline constexpr std::int32_t kEncounterControlledActionMode = 1;
 
-inline constexpr int kLaserMaterialType = 12;
-inline constexpr int kShockwaveMaterialType = 14;
-inline constexpr int kCrownMaterialType = 19;
-inline constexpr int kGatePortalMaterialType = 22;
-inline constexpr int kFireMaterialType = 11;
+inline constexpr std::int32_t kLaserMaterialType = 12;
+inline constexpr std::int32_t kShockwaveMaterialType = 14;
+inline constexpr std::int32_t kCrownMaterialType = 19;
+inline constexpr std::int32_t kGatePortalMaterialType = 22;
+inline constexpr std::int32_t kFireMaterialType = 11;
 
 inline constexpr float kDefaultAppearanceDuration = 1.45f;
 
@@ -133,14 +133,15 @@ inline constexpr float kModelYawOffset = kPi;
 inline constexpr float kLanceInterval = 0.13f;
 inline constexpr float kDominionLanceInterval = 0.58f;
 
-using CombatMath::SmoothStep01;
+using combatMath::SmoothStep01;
 
-using CombatMath::EaseOutCubic;
+using combatMath::EaseOutCubic;
 
-using CombatMath::NormalizePlanar;
+using combatMath::NormalizePlanar;
 
 // ゼロベクトルなら fallback を返し、方向ベクトルの正規化を安定させます。
 inline engine::Vector3 SafeNormalize(const engine::Vector3& value, const engine::Vector3& fallback) {
+    // 長さ0.001以下では方向として扱わず、呼び出し元が渡した代替方向を返す。
     if (engine::Math::Length(value) <= 0.001f) {
         return fallback;
     }
@@ -160,6 +161,7 @@ inline engine::Quaternion MakeAxisToDirectionQuaternion(const engine::Vector3& a
     // 逆向きでは二方向の外積から回転軸を作れないため、元の軸に直交する軸で半回転する。
     if (dot < -0.9999f) {
         engine::Vector3 perpendicular = engine::Math::Cross(from, {1.0f, 0.0f, 0.0f});
+        // 元の軸とX軸がほぼ平行なときは外積が小さいため、Z軸を使って回転軸を作る。
         if (engine::Math::Length(perpendicular) <= 0.001f) {
             perpendicular = engine::Math::Cross(from, {0.0f, 0.0f, 1.0f});
         }
@@ -179,7 +181,7 @@ inline engine::Quaternion MakeAxisToDirectionQuaternion(const engine::Vector3& a
     };
 }
 
-using CombatMath::PlanarDistance;
+using combatMath::PlanarDistance;
 
-using CombatMath::LerpVector3;
-} // namespace EnemyFalseKingSlimeImplementation
+using combatMath::LerpVector3;
+} // namespace enemyFalseKingSlimeImplementation

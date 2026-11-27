@@ -41,6 +41,7 @@ struct AttackMotionState {
         // 発射待ちの間は位置を動かさず、最後に確認した標的の方向へ照準を更新します。
         if (!launched && hasTarget)
             direction = Normalize(target - position, direction);
+        // 今回の評価時刻が発射待ちの終端に達したら、以後は発射前の照準合わせを行わない。
         if (time >= track.launchDelay)
             launched = true;
         float cursor = (std::max)(elapsed, track.launchDelay);
@@ -48,6 +49,7 @@ struct AttackMotionState {
         while (cursor < time) {
             float step = (std::min)(1.0f / 120.0f, time - cursor);
             const float trackingEnd = track.launchDelay + track.homingDuration;
+            // 追尾が終わる境界をまたぐ刻みは、その境界までに縮めて追尾と直進を分ける。
             if (cursor < trackingEnd)
                 step = (std::min)(step, trackingEnd - cursor);
             // 追尾設定が有効な間だけ、目標との差を一刻みに回せる角度まで縮めます。
@@ -56,8 +58,10 @@ struct AttackMotionState {
                 const float dot = std::clamp(direction.x * desired.x + direction.y * desired.y + direction.z * desired.z, -1.0f, 1.0f);
                 const float angle = std::acos(dot);
                 const float turn = (std::min)(angle, track.turnDegreesPerSecond * (std::numbers::pi_v<float> / 180.0f) * step);
+                // 向きの差が十分にある場合だけ、角度制限を掛けて標的へ旋回する。
                 if (angle > 0.00001f) {
                     auto tangent = desired - direction * dot;
+                    // 正反対に近い方向では差を引いた接線がほぼゼロになるため、別の軸を選ぶ。
                     if (engine::Math::Length(tangent) < 0.00001f) {
                         // 正反対の標的でも回転軸を失わないよう、直交する方向を選びます。
                         tangent = std::abs(direction.y) < 0.9f ? engine::Vector3{-direction.z, 0, direction.x} : engine::Vector3{1, 0, 0};

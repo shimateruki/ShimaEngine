@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "EditorPropertyRegistry.h"
 #include "EditorPropertyRegistry.BuiltIn.h"
 #include "Object3D.h"
@@ -5,15 +6,16 @@
 #include <algorithm>
 
 using nlohmann::json;
-using EditorPropertyBuiltIn::CommonFlags;
+using editorPropertyBuiltIn::CommonFlags;
 
 void EditorPropertyRegistry::RegisterBuiltInBaseProperties() {
     // 全オブジェクトに共通する基本プロパティを先に登録します。
     // GUID は保存データとの対応に使うため参照専用とし、名前や分類だけを通常編集の対象にします。
     Register({
-        "identity.name", "名前", "Identity", EditorPropertyType::String, CommonFlags(),
+        "identity.name", "名前", "Identity", EditorPropertyType::kString, CommonFlags(),
         [](const engine::Object3D& object) { return json(object.GetName()); },
         [](engine::Object3D& object, const json& value) {
+            // 名前は文字列だけを受け取り、別の型の入力では変更を拒否する。
             if (!value.is_string())
                 return false;
             object.SetName(value.get<std::string>());
@@ -21,15 +23,16 @@ void EditorPropertyRegistry::RegisterBuiltInBaseProperties() {
         },
     });
     Register({
-        "identity.guid", "Object GUID", "Identity", EditorPropertyType::String,
-        EditorPropertyFlags::ReadOnly,
+        "identity.guid", "Object GUID", "Identity", EditorPropertyType::kString,
+        EditorPropertyFlags::kReadOnly,
         [](const engine::Object3D& object) { return json(object.GetPersistentGuid()); },
         [](engine::Object3D&, const json&) { return false; },
     });
     Register({
-        "identity.tag", "Tag", "Identity", EditorPropertyType::String, CommonFlags(),
+        "identity.tag", "Tag", "Identity", EditorPropertyType::kString, CommonFlags(),
         [](const engine::Object3D& object) { return json(object.GetTag()); },
         [](engine::Object3D& object, const json& value) {
+            // タグは文字列だけを受け取り、型が異なる値は適用しない。
             if (!value.is_string())
                 return false;
             object.SetTag(value.get<std::string>());
@@ -37,9 +40,10 @@ void EditorPropertyRegistry::RegisterBuiltInBaseProperties() {
         },
     });
     Register({
-        "identity.layer", "Layer", "Identity", EditorPropertyType::String, CommonFlags(),
+        "identity.layer", "Layer", "Identity", EditorPropertyType::kString, CommonFlags(),
         [](const engine::Object3D& object) { return json(object.GetLayer()); },
         [](engine::Object3D& object, const json& value) {
+            // レイヤー名は文字列だけを受け取り、型が異なる値は適用しない。
             if (!value.is_string())
                 return false;
             object.SetLayer(value.get<std::string>());
@@ -47,9 +51,10 @@ void EditorPropertyRegistry::RegisterBuiltInBaseProperties() {
         },
     });
     Register({
-        "identity.saveCategory", "保存先カテゴリ", "Identity", EditorPropertyType::String, CommonFlags(),
+        "identity.saveCategory", "保存先カテゴリ", "Identity", EditorPropertyType::kString, CommonFlags(),
         [](const engine::Object3D& object) { return json(object.GetSaveCategory()); },
         [](engine::Object3D& object, const json& value) {
+            // 保存先カテゴリは文字列だけを受け取り、型が異なる値は適用しない。
             if (!value.is_string())
                 return false;
             object.SetSaveCategory(value.get<std::string>());
@@ -59,12 +64,13 @@ void EditorPropertyRegistry::RegisterBuiltInBaseProperties() {
 
     // Transform の Setter 後に両行列を更新し、Inspector での変更を同フレームの表示へ反映します。
     Register({
-        "transform.position", "座標", "Transform", EditorPropertyType::Vector3, CommonFlags(true),
+        "transform.position", "座標", "Transform", EditorPropertyType::kVector3, CommonFlags(true),
         [](const engine::Object3D& object) {
             const engine::Vector3& value = object.GetTranslate();
             return json::array({ value.x, value.y, value.z });
         },
         [](engine::Object3D& object, const json& value) {
+            // 位置のX・Y・Zを読める配列でなければ、座標を変更しない。
             if (!value.is_array() || value.size() < 3)
                 return false;
             // 親がいる場合も入力はローカル座標。親の変換との合成は後続のワールド行列更新に任せる。
@@ -75,12 +81,13 @@ void EditorPropertyRegistry::RegisterBuiltInBaseProperties() {
         },
     });
     Register({
-        "transform.rotation", "回転", "Transform", EditorPropertyType::Vector3, CommonFlags(true),
+        "transform.rotation", "回転", "Transform", EditorPropertyType::kVector3, CommonFlags(true),
         [](const engine::Object3D& object) {
             const engine::Vector3& value = object.GetRotation();
             return json::array({ value.x, value.y, value.z });
         },
         [](engine::Object3D& object, const json& value) {
+            // 回転の三成分がそろわない場合は、既存の姿勢を維持する。
             if (!value.is_array() || value.size() < 3)
                 return false;
             // 保存値と Setter の角度はラジアン。度表示との変換は EditorPropertyDrawer が担当する。
@@ -91,12 +98,13 @@ void EditorPropertyRegistry::RegisterBuiltInBaseProperties() {
         },
     });
     Register({
-        "transform.scale", "スケール", "Transform", EditorPropertyType::Vector3, CommonFlags(true),
+        "transform.scale", "スケール", "Transform", EditorPropertyType::kVector3, CommonFlags(true),
         [](const engine::Object3D& object) {
             const engine::Vector3& value = object.GetScale();
             return json::array({ value.x, value.y, value.z });
         },
         [](engine::Object3D& object, const json& value) {
+            // 三軸の拡縮を指定できる配列だけを受け付ける。
             if (!value.is_array() || value.size() < 3)
                 return false;
             object.SetScale({ value[0].get<float>(), value[1].get<float>(), value[2].get<float>() });
@@ -108,9 +116,10 @@ void EditorPropertyRegistry::RegisterBuiltInBaseProperties() {
 
     // 表示や編集ロックは Object の状態として保存し、描画パラメータとは別に扱います。
     Register({
-        "rendering.visible", "表示", "Rendering", EditorPropertyType::Bool, CommonFlags(),
+        "rendering.visible", "表示", "Rendering", EditorPropertyType::kBool, CommonFlags(),
         [](const engine::Object3D& object) { return json(object.GetIsVisible()); },
         [](engine::Object3D& object, const json& value) {
+            // 表示フラグに使えるJSONの真偽値だけを受け取る。
             if (!value.is_boolean())
                 return false;
             object.SetIsVisible(value.get<bool>());
@@ -118,9 +127,10 @@ void EditorPropertyRegistry::RegisterBuiltInBaseProperties() {
         },
     });
     Register({
-        "editor.locked", "編集ロック", "Editor", EditorPropertyType::Bool, CommonFlags(),
+        "editor.locked", "編集ロック", "Editor", EditorPropertyType::kBool, CommonFlags(),
         [](const engine::Object3D& object) { return json(object.GetIsLocked()); },
         [](engine::Object3D& object, const json& value) {
+            // 編集ロックの値が真偽値の場合だけ、設定を切り替える。
             if (!value.is_boolean())
                 return false;
             object.SetIsLocked(value.get<bool>());
@@ -128,9 +138,10 @@ void EditorPropertyRegistry::RegisterBuiltInBaseProperties() {
         },
     });
     Register({
-        "rendering.castShadow", "影を落とす", "Rendering", EditorPropertyType::Bool, CommonFlags(),
+        "rendering.castShadow", "影を落とす", "Rendering", EditorPropertyType::kBool, CommonFlags(),
         [](const engine::Object3D& object) { return json(object.GetCastShadow()); },
         [](engine::Object3D& object, const json& value) {
+            // 影の有効状態が真偽値として渡された場合だけ設定する。
             if (!value.is_boolean())
                 return false;
             object.SetCastShadow(value.get<bool>());
@@ -140,11 +151,13 @@ void EditorPropertyRegistry::RegisterBuiltInBaseProperties() {
 
     // カメラと注視点の間に入ったときの透過方針。保存された番号を保つため選択肢は列挙値の順に並べる。
     EditorPropertyDescriptor occlusion{
-        "rendering.cameraOcclusionMode", "視界確保（0:自動 / 1:透過 / 2:維持）", "Rendering", EditorPropertyType::Integer, CommonFlags(),
-        [](const engine::Object3D& object) { return json(static_cast<int>(object.GetCameraOcclusionMode())); },
+        "rendering.cameraOcclusionMode", "視界確保（0:自動 / 1:透過 / 2:維持）", "Rendering", EditorPropertyType::kInteger, CommonFlags(),
+        [](const engine::Object3D& object) { return json(static_cast<std::int32_t>(object.GetCameraOcclusionMode())); },
         [](engine::Object3D& object, const json& value) {
+            // 視界確保モードには、保存形式で使用する整数だけを受け取る。
             if (!value.is_number_integer()) return false;
             const auto mode = value.get<int64_t>();
+            // 定義済みの0、1、2の範囲を外れた番号は適用しない。
             if (mode < 0 || mode > 2) return false;
             object.SetCameraOcclusionMode(static_cast<engine::Object3D::CameraOcclusionMode>(mode));
             return true;
@@ -156,12 +169,13 @@ void EditorPropertyRegistry::RegisterBuiltInBaseProperties() {
 
     // 色と PBR 値は既存の Object3D Setter を経由し、描画側の反映手順を共通化します。
     Register({
-        "rendering.color", "色", "Rendering", EditorPropertyType::Vector4, CommonFlags(true),
+        "rendering.color", "色", "Rendering", EditorPropertyType::kVector4, CommonFlags(true),
         [](const engine::Object3D& object) {
             const engine::Vector4 value = object.GetColor();
             return json::array({ value.x, value.y, value.z, value.w });
         },
         [](engine::Object3D& object, const json& value) {
+            // RGBAの四成分を取り出せる配列でなければ、色を変更しない。
             if (!value.is_array() || value.size() < 4)
                 return false;
             object.SetColor({ value[0].get<float>(), value[1].get<float>(), value[2].get<float>(), value[3].get<float>() });
@@ -169,9 +183,10 @@ void EditorPropertyRegistry::RegisterBuiltInBaseProperties() {
         },
     });
     Register({
-        "rendering.metallic", "金属度", "Rendering", EditorPropertyType::Number, CommonFlags(true),
+        "rendering.metallic", "金属度", "Rendering", EditorPropertyType::kNumber, CommonFlags(true),
         [](const engine::Object3D& object) { return json(object.GetMetallic()); },
         [](engine::Object3D& object, const json& value) {
+            // 金属度として数値を受け取り、別のJSON型は拒否する。
             if (!value.is_number())
                 return false;
             object.SetMetallic(value.get<float>());
@@ -179,9 +194,10 @@ void EditorPropertyRegistry::RegisterBuiltInBaseProperties() {
         },
     });
     Register({
-        "rendering.roughness", "粗さ", "Rendering", EditorPropertyType::Number, CommonFlags(true),
+        "rendering.roughness", "粗さ", "Rendering", EditorPropertyType::kNumber, CommonFlags(true),
         [](const engine::Object3D& object) { return json(object.GetRoughness()); },
         [](engine::Object3D& object, const json& value) {
+            // 粗さとして数値を受け取り、別のJSON型は拒否する。
             if (!value.is_number())
                 return false;
             object.SetRoughness(value.get<float>());
@@ -189,9 +205,10 @@ void EditorPropertyRegistry::RegisterBuiltInBaseProperties() {
         },
     });
     Register({
-        "rendering.emissive", "発光強度", "Rendering", EditorPropertyType::Number, CommonFlags(true),
+        "rendering.emissive", "発光強度", "Rendering", EditorPropertyType::kNumber, CommonFlags(true),
         [](const engine::Object3D& object) { return json(object.GetEmissive()); },
         [](engine::Object3D& object, const json& value) {
+            // 発光強度として数値を受け取り、別のJSON型は拒否する。
             if (!value.is_number())
                 return false;
             object.SetEmissive(value.get<float>());
@@ -201,9 +218,10 @@ void EditorPropertyRegistry::RegisterBuiltInBaseProperties() {
 
     // 衝突属性と Mask はビット列として保持するため、JSON からは整数だけ受け取ります。
     Register({
-        "collision.attribute", "衝突属性", "Collision", EditorPropertyType::Integer, CommonFlags(),
+        "collision.attribute", "衝突属性", "Collision", EditorPropertyType::kInteger, CommonFlags(),
         [](const engine::Object3D& object) { return json(object.GetCollisionAttribute()); },
         [](engine::Object3D& object, const json& value) {
+            // 衝突属性のビット列は整数で渡された場合だけ適用する。
             if (!value.is_number_unsigned() && !value.is_number_integer())
                 return false;
             object.SetCollisionAttribute(value.get<std::uint32_t>());
@@ -211,9 +229,10 @@ void EditorPropertyRegistry::RegisterBuiltInBaseProperties() {
         },
     });
     Register({
-        "collision.mask", "衝突対象", "Collision", EditorPropertyType::Integer, CommonFlags(),
+        "collision.mask", "衝突対象", "Collision", EditorPropertyType::kInteger, CommonFlags(),
         [](const engine::Object3D& object) { return json(object.GetCollisionMask()); },
         [](engine::Object3D& object, const json& value) {
+            // 衝突対象のビット列は整数で渡された場合だけ適用する。
             if (!value.is_number_unsigned() && !value.is_number_integer())
                 return false;
             object.SetCollisionMask(value.get<std::uint32_t>());

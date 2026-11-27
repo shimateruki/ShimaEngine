@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "engine/utility/math/Math.h"
 #include "game/actor/combat/AttackSequenceData.h"
@@ -9,11 +10,11 @@
 
 // 攻撃の実行順。Ready は次の攻撃を開始できる待機状態です。
 enum class AttackAbilityPhase {
-    Ready,
-    Windup,
-    Active,
-    Recovery,
-    Cooldown,
+    kReady,
+    kWindup,
+    kActive,
+    kRecovery,
+    kCooldown,
 };
 
 /// <summary>敵の攻撃1種類を定義します。JSON、Editor、実行時で同じ値を共有します。</summary>
@@ -28,7 +29,7 @@ struct EnemyAttackDefinition {
     float minRange = 0.0f;
     float maxRange = 10.0f;
     std::string hitShape = "sphere";
-    engine::Vector3 hitOffset = engine::Vector3::ZERO;
+    engine::Vector3 hitOffset = engine::Vector3::kZero;
     engine::Vector3 hitSize = {1.0f, 1.0f, 1.0f};
     float radius = 1.0f;
 
@@ -43,7 +44,7 @@ struct EnemyAttackDefinition {
 
     // 命中時のダメージ・ノックバック・状態異常です。速度はワールド単位/秒、時間は秒です。
     float damage = 1.0f;
-    engine::Vector3 knockbackVelocity = engine::Vector3::ZERO;
+    engine::Vector3 knockbackVelocity = engine::Vector3::kZero;
     float invincibilityDuration = 0.0f;
     std::string statusEffectType;
     float statusDuration = 0.0f;
@@ -125,8 +126,8 @@ inline AttackProjectileComponent ResolveProjectileComponent(const EnemyAttackDef
 
 /// <summary>1フレームの更新で通過したフェーズ境界を知らせます。</summary>
 struct AttackAbilityUpdateResult {
-    AttackAbilityPhase previousPhase = AttackAbilityPhase::Ready;
-    AttackAbilityPhase currentPhase = AttackAbilityPhase::Ready;
+    AttackAbilityPhase previousPhase = AttackAbilityPhase::kReady;
+    AttackAbilityPhase currentPhase = AttackAbilityPhase::kReady;
     bool enteredActive = false;
     bool enteredRecovery = false;
     bool enteredCooldown = false;
@@ -159,9 +160,9 @@ class AttackAbilityRuntime {
 
     float GetElapsedActionTime() const;
 
-    bool IsReady() const { return phase_ == AttackAbilityPhase::Ready; }
+    bool IsReady() const { return phase_ == AttackAbilityPhase::kReady; }
 
-    bool IsHitWindowOpen() const { return phase_ == AttackAbilityPhase::Active; }
+    bool IsHitWindowOpen() const { return phase_ == AttackAbilityPhase::kActive; }
 
     // 現在のフェーズと定義の中断可否を照合する。中断や状態変更そのものは行わない。
     bool CanCancel() const;
@@ -174,7 +175,7 @@ class AttackAbilityRuntime {
 
     // 実行中の定義は元アセットへの参照を持たず、リロード後も有効です。
     AttackAbilityDefinition definition_{};
-    AttackAbilityPhase phase_ = AttackAbilityPhase::Ready;
+    AttackAbilityPhase phase_ = AttackAbilityPhase::kReady;
     float phaseTime_ = 0.0f;
     bool hasDefinition_ = false;
 };
@@ -182,7 +183,7 @@ class AttackAbilityRuntime {
 /// <summary>敵1種類の攻撃をJSONで読み書きします。読込失敗時は既定値を保持します。</summary>
 // 関連：JSONと攻撃定義を対応させ、選択した定義の実行は敵・コピー能力側へ任せる。
 // 主な入口：LoadForEnemy / FindAttack / SelectSequence
-class EnemyAttackProfile {
+struct EnemyAttackProfile {
   public:
     // 敵種・入力割当から独立した攻撃内容。bindingとpriorityは利用先の値を維持します。
     static bool SaveSequenceAsset(const std::string& path, const AttackSequenceDefinition& sequence, std::string* error = nullptr);
@@ -225,7 +226,7 @@ class EnemyAttackProfile {
         const std::string& previewId = {}, float roll = -1) const;
 
     // JSONの識別情報と攻撃一覧です。
-    int version = 1;
+    std::int32_t version = 1;
     std::string enemyType;
     std::string selectionMode = "priority"; // priority / uniform / weighted。共通enemy攻撃の候補内だけ。
     std::string displayName;

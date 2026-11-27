@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include <cstdint>
 #include "DebugEditor.h"
 #include <numbers>
 #include "SceneManager.h"    
@@ -56,10 +57,11 @@ namespace fs = std::filesystem;
 
 
 // ========================================================================
-// 初期化
+// シーン内の床合わせ・モデル分割・GameViewへの配置
 // ========================================================================
 
 void DebugEditor::DropToFloor() {
+    // 選択物または編集中のシーンがなければ、下に落とす対象を確定できない。
     if (!selectedObject_ || !sceneManager_->GetCurrentScene())
         return;
 
@@ -81,12 +83,14 @@ void DebugEditor::DropToFloor() {
 
     // 3. めり込み防止のための「足元までのオフセット(高さの半分)」を計算
     float yOffset = 0.0f;
-    ColliderType type = selectedObject_->GetColliderType();
+    engine::ColliderType type = selectedObject_->GetColliderType();
 
-    if (type == ColliderType::Aabb || type == ColliderType::Obb) {
+    // 箱型コライダーには設定の Y 半径を使い、中心から底面までの距離を求める。
+    if (type == engine::ColliderType::kAabb || type == engine::ColliderType::kObb) {
         yOffset = selectedObject_->GetColliderConfig().size.y;
     }
-    else if (type == ColliderType::Sphere) {
+    // 球コライダーでは X に保持する半径を中心から底面までの距離に使う。
+    else if (type == engine::ColliderType::kSphere) {
         yOffset = selectedObject_->GetColliderConfig().size.x; // 球体はXを半径としている想定
     }
     else {
@@ -96,10 +100,13 @@ void DebugEditor::DropToFloor() {
 
     // 4. 真下にある足場（他のオブジェクト）を探す
     for (auto& obj : objects) {
+        // 選択中の物体自身は、下向きレイの足場の候補から除く。
         if (obj.get() == selectedObject_)
             continue; // 自分自身は無視
+        // 編集用の Cursor と Line は、足場に含めない。
         if (obj->GetName() == "Cursor" || obj->GetName() == "Line")
             continue;
+        // 描画が非表示の物体は、床合わせの足場に含めない。
         if (!obj->GetIsRenderVisible())
             continue; // 非表示オブジェクトはすり抜ける
 
@@ -109,9 +116,9 @@ void DebugEditor::DropToFloor() {
 
         engine::RayResult tmp;
 
-        // AABBで簡易的に衝突判定
         // 各 Object の中心とスケールで作った簡易箱を使う。交差した候補のうち、レイの始点から最も近い面を選ぶ。
         if (math.IntersectRayAabb(ray, wp - ws, wp + ws, &tmp)) {
+            // 前の候補よりレイの始点に近ければ、この面を新しい床の候補にする。
             if (tmp.distance < bestHit.distance) {
                 bestHit = tmp;
             }
@@ -138,7 +145,7 @@ void DebugEditor::DropToFloor() {
     RegisterObjectEdited(selectedObject_, beforeState, "Drop To Floor");
 }
 
-// 指定したモデルをマウス位置(GameView)に配置
+// 選択したモデルのメッシュを描画用の子へ分け、選択をルートに戻す。
 // ========================================================================
 void DebugEditor::SplitSelectedModelIntoMeshChildren() {
     // 元Objectは親として残し、Meshごとの描画Objectだけを子へ切り分ける。
@@ -151,6 +158,7 @@ void DebugEditor::SplitSelectedModelIntoMeshChildren() {
     engine::Model* sourceModel = selectedObject_->GetModel();
     const std::string sourceModelName = selectedObject_->GetModelName();
 
+    // 描画の共通情報、元モデル、モデル名のいずれかが取れなければ分割できない。
     if (!objectCommon || !sourceModel || sourceModelName.empty()) {
         DebugConsole::GetInstance()->AddLog("Mesh split skipped: selected object has no model.");
         return;
@@ -158,11 +166,13 @@ void DebugEditor::SplitSelectedModelIntoMeshChildren() {
 
     const uint32_t meshCount = sourceModel->GetMeshCount();
 
+    // メッシュが一つ以下なら分割先を作る必要がない。
     if (meshCount <= 1) {
         DebugConsole::GetInstance()->AddLog("Mesh split skipped: model has only one mesh.");
         return;
     }
 
+    // すでに単一メッシュの表示に絞っている物体は、分割済みの部品として扱う。
     if (selectedObject_->IsMeshDrawFiltered()) {
         DebugConsole::GetInstance()->AddLog("Mesh split skipped: selected object is already a mesh part.");
         return;
@@ -193,6 +203,7 @@ void DebugEditor::SplitSelectedModelIntoMeshChildren() {
     bool hasWaterParam = false;
     engine::MeshRenderer::WaterParamForGpu waterParam{};
 
+    // ルートに材質パラメーターがあれば、子へ複製できるよう現在値を控える。
     if (rootObject->GetMeshRenderer() && rootObject->GetMeshRenderer()->GetWaterParamData()) {
         waterParam = *rootObject->GetMeshRenderer()->GetWaterParamData();
         hasWaterParam = true;
@@ -215,7 +226,7 @@ void DebugEditor::SplitSelectedModelIntoMeshChildren() {
         child->SetClassName("MeshPart");
         child->SetSaveCategory(saveCategory);
         child->SetModel(sourceModelName);
-        child->SetMeshDrawIndex(static_cast<int>(meshIndex));
+        child->SetMeshDrawIndex(static_cast<std::int32_t>(meshIndex));
         child->SetColor(color);
         child->SetBlendMode(blendMode);
         child->SetMaterialType(materialType);
@@ -232,12 +243,13 @@ void DebugEditor::SplitSelectedModelIntoMeshChildren() {
         child->SetEnvIntensity(envIntensity);
         child->SetEmissive(emissive);
 
+        // 元から値を取得済みで、子に書き込み先がある場合だけ、材質パラメーターを複製する。
         if (hasWaterParam && child->GetMeshRenderer() && child->GetMeshRenderer()->GetWaterParamData()) {
             *child->GetMeshRenderer()->GetWaterParamData() = waterParam;
         }
 
         // 子は描画専用。見た目を移した後も、旧モデルの当たり判定は子へ複製しない。
-        child->SetColliderType(ColliderType::None);
+        child->SetColliderType(engine::ColliderType::kNone);
         child->SetCollisionAttribute(0);
         child->SetCollisionMask(0);
         child->SetStatic(rootObject->IsStatic());
@@ -257,7 +269,7 @@ void DebugEditor::SplitSelectedModelIntoMeshChildren() {
     // ルートの描画とColliderを外し、子との二重描画・二重判定を防ぐ。
     rootObject->SetModel(nullptr);
     rootObject->SetMeshDrawIndex(-1);
-    rootObject->SetColliderType(ColliderType::None);
+    rootObject->SetColliderType(engine::ColliderType::kNone);
     rootObject->SetCollisionAttribute(0);
     rootObject->SetCollisionMask(0);
     rootObject->UpdateLocalMatrix();
@@ -274,11 +286,12 @@ void DebugEditor::SplitSelectedModelIntoMeshChildren() {
 }
 
 void DebugEditor::InstantiateModelAtCursor(const std::string& modelName) {
+    // 配置先のシーンがなければモデルを生成しない。
     if (!sceneManager_ || !sceneManager_->GetCurrentScene())
         return;
     BaseScene* currentScene = sceneManager_->GetCurrentScene();
 
-    // 1. オブジェクト生成＆モデル読み込み
+    // ドロップされたアセットを、独立したモデルオブジェクトとして読み込む。
     auto newObj = std::make_unique<engine::Object3D>();
     newObj->Initialize(currentScene->GetObject3DCommon());
     ModelManager::GetInstance()->LoadModel(modelName);
@@ -286,13 +299,14 @@ void DebugEditor::InstantiateModelAtCursor(const std::string& modelName) {
     newObj->SetClassName("Model");
     newObj->SetName(modelName + "_" + std::to_string(currentScene->GetObjects().size()));
 
-    // 実際の面と配置物の底面を合わせる。Prefabの向き・親子関係は変えない。
+    // マウス下の面を探し、モデルの底面が合う配置を計算する。
     newObj->UpdateWorldMatrix();
     const auto placement = CalculateGameViewPlacement(newObj.get(), gameViewMousePos_, true);
+    // 配置できる点が見つからなければ、仮生成したモデルをシーンへ追加しない。
     if (!placement.found) return;
     ApplyGameViewPlacement(newObj.get(), placement, newObj.get()->IsDecal());
 
-    // 4. シーンに追加して、即座に選択状態にする
+    // 配置済みオブジェクトをシーンに登録する。
     AddEditorObject(std::move(newObj), "Drop 3D Model");
 
     DebugConsole::GetInstance()->AddLog("Dropped 3D Model: " + modelName);
@@ -305,17 +319,20 @@ void DebugEditor::InstantiatePresetAtCursor(const std::string& presetName) {
     BaseScene* currentScene = sceneManager_->GetCurrentScene();
 
     engine::Object3DCommon* common = currentScene->GetObject3DCommon();
+    // シーンに描画用の共通情報がなければ、プリセットの物体を生成できない。
     if (!common)
         return;
 
     auto presetObjects = PresetManager::GetInstance()->CreateObjectsFromPreset(presetName, common);
+    // プリセットから配置物が得られなければ、名前付けや座標合わせを行わない。
     if (presetObjects.empty())
         return;
 
-    AssignPresetInstanceNames(currentScene, presetName, presetObjects, PresetRootName::PathLeaf);
+    AssignPresetInstanceNames(currentScene, presetName, presetObjects, PresetRootName::kPathLeaf);
 
-    // 実際の面と配置物の底面を合わせる。Prefabの向き・親子関係は変えない。
+    // 親子関係を保った配置候補を求める。ルートがデカールなら面への向きも合わせる。
     const auto placement = PlaceGameViewObjects(presetObjects, gameViewMousePos_, true);
+    // 配置点が得られないときは、プリセット全体を追加せず破棄する。
     if (!placement.found) return;
 
     AddEditorObjects(std::move(presetObjects), "Drop Preset");
@@ -330,17 +347,20 @@ void DebugEditor::InstantiatePrefabAtCursor(const std::string& prefabName) {
     BaseScene* currentScene = sceneManager_->GetCurrentScene();
 
     engine::Object3DCommon* common = currentScene->GetObject3DCommon();
+    // 描画用の共通情報を取得できる場合にだけ、Prefab の物体を生成する。
     if (!common)
         return;
 
     auto prefabObjects = PresetManager::GetInstance()->CreateObjectsFromPrefab(prefabName, common);
+    // Prefab から配置物が得られなければ、名前付けや座標合わせを行わない。
     if (prefabObjects.empty())
         return;
 
-    AssignPresetInstanceNames(currentScene, prefabName, prefabObjects, PresetRootName::PathLeaf);
+    AssignPresetInstanceNames(currentScene, prefabName, prefabObjects, PresetRootName::kPathLeaf);
 
-    // 実際の面と配置物の底面を合わせる。Prefabの向き・親子関係は変えない。
+    // ルートを基準にグループの底面を配置点へ合わせる。ルートがデカールなら面への向きも合わせる。
     const auto placement = PlaceGameViewObjects(prefabObjects, gameViewMousePos_, true);
+    // 配置点が得られないときは、Prefab 全体を追加せず破棄する。
     if (!placement.found) return;
 
     AddEditorObjects(std::move(prefabObjects), "Drop Prefab");
@@ -350,11 +370,12 @@ void DebugEditor::InstantiatePrefabAtCursor(const std::string& prefabName) {
 
 
 void DebugEditor::InstantiateParticleAtCursor(const std::string& particleName) {
+    // 配置先のシーンがなければ、粒子の編集用オブジェクトを生成しない。
     if (!sceneManager_ || !sceneManager_->GetCurrentScene())
         return;
     BaseScene* currentScene = sceneManager_->GetCurrentScene();
 
-    // 1. オブジェクト生成とパーティクル設定
+    // GPU 粒子の設定名を保持する編集用オブジェクトを用意する。
     auto newObj = std::make_unique<engine::Object3D>();
     newObj->Initialize(currentScene->GetObject3DCommon());
     
@@ -364,15 +385,16 @@ void DebugEditor::InstantiateParticleAtCursor(const std::string& particleName) {
     newObj->SetClassName("GPUParticle");
     newObj->SetGpuParticleName(particleName);
     newObj->SetColor({1.0f, 0.5f, 0.0f, 0.5f});
-    newObj->SetBlendMode(BlendMode::Normal);
+    newObj->SetBlendMode(BlendMode::kNormal);
 
-    // 実際の面と配置物の底面を合わせる。Prefabの向き・親子関係は変えない。
+    // 配置用モデルの底面を基準に、マウス下の面へ置ける位置を求める。
     newObj->UpdateWorldMatrix();
     const auto placement = CalculateGameViewPlacement(newObj.get(), gameViewMousePos_, true);
+    // 配置点が得られなければ、粒子の編集用オブジェクトを追加しない。
     if (!placement.found) return;
     ApplyGameViewPlacement(newObj.get(), placement, newObj.get()->IsDecal());
 
-    // 4. シーンに追加
+    // 位置を確定した編集用オブジェクトを登録する。
     AddEditorObject(std::move(newObj), "Drop Particle");
 
     DebugConsole::GetInstance()->AddLog("Dropped Particle: " + particleName);

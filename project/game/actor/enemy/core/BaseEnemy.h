@@ -13,8 +13,8 @@ namespace engine { class ParticleSystem; }
 // scaleは倍率、rotationとoffsetはローカル空間の加算値です。
 struct EnemyVisualReactionPose {
     engine::Vector3 scale = {1.0f, 1.0f, 1.0f};
-    engine::Vector3 rotation = engine::Vector3::ZERO;
-    engine::Vector3 offset = engine::Vector3::ZERO;
+    engine::Vector3 rotation = engine::Vector3::kZero;
+    engine::Vector3 offset = engine::Vector3::kZero;
     float weight = 0.0f;
 };
 
@@ -22,7 +22,7 @@ struct EnemyVisualReactionPose {
 // 関連：Characterの移動に、標的・HP・攻撃定義・予告を加え、固有AIは派生クラスが実装する。
 // 主な入口：Initialize / Update / OnCollision
 class BaseEnemy : public Character {
-    friend class EnemyAttackAction; // 共通攻撃部品だけが予告表示の開始・終了を操作します。
+    friend class EnemyAttackAction; // 共通攻撃部品からも、派生AIと同じ予告表示を操作できる。
 
   public:
     /// <summary>敵固有のリソースを破棄できるよう、派生型を通じて破棄する。</summary>
@@ -46,13 +46,14 @@ class BaseEnemy : public Character {
 
     /// <summary>追跡と攻撃の対象を借用する。切替時はボスの交戦状態を解除する。</summary>
     void SetTarget(engine::Object3D* target) {
+        // 標的が同じ場合は、検知距離内で確定したボスの交戦状態を維持する。
         if (target_ != target) {
             bossTargetEngaged_ = false;
         }
         target_ = target;
     }
 
-    /// <summary>生成・復元後にシーン側の非所有参照を接続する。</summary>
+    /// <summary>生成・復元後に、シーンのプレイヤーを追跡対象として接続する。</summary>
     /// <remarks>召喚する敵の追加設定は派生側で行う。</remarks>
     virtual void BindSceneSpawnContext(BaseScene* scene);
 
@@ -70,7 +71,7 @@ class BaseEnemy : public Character {
 
     float GetDetectionRange() const { return detectionRange_; }
 
-    /// <summary>プレイヤーに保持されている状態を設定する。</summary>
+    /// <summary>運搬開始時は投げ物理・警戒・接触を止め、解除時には通常の衝突設定へ戻す。</summary>
     virtual void SetCarried(bool isCarried);
 
     /// <summary>プレイヤーに保持されているか返す。</summary>
@@ -85,7 +86,7 @@ class BaseEnemy : public Character {
     /// <summary>撃破時の消滅演出が進行中か返す。</summary>
     bool IsDefeatEffectPlaying() const { return isDefeatEffectPlaying_; }
 
-    /// <summary>有効な体当たり技の威力を返す。通常接触では0。</summary>
+    /// <summary>休眠・運搬・投げ復帰・撃破などを除き、現在の体当たり威力を0以上で返す。</summary>
     float GetActiveBodyAttackDamage() const;
 
     /// <summary>フック命中後の持ち運びを拒否する敵はtrueを返す。</summary>
@@ -116,6 +117,7 @@ class BaseEnemy : public Character {
     /// <summary>隔離プレビューの攻撃プロファイルを設定する。</summary>
     /// <remarks>通常の敵Actorへの未保存データの注入は拒否する。</remarks>
     void SetEditorPreviewProfile(const EnemyAttackProfile& profile) {
+        // 未保存の設定を本番の敵へ適用しないよう、エディター内部の隔離個体だけを書き換える。
         if (IsEditorInternal())
             attackProfile_ = profile;
     }
@@ -174,7 +176,7 @@ class BaseEnemy : public Character {
 
     /// <summary>指定本数と間隔で扇状のレーン予兆を表示する。</summary>
     void ShowAttackTelegraphLaneFan(const engine::Vector3& origin, const engine::Vector3& direction, float length, float width,
-                                    int laneCount, float lateralSpacing, float angleStep, float progress,
+                                    std::int32_t laneCount, float lateralSpacing, float angleStep, float progress,
                                     const engine::Vector4& color);
 
     /// <summary>攻撃予兆の開始合図を指定色で発生させる。</summary>
@@ -187,7 +189,7 @@ class BaseEnemy : public Character {
     /// <returns>リアクション中に通常AIを止める必要がある場合はtrue。</returns>
     bool UpdateNoticeReaction(float deltaTime, float targetDistance, float detectRange, const engine::Vector3& targetDirection);
 
-    /// <summary>ターゲットとの距離からボスの交戦状態を更新する。</summary>
+    /// <summary>標的が検知範囲へ入ったら交戦を記録する。同じ標的と交戦中は距離で状態を解除しない。</summary>
     void UpdateBossTargetEngagement(float targetDistance);
 
     /// <summary>ボスがターゲットと交戦中か返す。</summary>
@@ -199,7 +201,7 @@ class BaseEnemy : public Character {
     /// <summary>撃破時のコインを生成する。</summary>
     void SpawnDefeatCoinDrops();
 
-    /// <summary>攻撃IDに対応する定義を現在のプロファイルから返す。</summary>
+    /// <summary>攻撃IDに対応する定義を返す。未登録のIDには寿命が固定の既定定義を返す。</summary>
     const EnemyAttackDefinition& GetAttackDefinition(const std::string& attackId) const;
 
     /// <summary>現在の被弾リアクション姿勢を返す。</summary>
@@ -212,7 +214,7 @@ class BaseEnemy : public Character {
     /// <summary>被弾色や姿勢の経過時間を更新する。</summary>
     void UpdateDamageFeedbackTimers(float deltaTime);
 
-    // 被弾リアクションの最初の0.18秒だけ真。プリズムは本体と別描画の目に使う。
+    // 生存していて休眠・運搬・撃破演出中でもない個体で、被弾リアクションの最初の0.18秒だけ真。プリズムの別描画の目にも使う。
     bool IsHurtFaceActive() const;
 
     /// <summary>高速落下が地面に当たった瞬間の敵固有処理を行う。</summary>
@@ -235,20 +237,21 @@ private:
     float detectionRange_ = 20.0f;     // ターゲットを検知して攻撃AIへ入る距離。
     float damageCooldownTimer_ = 0.0f; // 連続ヒットを防ぐ短い無敵時間。
     EnemyAttackProfile attackProfile_;
-    engine::Vector4 defaultColor_ = engine::Colors::White; // 被弾演出後に戻す基準色。
+    engine::Vector4 defaultColor_ = engine::colors::kWhite; // 被弾演出後に戻す基準色。
     bool isCarried_ = false;
     float throwRecoveryTimer_ = 0.0f; // 投げられた後の復帰までの残り秒数。
 
   private:
+    // 自分が入れた被弾用モデルだけを解除し、別の描画上書きは保持する。
     void ClearHurtFaceModel();
     float colorResetTimer_ = 0.0f; // 被弾時の赤色を元に戻すタイマー。
     bool isDormant_ = false; // 配置を残したままAIと戦闘反応を待機させる。
     bool isThrownPhysics_ = false; // 投げ飛ばされた速度・角速度を通常AIより優先している状態。
 
     enum class NoticeReactionKind : uint8_t {
-        None = 0,
-        Detected,
-        Lost,
+        kNone = 0,
+        kDetected,
+        kLost,
     };
 
     /// <summary>徘徊の基準位置を現在位置から保存する。</summary>
@@ -257,7 +260,7 @@ private:
     /// <summary>徘徊の半径と高さから次の目標地点を選ぶ。</summary>
     void PickWanderTarget(float radiusScale, float verticalOffset);
 
-    /// <summary>敵ごとの徘徊乱数を一段進めて返す。</summary>
+    /// <summary>個体の徘徊乱数を一段進め、0以上1未満の値を返す。</summary>
     float NextWanderRandom();
 
     /// <summary>基準半径へ倍率を適用した徘徊半径を返す。</summary>
@@ -267,7 +270,7 @@ private:
     void UpdateThrownPhysics(float deltaTime);
 
     /// <summary>投げ物理中の接触を属性別に処理する。</summary>
-    void HandleThrownCollision(const CollisionInfo& info, uint32_t attribute);
+    void HandleThrownCollision(const engine::CollisionInfo& info, uint32_t attribute);
 
     /// <summary>投げ物理を終了し、必要な回転復帰へ移る。</summary>
     void EndThrownPhysics();
@@ -323,8 +326,8 @@ private:
     /// <summary>現在のシーンが使う粒子システムを返す。利用できなければnullptr。</summary>
     engine::ParticleSystem* GetCurrentParticleSystem() const;
 
-    engine::Vector3 wanderOrigin_ = engine::Vector3::ZERO;
-    engine::Vector3 wanderTarget_ = engine::Vector3::ZERO;
+    engine::Vector3 wanderOrigin_ = engine::Vector3::kZero;
+    engine::Vector3 wanderTarget_ = engine::Vector3::kZero;
 
     float wanderWaitTimer_ = 0.0f; // 徘徊の待機までの残り秒数。
     float wanderRetargetTimer_ = 0.0f; // 徘徊先の再選択までの残り秒数。
@@ -332,16 +335,16 @@ private:
     uint32_t wanderSeed_ = 0x12345678u; // 徘徊先の決定に使う個体内の乱数状態。
     bool hasWanderOrigin_ = false; // 徘徊範囲の中心を初回更新で取得済みか。
 
-    engine::Vector3 thrownAngularVelocity_ = engine::Vector3::ZERO;
-    engine::Vector3 throwRecoveryStartRotation_ = engine::Vector3::ZERO;
-    engine::Vector3 throwRecoveryTargetRotation_ = engine::Vector3::ZERO;
+    engine::Vector3 thrownAngularVelocity_ = engine::Vector3::kZero;
+    engine::Vector3 throwRecoveryStartRotation_ = engine::Vector3::kZero;
+    engine::Vector3 throwRecoveryTargetRotation_ = engine::Vector3::kZero;
 
     float thrownTimer_ = 0.0f; // 投げ飛ばし状態に使う経過秒数。
     float thrownSettleTimer_ = 0.0f; // 投げ飛ばし後の静止判定に使う経過秒数。
     float throwRecoveryRotateTimer_ = 0.0f; // 投げられた姿勢の復元に使う経過秒数。
 
     float slamImpactCooldownTimer_ = 0.0f; // 叩きつけ命中の再発生までの残り秒数。
-    int slamImpactCount_ = 0;
+    std::int32_t slamImpactCount_ = 0;
     bool isThrowRotationRecovering_ = false;
 
     bool isDefeatEffectPlaying_ = false;
@@ -355,7 +358,7 @@ private:
     bool bossTargetEngaged_ = false; // ボスが標的を捕捉した状態を維持するための印。
 
     bool isNoticeReactionActive_ = false;
-    NoticeReactionKind noticeReactionKind_ = NoticeReactionKind::None;
+    NoticeReactionKind noticeReactionKind_ = NoticeReactionKind::kNone;
 
     float noticeReactionTimer_ = 0.0f; // 発見リアクションが終了するまでの残り秒数。
     float noticeReactionCooldown_ = 0.0f; // 発見リアクションの再発生までの残り秒数。
@@ -363,8 +366,8 @@ private:
     float noticeMarkYaw_ = 0.0f; // 発見マークの水平回転角（ラジアン）。
 
     engine::Vector3 noticeBaseScale_ = {1.0f, 1.0f, 1.0f};
-    engine::Vector3 noticeBaseRotation_ = engine::Vector3::ZERO;
-    engine::Vector4 noticeBaseColor_ = engine::Colors::White;
+    engine::Vector3 noticeBaseRotation_ = engine::Vector3::kZero;
+    engine::Vector4 noticeBaseColor_ = engine::colors::kWhite;
 
     float defeatEffectTimer_ = 0.0f;
     float defeatEffectParticleTimer_ = 0.0f;
@@ -375,7 +378,7 @@ private:
     float damageReactionStrength_ = 0.0f;
     engine::Vector3 damageReactionLocalDirection_ = {0.0f, 0.0f, -1.0f}; // 被弾変形を押し込む本体ローカル方向。
 
-    engine::Vector3 defeatBasePosition_ = engine::Vector3::ZERO;
+    engine::Vector3 defeatBasePosition_ = engine::Vector3::kZero;
     engine::Vector3 defeatBaseScale_ = {1.0f, 1.0f, 1.0f};
-    engine::Vector4 defeatBaseColor_ = engine::Colors::White;
+    engine::Vector4 defeatBaseColor_ = engine::colors::kWhite;
 };

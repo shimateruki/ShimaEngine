@@ -107,9 +107,9 @@
                 "recordPathName": ""
             },
             "rotation": [
-                -0.0,
+                0.0,
                 1.5707964897155762,
-                -0.0
+                0.0
             ],
             "roughness": 0.6000000238418579,
             "saveCategory": "Player",

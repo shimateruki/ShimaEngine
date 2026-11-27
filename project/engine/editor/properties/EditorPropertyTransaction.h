@@ -13,7 +13,7 @@
 #include "imgui.h"
 #endif
 
-namespace EditorPropertyTransaction {
+namespace editorPropertyTransaction {
 
 // ImGui の直前に描いた項目の有効化から編集終了までを一つの Undo/Redo にまとめます。
 // apply は保存値だけでなく編集対象への再適用まで行い、Undo/Redo 時にも呼ばれます。
@@ -27,12 +27,14 @@ void TrackLastItem(
     // ドラッグ中の細かな変化を、項目の有効化から編集終了まで一件の履歴にする。
     const std::uint64_t itemId = static_cast<std::uint64_t>(ImGui::GetItemID());
     EditorTransactionManager* transactions = EditorTransactionManager::GetInstance();
+    // 入力欄が操作を開始した時点で、Undoから戻せるよう操作前の値を保存する。
     if (ImGui::IsItemActivated()) {
         transactions->BeginInteractive(
             itemId,
             label,
             [valueBeforeDraw, apply]() mutable { apply(valueBeforeDraw); });
     }
+    // 操作を終え、実際に編集があったときだけ、Redoで再適用する値を履歴へ確定する。
     if (ImGui::IsItemDeactivatedAfterEdit()) {
         transactions->CommitInteractive(
             itemId,
@@ -60,4 +62,4 @@ void RegisterDiscrete(
     EditorTransactionManager::GetInstance()->Register(std::move(transaction));
 }
 
-} // namespace EditorPropertyTransaction
+} // namespace editorPropertyTransaction

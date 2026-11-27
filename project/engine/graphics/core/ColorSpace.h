@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace engine::ColorSpace {
+namespace engine::colorSpace {
 
 // 担当：Editorで入力したsRGB色を、GPUへ渡す前に線形化するか保持する。
 // 関連：ColorSpaceの変換関数、MeshRenderer / LightManager（色の受渡し）
@@ -14,8 +14,8 @@ class WorkflowSettings {
 public:
     /// <summary>共有する色空間設定を取得します。</summary>
     static WorkflowSettings& GetInstance() {
-        static WorkflowSettings instance;
-        return instance;
+        static WorkflowSettings sInstance;
+        return sInstance;
     }
 
     /// <summary>線形色空間への変換が有効か返します。</summary>
@@ -72,4 +72,4 @@ inline engine::Vector4 AuthoringToWorking(const engine::Vector4& color) {
         : color;
 }
 
-} // namespace engine::ColorSpace
+} // namespace engine::colorSpace

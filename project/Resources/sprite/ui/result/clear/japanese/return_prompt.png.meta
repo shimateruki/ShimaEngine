@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "589c6c003e8647b10630f4ed3c58fadc",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/sprite/ui/result/clear/japanese/return_prompt.png",
+  "version": 1
+}

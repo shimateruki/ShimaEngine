@@ -3,7 +3,7 @@
 #include <cstdint>
 
 /// <summary>トリガーやスイッチによって回転状態を切り替えるオブジェクトです。</summary>
-// 関連：BaseGimmickの配置・衝突基盤を使い、固有の状態と表示をこのクラスで更新する。調整項目はInitializeでProperty登録する。
+// スイッチから回転の有効状態を受け、単独の軌道を使うか、下の移動床に追従するかを選ぶ。
 // 主な入口：Initialize / Update / OnTrigger / OnSwitchEvent
 class GimmickRotatingObject : public BaseGimmick {
   public:
@@ -31,12 +31,18 @@ class GimmickRotatingObject : public BaseGimmick {
   private:
     bool initializedForPlay_ = false;
     bool active_ = true;
+    // 配置時や追従先の回転に足す、選択軸まわりの角度。ラジアン。
     float pathRotationOffset_ = 0.0f;
+    // 親子関係を直接持たず追従する支持床。プレイ開始時に探す。
     engine::Object3D* supportFloor_ = nullptr;
+    // 支持床を基準としたオブジェクトの位置。
     engine::Vector3 supportLocalPosition_{};
+    // 追従開始時の支持床の角度。以後の支持床の回転差を求める基準。
     engine::Vector3 supportStartRotation_{};
     engine::Vector3 startPosition_{};
     engine::Vector3 startRotation_{};
+    // 再生中に一時停止した判定を戻すために保存する、開始時の衝突属性。
     uint32_t initialCollisionAttribute_ = 0;
+    // 一時非表示から戻すために保存する、開始時の可視状態。
     bool initialVisible_ = true;
 };

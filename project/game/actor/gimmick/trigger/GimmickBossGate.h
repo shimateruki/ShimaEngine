@@ -3,7 +3,7 @@
 #include "BaseGimmick.h"
 
 // ボス戦開始時に上から閉じる、実体モデル付きの格子ゲートです。
-// 関連：BaseGimmickの配置・衝突基盤を使い、固有の状態と表示をこのクラスで更新する。調整項目はInitializeでProperty登録する。
+// 通常は起動イベントで閉鎖率を制御する。ボスの登場や崩壊中はシーンの演出側が門の位置を制御する。
 // 主な入口：Initialize / Update / OnTrigger / OnSwitchEvent
 class GimmickBossGate final : public BaseGimmick {
   public:
@@ -26,7 +26,7 @@ class GimmickBossGate final : public BaseGimmick {
     // 編集配置を複製し、実行時の閉鎖率は新しい門で計算する。
     std::unique_ptr<engine::Object3D> Clone() const override;
 
-    // 開門中の退避座標ではなく、シーンで編集した閉鎖位置を返します。
+    // 保存した閉鎖位置を返す。まだ保存していない場合は、その時点の配置を閉鎖位置として取り込む。
     engine::Vector3 GetClosedPosition();
 
     // 崩壊演出中はシーン側に配置制御を渡し、開閉状態は保持します。
@@ -42,13 +42,16 @@ class GimmickBossGate final : public BaseGimmick {
     // 再生停止時は演出上書きと閉鎖率を消し、編集で決めた位置を復元する。
     void ResetForEditor();
 
-    // 閉鎖率に応じて門を上下させ、十分閉じるまで壁の接触を有効にしない。
+    // 閉鎖率に合わせて門を上下させ、閉鎖要求中かつ閉鎖率0.82以上で壁判定を有効にする。
     void ApplyRuntimeState();
 
+    // trueで保存した壁の属性とマスクを復元し、falseで両方を0にする。
     void SetCollisionEnabled(bool enabled);
 
+    // 開閉の所要秒数。設定値は0.12〜2.5秒に収める。
     float GetTransitionDuration() const;
 
+    // 開放時に閉鎖位置から上へ退避する距離。下限は2ワールド単位。
     float GetTravelDistance() const;
 
     engine::Vector3 authoredPosition_{}; // Editorで指定した位置。Play終了時の復元に使う。

@@ -34,6 +34,24 @@
         "impactVfx": "enemy/wind_slime/wind_slime_orb_impact",
         "audioCue": "wind_orb_volley"
       }
+    },
+    {
+      "id": "player_wind_tornado",
+      "displayName": "コピー竜巻・持続",
+      "playerMovement": {"enabled": true, "duration": 0, "groundSpeedScale": 0.6, "airSpeedScale": 0.76, "airResponse": 8},
+      "sequence": { "enabled": false, "binding": "player_special" }
+    },
+    {
+      "id": "player_wind_tornado_recovery",
+      "displayName": "コピー竜巻・反動",
+      "playerMovement": {"enabled": true, "duration": 0.24, "groundSpeedScale": 0.22, "airSpeedScale": 0.58, "airResponse": 12},
+      "sequence": { "enabled": false, "binding": "player_special" }
+    },
+    {
+      "id": "player_wind_vortex",
+      "displayName": "コピー小型竜巻・射出",
+      "playerMovement": {"enabled": true, "duration": 0.16, "groundSpeedScale": 0.38, "airSpeedScale": 0.68, "airResponse": 10},
+      "sequence": { "enabled": false, "binding": "player_special" }
     }
   ]
 }

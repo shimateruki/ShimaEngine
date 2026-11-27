@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "MaterialInstance.h"
 
 #include "Object3D.h"
@@ -14,17 +15,20 @@ namespace {
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
+// パスの冗長な区切りや相対要素を整理し、表示と比較に使う表記へ揃える。
 std::string NormalizePath(const fs::path& path) {
     return path.lexically_normal().generic_string();
 }
 
 void SetError(std::string* destination, const std::string& message) {
+    // エラー文の受け取り先が指定されている場合だけ、メッセージを格納する。
     if (destination) {
         *destination = message;
     }
 }
 
 bool ReadVector2(const json& value, engine::Vector2& destination) {
+    // 配列でなければ、または二成分に満たなければ、現在の値を維持する。
     if (!value.is_array() || value.size() < 2)
         return false;
     destination = { value[0].get<float>(), value[1].get<float>() };
@@ -32,6 +36,7 @@ bool ReadVector2(const json& value, engine::Vector2& destination) {
 }
 
 bool ReadVector4(const json& value, engine::Vector4& destination) {
+    // RGBA の四成分が取れない形なら、継承した色をそのまま残す。
     if (!value.is_array() || value.size() < 4)
         return false;
     destination = {
@@ -45,6 +50,7 @@ bool ReadVector4(const json& value, engine::Vector4& destination) {
 template <typename T>
 // JSONに非nullの項目があるときだけ継承済みの材質値を置き換えます。
 void ReadValue(const json& source, const char* key, T& destination) {
+    // 子が項目を省略した場合や null の場合は、親の値を維持する。
     if (source.contains(key) && !source[key].is_null()) {
         destination = source[key].get<T>();
     }
@@ -52,8 +58,8 @@ void ReadValue(const json& source, const char* key, T& destination) {
 
 // 親から継承した材質値を維持し、子JSONにある項目だけ上書きします。
 void OverlayMaterial(const json& source, MaterialInstanceData& material) {
-    // 親から受け継いだ値は残し、子JSONに書かれた項目だけ上書きする。
     ReadValue(source, "displayName", material.displayName);
+    // 色が記述されている場合だけ、RGBA 配列としての読み込みを試す。
     if (source.contains("color"))
         ReadVector4(source["color"], material.color);
     ReadValue(source, "blendMode", material.blendMode);
@@ -69,11 +75,12 @@ void OverlayMaterial(const json& source, MaterialInstanceData& material) {
     ReadValue(source, "texturePath", material.texturePath);
     ReadValue(source, "normalMapPath", material.normalMapPath);
     ReadValue(source, "ormMapPath", material.ormMapPath);
+    // タイリングが記述されている場合だけ、二成分の設定として読み込む。
     if (source.contains("textureTiling"))
         ReadVector2(source["textureTiling"], material.textureTiling);
     ReadValue(source, "autoTextureTiling", material.autoTextureTiling);
 
-    // 水面・特殊エフェクト固有の設定は通常のマテリアル項目とは別階層にある。
+    // special が存在し、オブジェクトになっている場合だけ、水面・特殊効果の項目を上書きする。
     if (!source.contains("special") || !source["special"].is_object())
         return;
     const json& special = source["special"];
@@ -95,9 +102,11 @@ void OverlayMaterial(const json& source, MaterialInstanceData& material) {
 fs::path ResolveBasePath(const fs::path& ownerPath, const std::string& baseAsset) {
     // 作業ディレクトリから参照できるパスを優先し、次に子アセットからの相対パスを試す。
     fs::path basePath(baseAsset);
+    // 絶対パスか作業ディレクトリから存在するパスなら、そのまま親の候補にする。
     if (basePath.is_absolute() || fs::exists(basePath))
         return basePath;
     const fs::path relativeToOwner = ownerPath.parent_path() / basePath;
+    // 子アセットと同じフォルダーを基準に見つかった場合は、そちらを使う。
     if (fs::exists(relativeToOwner))
         return relativeToOwner;
     return basePath;
@@ -108,7 +117,7 @@ bool LoadResolvedInternal(
     const fs::path& assetPath,
     MaterialInstanceData& material,
     std::unordered_set<std::string>& loading,
-    int depth,
+    std::int32_t depth,
     std::string* errorMessage) {
     // 継承の深さと再帰経路を制限し、循環または異常に長い参照を拒否する。
     if (depth > 16) {
@@ -127,6 +136,7 @@ bool LoadResolvedInternal(
     // 途中で失敗したときは経路集合から現在のパスを外し、次回の読み込みに影響させない。
     std::ifstream file(assetPath);
 
+    // ファイルを開けなければ、再帰経路から現在の項目を除いて失敗を返す。
     if (!file) {
         loading.erase(normalizedPath);
         SetError(errorMessage, "Material Instanceを開けません: " + normalizedPath);
@@ -143,6 +153,7 @@ bool LoadResolvedInternal(
         return false;
     }
 
+    // JSON のルートがオブジェクトでなければ、継承の指定や材質項目を読み取れない。
     if (!root.is_object()) {
         loading.erase(normalizedPath);
         SetError(errorMessage, "Material InstanceのルートはObjectである必要があります: " + normalizedPath);
@@ -152,7 +163,9 @@ bool LoadResolvedInternal(
     const std::string baseAsset = root.value("baseAsset", "");
 
     // 親の解決済み値へ子の明示フィールドを重ねる。
+    // 親アセットの指定がある場合は、子より先に親の値を読み込む。
     if (!baseAsset.empty()) {
+        // 親を解決できなければ子の設定に進まず、失敗を呼出元へ返す。
         if (!LoadResolvedInternal(ResolveBasePath(assetPath, baseAsset), material, loading, depth + 1, errorMessage)) {
             loading.erase(normalizedPath);
             return false;
@@ -174,9 +187,9 @@ bool LoadResolvedInternal(
 MaterialInstanceData MaterialInstanceAsset::Capture(const engine::Object3D& object) {
     MaterialInstanceData material;
 
-    // まずObject3dの共通マテリアル値を取り出す。
+    // Object3D の共通材質から、色・テクスチャ・照明などを取得する。
     material.color = object.GetColor();
-    material.blendMode = static_cast<int>(object.GetBlendMode());
+    material.blendMode = static_cast<std::int32_t>(object.GetBlendMode());
     material.materialType = object.GetMaterialType();
     material.shaderMaterialId = object.GetShaderMaterialId();
     material.metallic = object.GetMetallic();
@@ -194,6 +207,7 @@ MaterialInstanceData MaterialInstanceAsset::Capture(const engine::Object3D& obje
 
     // Rendererが特殊GPUパラメータを持つ場合だけ追加項目を取得する。
     if (const engine::MeshRenderer* renderer = object.GetMeshRenderer()) {
+        // 特殊材質のバッファがある場合だけ、波や流れの値も取り出す。
         if (const engine::MeshRenderer::WaterParamForGpu* special = renderer->GetWaterParamData()) {
             material.waveSpeed = special->waveSpeed;
             material.waveHeight = special->waveHeight;
@@ -215,7 +229,7 @@ MaterialInstanceData MaterialInstanceAsset::Capture(const engine::Object3D& obje
 }
 
 void MaterialInstanceAsset::Apply(const MaterialInstanceData& material, engine::Object3D& object) {
-    // Setterを通してObject3d側のマテリアルとテクスチャ状態を更新する。
+    // Setter を通して Object3D の材質・テクスチャ・照明の設定を更新する。
     object.SetColor(material.color);
     object.SetBlendMode(static_cast<BlendMode>(std::clamp(material.blendMode, 0, 5)));
     object.SetMaterialType(material.materialType);
@@ -236,6 +250,7 @@ void MaterialInstanceAsset::Apply(const MaterialInstanceData& material, engine::
 
     // 特殊パラメータはRendererのGPU用データに対応するものだけ反映する。
     if (engine::MeshRenderer* renderer = object.GetMeshRenderer()) {
+        // GPU 用データが作成されている場合だけ、特殊効果の値を書き込む。
         if (engine::MeshRenderer::WaterParamForGpu* special = renderer->GetWaterParamData()) {
             special->waveSpeed = material.waveSpeed;
             special->waveHeight = material.waveHeight;
@@ -258,6 +273,7 @@ bool MaterialInstanceAsset::LoadResolved(
     const std::string& assetPath,
     MaterialInstanceData& material,
     std::string* errorMessage) {
+    // 空パスでは読み込み先を解決できないため、エラーを返す。
     if (assetPath.empty()) {
         SetError(errorMessage, "Material Instanceのパスが空です。");
         return false;
@@ -265,6 +281,7 @@ bool MaterialInstanceAsset::LoadResolved(
 
     material = MaterialInstanceData{};
     std::unordered_set<std::string> loading;
+    // 親から順に値を解決できなかった場合は、シェーダーの検証へ進まない。
     if (!LoadResolvedInternal(fs::path(assetPath), material, loading, 0, errorMessage))
         return false;
     // 予約済み番号との併用と未登録IDを拒否し、書かれた材質を描画側で解決できることを確認します。
@@ -280,6 +297,7 @@ bool MaterialInstanceAsset::Save(
     const std::string& assetPath,
     const MaterialInstanceData& material,
     std::string* errorMessage) {
+    // 保存名が空欄では書き込み先を決められないので、先に検証する。
     if (assetPath.empty()) {
         SetError(errorMessage, "Material Instanceの保存先が空です。");
         return false;
@@ -289,10 +307,12 @@ bool MaterialInstanceAsset::Save(
     const fs::path path(assetPath);
     std::error_code error;
 
+    // ファイル名に親フォルダーが付いている場合は、その階層を作成する。
     if (!path.parent_path().empty()) {
         fs::create_directories(path.parent_path(), error);
     }
 
+    // フォルダー作成時にエラーがあれば、ファイルを書き込まず失敗を返す。
     if (error) {
         SetError(errorMessage, "Material Instanceの保存フォルダーを作れません: " + error.message());
         return false;
@@ -337,12 +357,14 @@ bool MaterialInstanceAsset::Save(
     json root;
     root["assetType"] = "MaterialInstance";
     root["version"] = material.version;
+    // 親の参照を保持している場合は、現在値と別に baseAsset として記録する。
     if (!material.baseAsset.empty())
         root["baseAsset"] = material.baseAsset;
     root["properties"] = std::move(properties);
 
     std::ofstream file(path);
 
+    // 出力を開けない場合は、ファイルへの書き込みを開始しない。
     if (!file) {
         SetError(errorMessage, "Material Instanceを書き込めません: " + NormalizePath(path));
         return false;
@@ -356,11 +378,13 @@ std::vector<std::string> MaterialInstanceAsset::Discover(const std::string& root
     std::vector<std::string> assets;
     std::error_code error;
     const fs::path root(rootDirectory);
+    // 素材を探すルートが存在しない場合は、空一覧を返す。
     if (!fs::exists(root, error))
         return assets;
 
     // 拡張子で候補だけを集め、内容がMaterialInstanceかどうかはここでは判定しない。
     for (fs::recursive_directory_iterator iterator(root, error), end; iterator != end && !error; iterator.increment(error)) {
+        // 通常ファイルで、拡張子が小文字の .json の項目だけを候補にする。
         if (!iterator->is_regular_file() || iterator->path().extension() != ".json")
             continue;
         assets.push_back(NormalizePath(iterator->path()));
@@ -376,6 +400,7 @@ bool Object3D::ApplyMaterialInstance(const std::string& assetPath, std::string* 
     // 継承を解決した材質が読めた場合だけ適用し、参照パスを更新する。
     MaterialInstanceData material;
 
+    // 継承やシェーダー設定の検証に失敗した場合は、Object 側の材質と参照先を変更しない。
     if (!MaterialInstanceAsset::LoadResolved(assetPath, material, errorMessage)) {
         return false;
     }
@@ -390,6 +415,7 @@ bool Object3D::SaveMaterialInstance(const std::string& assetPath, std::string* e
     MaterialInstanceData material = MaterialInstanceAsset::Capture(*this);
     material.displayName = std::filesystem::path(assetPath).stem().string();
 
+    // 保存に失敗した場合は、Object の参照先を現在のまま残す。
     if (!MaterialInstanceAsset::Save(assetPath, material, errorMessage)) {
         return false;
     }

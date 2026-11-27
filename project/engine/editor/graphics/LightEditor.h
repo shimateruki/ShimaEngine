@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "IEditable.h"
 #include "LightManager.h"
 #include "Object3D.h"
@@ -62,8 +63,8 @@ private:
     std::string statusMessage_;
     double statusVisibleUntil_ = 0.0;
     bool statusSuccess_ = true;
-    int selectedPointLightIndex_ = -1; // 選択中の点光源。-1は未選択。
-    int selectedSpotLightIndex_ = -1; // 選択中のスポットライト。-1は未選択。
+    std::int32_t selectedPointLightIndex_ = -1; // 選択中の点光源。-1は未選択。
+    std::int32_t selectedSpotLightIndex_ = -1; // 選択中のスポットライト。-1は未選択。
 
     // ライト位置を視覚的に調整するためのギズモ。
     bool isVisibleGizmos_ = true;

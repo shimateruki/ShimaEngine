@@ -1,17 +1,19 @@
+#include <cstdint>
 #include "engine/editor/assets/JsonAssetBrowser.h"
 #include "engine/editor/scene/inspector/InspectorWindow.Internal.h"
 #include "engine/editor/assets/ProjectWindow.h"
 
-using namespace InspectorWindowImplementation;
+using namespace inspectorWindowImplementation;
 
 void InspectorWindow::Initialize(DebugEditor* editor) {
-    // 選択物の編集権は Editor に残し、この画面は参照を保持して表示に専念する。
+    // 選択状態や編集履歴を管理するDebugEditorを借用し、Inspectorから表示と変更を行う。
     editor_ = editor;
 }
 
 void InspectorWindow::Draw() {
 #ifdef USE_IMGUI
-    // Sceneと代表選択Objectを確定し、複数選択時は共通項目だけ対象群へ反映する。
+    // シーンと代表選択を取得し、共通項目は対象群へ、名前や親子など固有項目は代表だけへ反映する。
+    // シーン管理か現在シーンがない場合は、編集対象や保存先を解決できないため戻る。
     if (editor_->GetSceneManager() == nullptr)
         return;
     BaseScene* currentScene = editor_->GetSceneManager()->GetCurrentScene();
@@ -25,6 +27,7 @@ void InspectorWindow::Draw() {
     // ---------------------------------------------------------
     // 2. オブジェクト詳細 (Inspector本体)
     // ---------------------------------------------------------
+    // 選択なしでは常時使う補助表示だけを出し、個別の編集欄には進まない。
     if (selectedObject == nullptr) {
         ImGui::TextDisabled(ICON_FA_EXCLAMATION_CIRCLE " オブジェクトが選択されていません");
         ImGui::TextDisabled("Hierarchyから選択してください");
@@ -51,6 +54,7 @@ void InspectorWindow::Draw() {
         // --- 名前表示 ---
         char nameBuffer[256];
         std::string currentName = selectedObject->GetName();
+        // 無名の対象は入力欄に仮の表示名を出し、編集されたときだけ本体に名前を書く。
         if (currentName.empty())
             currentName = "NoName";
         strcpy_s(nameBuffer, currentName.c_str());
@@ -65,6 +69,7 @@ void InspectorWindow::Draw() {
         // 動作確認とポーズ編集は代表対象の単体操作です。複数選択やパス編集へ切り替えると両方のプレビューを停止します。
         if (!isMultiSelection && !editor_->GetIsPathEditMode()) {
             if (auto* session = editor_->GetActorSession()) session->DrawInspector(selectedObject, editor_->GetProjectWindow());
+            // クリップ欄を開き、動作確認セッションが停止中なら代表Objectのポーズを編集できる。
             if (ImGui::CollapsingHeader("アニメーションクリップ編集")) {
                 if (auto* session = editor_->GetActorSession(); session && session->IsActive())
                     ImGui::TextDisabled("動作確認を終了するとクリップを編集できます。");
@@ -82,6 +87,7 @@ void InspectorWindow::Draw() {
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.0f, 0.4f, 0.0f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 0.5f, 0.2f, 1.0f));
 
+            // パス編集を抜けるボタンでモードを解除し、Recorderが保持する点の選択も解除する。
             if (ImGui::Button(ICON_FA_CHECK_CIRCLE " パス編集を完了してロックを解除 (Exit Edit Mode)", ImVec2(-1, 45))) {
                 editor_->SetIsPathEditMode(false);
                 if (selectedObject->GetRecorder())
@@ -101,7 +107,7 @@ void InspectorWindow::Draw() {
         ImGui::Separator();
 
         // =========================================================================
-        // 🚨 ここから下は「パス編集中」はロック（操作不能）にするエリア
+        // パス編集中は、次の範囲の通常Inspector操作を無効にする。
         // =========================================================================
         // Camera専用欄の早期returnでもImGuiの無効化スタックを元に戻す。
         struct PathEditDisabledScope {
@@ -109,6 +115,7 @@ void InspectorWindow::Draw() {
             ~PathEditDisabledScope() { End(); }
 
             void End() {
+                // 明示的な終了後にデストラクタから呼ばれても、無効化スタックを二度閉じない。
                 if (active) {
                     ImGui::EndDisabled();
                     active = false;
@@ -121,8 +128,9 @@ void InspectorWindow::Draw() {
         // パス編集中に本体を変形・削除しないため、以降の通常Inspectorを一括で無効化する。
         ImGui::Spacing();
 
+        // ボタン操作で複製は共通コマンドへ、単体保存は選択物のJSON保存へ渡す。
         if (ImGui::Button(ICON_FA_COPY " 複製 (Duplicate)")) {
-            EditorCommandRegistry::GetInstance()->Execute(EditorCommandId::EditDuplicate);
+            EditorCommandRegistry::GetInstance()->Execute(editorCommandId::kEditDuplicate);
         }
 
         ImGui::SameLine();
@@ -144,25 +152,26 @@ void InspectorWindow::Draw() {
 
         const bool isManagedCharacter = GameplayStatusManager::IsManagedCharacter(selectedObject);
 
-        static engine::Object3D* tagLayerBufferOwner = nullptr;
+        static engine::Object3D* sTagLayerBufferOwner = nullptr;
 
         // テキスト入力の編集中バッファは選択Objectが変わった時だけ同期し、毎フレーム上書きしない。
-        static char tagBuffer[128] = {};
-        static char layerBuffer[128] = {};
+        static char sTagBuffer[128] = {};
+        static char sLayerBuffer[128] = {};
 
-        if (tagLayerBufferOwner != selectedObject) {
-            tagLayerBufferOwner = selectedObject;
-            strcpy_s(tagBuffer, selectedObject->GetTag().c_str());
+        if (sTagLayerBufferOwner != selectedObject) {
+            sTagLayerBufferOwner = selectedObject;
+            strcpy_s(sTagBuffer, selectedObject->GetTag().c_str());
             const std::string currentLayer = selectedObject->GetLayer().empty() ? "Default" : selectedObject->GetLayer();
-            strcpy_s(layerBuffer, currentLayer.c_str());
+            strcpy_s(sLayerBuffer, currentLayer.c_str());
         }
 
         ImGui::SeparatorText("Tag / Layer");
         ImGui::TextDisabled("Tagは役割名、Layerは処理対象の分類として使います。");
         const bool mixedTag = HasMixedInspectorValue(inspectorTargets, "identity.tag");
 
-        if (ImGui::InputText("Tag", tagBuffer, sizeof(tagBuffer))) {
-            const std::string newTag = tagBuffer;
+        // Tag入力が変わったら、各有効な選択対象の役割名を変更し保存対象にする。
+        if (ImGui::InputText("Tag", sTagBuffer, sizeof(sTagBuffer))) {
+            const std::string newTag = sTagBuffer;
 
             for (engine::Object3D* target : inspectorTargets) {
                 if (target) {
@@ -185,10 +194,11 @@ void InspectorWindow::Draw() {
             "EditorOnly"
         };
 
-        int layerPresetIndex = 0;
+        std::int32_t layerPresetIndex = 0;
         const std::string selectedLayer = selectedObject->GetLayer().empty() ? "Default" : selectedObject->GetLayer();
 
-        for (int i = 0; i < IM_ARRAYSIZE(layerPresets); ++i) {
+        // 既定の一覧に保存済みLayerがあれば、その項目を選択表示する。
+        for (std::int32_t i = 0; i < IM_ARRAYSIZE(layerPresets); ++i) {
             if (selectedLayer == layerPresets[i]) {
                 layerPresetIndex = i;
                 break;
@@ -197,9 +207,10 @@ void InspectorWindow::Draw() {
 
         const bool mixedLayer = HasMixedInspectorValue(inspectorTargets, "identity.layer");
 
+        // 一覧で分類を変更すると、手入力欄と選択対象の分類を同じ値に揃える。
         if (ImGui::Combo("Layer Preset", &layerPresetIndex, layerPresets, IM_ARRAYSIZE(layerPresets))) {
-            strcpy_s(layerBuffer, layerPresets[layerPresetIndex]);
-            const std::string newLayer = layerBuffer;
+            strcpy_s(sLayerBuffer, layerPresets[layerPresetIndex]);
+            const std::string newLayer = sLayerBuffer;
 
             for (engine::Object3D* target : inspectorTargets) {
                 if (target) {
@@ -213,11 +224,11 @@ void InspectorWindow::Draw() {
         DrawMixedValueHint(mixedLayer);
 
         // 手入力で欄を空にした場合も、処理分類に使う値と表示欄の両方をDefaultに揃えます。
-        if (ImGui::InputText("Layer", layerBuffer, sizeof(layerBuffer))) {
-            const std::string newLayer = layerBuffer[0] == '\0' ? "Default" : std::string(layerBuffer);
+        if (ImGui::InputText("Layer", sLayerBuffer, sizeof(sLayerBuffer))) {
+            const std::string newLayer = sLayerBuffer[0] == '\0' ? "Default" : std::string(sLayerBuffer);
 
-            if (layerBuffer[0] == '\0') {
-                strcpy_s(layerBuffer, "Default");
+            if (sLayerBuffer[0] == '\0') {
+                strcpy_s(sLayerBuffer, "Default");
             }
 
             for (engine::Object3D* target : inspectorTargets) {
@@ -235,9 +246,10 @@ void InspectorWindow::Draw() {
         // Componentの有無を編集してから、後続の専用欄で表示・適用対象を判定する。
         DrawComponentPanel(editor_, selectedObject, inspectorTargets);
 
+        // 現在の保存カテゴリを表示し、選び直されたときに有効な選択対象の保存先を更新する。
         const char* saveCategories[] = { "Object", "Player", "Enemy" };
         std::string currentCat = selectedObject->GetSaveCategory();
-        int catIndex = 0;
+        std::int32_t catIndex = 0;
         if (currentCat == "Player")
             catIndex = 1;
         else if (currentCat == "Enemy") catIndex = 2;
@@ -256,7 +268,7 @@ void InspectorWindow::Draw() {
 
         DrawMixedValueHint(mixedSaveCategory);
 
-        // --- 親の名前表示 ---
+        // 親付きなら親名と解除操作を出す。解除は代表だけで、ワールド姿勢を保つ。
         if (selectedObject->GetParent()) {
             ImGui::TextDisabled(ICON_FA_SITEMAP " 親: %s", selectedObject->GetParent()->GetName().c_str());
 
@@ -282,6 +294,7 @@ void InspectorWindow::Draw() {
             } else {
                 ImGui::Button(ICON_FA_BOX_OPEN " [ ここにモデルをドロップして変更 ] ", ImVec2(-1, 30));
 
+                // ドロップ枠はモデルIDとプリセットを受け付け、空のモデルIDでは差し替えない。
                 if (ImGui::BeginDragDropTarget()) {
                     if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("MODEL_ASSET")) {
                         const std::string modelName = ReadEditorAssetDragPath(payload->Data, payload->DataSize);
@@ -305,8 +318,9 @@ void InspectorWindow::Draw() {
             }
 
             engine::Model* currentModel = selectedObject->GetModel();
-            const int meshCount = currentModel ? static_cast<int>(currentModel->GetMeshCount()) : 0;
+            const std::int32_t meshCount = currentModel ? static_cast<std::int32_t>(currentModel->GetMeshCount()) : 0;
 
+            // 特定メッシュだけを描く対象は現在の番号を出し、未分割の複数メッシュは子への分割を提案する。
             if (selectedObject->IsMeshDrawFiltered()) {
                 ImGui::TextDisabled("描画Mesh: %d", selectedObject->GetMeshDrawIndex());
             }
@@ -329,6 +343,7 @@ void InspectorWindow::Draw() {
         // 代表値だけで全対象が同値に見えないよう、値の混在を示してから一括編集を受け付ける。
         PushMixedCheckbox(mixedVisible);
 
+        // 表示・編集ロック・影のチェックが変更されたときは、対応する値を有効な選択対象へ揃える。
         if (ImGui::Checkbox(ICON_FA_EYE " 表示 (ゲーム内)", &isVisible)) {
             for (engine::Object3D* object : inspectorTargets) {
                 if (!object)
@@ -373,10 +388,11 @@ void InspectorWindow::Draw() {
 
         // 個別の遮蔽物設定は複数選択にも反映し、保存時に同じ方針を保持する。
         const char* occlusionNames[] = {"自動", "透過する", "透過しない"};
-        const int occlusionMode = static_cast<int>(selectedObject->GetCameraOcclusionMode());
+        const std::int32_t occlusionMode = static_cast<std::int32_t>(selectedObject->GetCameraOcclusionMode());
         const bool mixedOcclusion = HasMixedInspectorValue(inspectorTargets, "rendering.cameraOcclusionMode");
+        // 値が混在する場合は共通値なしを表示し、選択された項目を全対象の遮蔽設定へ反映する。
         if (ImGui::BeginCombo("視界確保", mixedOcclusion ? "複数の値" : occlusionNames[occlusionMode])) {
-            for (int mode = 0; mode < 3; ++mode) {
+            for (std::int32_t mode = 0; mode < 3; ++mode) {
                 if (ImGui::Selectable(occlusionNames[mode], !mixedOcclusion && mode == occlusionMode)) {
                     for (auto* object : inspectorTargets)
                         if (object) object->SetCameraOcclusionMode(static_cast<engine::Object3D::CameraOcclusionMode>(mode));
@@ -385,6 +401,7 @@ void InspectorWindow::Draw() {
             }
             ImGui::EndCombo();
         }
+        // 視界確保の欄にポインターがある間だけ、方式の違いを補足する。
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("自動: 地形・装飾の既存判定。透過する: バリア等を個別に許可。\n透過しない: 攻撃予告などの表示を維持。自機と敵本体は透過しません。");
 
         // --- Transform編集 ---
@@ -399,6 +416,7 @@ void InspectorWindow::Draw() {
         const engine::Vector3 beforePos = transform->translate;
         const bool mixedPosition = HasMixedInspectorValue(inspectorTargets, "transform.position");
 
+        // 座標欄の前後差を各対象に加え、元の配置間隔を保ったまま移動する。
         if (ImGui::DragFloat3(ICON_FA_ARROWS_ALT " 座標 (Pos)", &transform->translate.x, 0.1f)) {
             ApplyPrimaryTransformDeltaToTargets(
                 inspectorTargets,
@@ -443,6 +461,7 @@ void InspectorWindow::Draw() {
         DrawMixedValueHint(mixedRotation);
         const engine::Vector3 beforeScale = transform->scale;
 
+        // 管理対象の拡縮はタイプの共通設定に従うため値を表示し、それ以外は拡縮倍率を対象群へ配る。
         if (isManagedCharacter) {
             ImGui::TextDisabled(ICON_FA_EXPAND_ARROWS_ALT " スケール: %.3f, %.3f, %.3f（基本ステータスのタイプ共通値）",
                 transform->scale.x, transform->scale.y, transform->scale.z);
@@ -480,8 +499,7 @@ void InspectorWindow::Draw() {
         ImGui::Separator();
 
         if (ImGui::CollapsingHeader(ICON_FA_SHIELD_ALT " コリジョン設定 (Collision)", ImGuiTreeNodeFlags_DefaultOpen)) {
-            // 現状のスコープではMaterial・Particle等もこのヘッダー内に含まれる。
-            // Collisionを閉じると後続UIも隠れる構造であり、独立化は別の改修として扱う。
+            // この見出しが開いている間に、衝突設定に続いて材質・粒子・エフェクト・判定ビットを表示する。
             engine::Object3D::ColliderConfig colConfig = selectedObject->GetColliderConfig();
             bool isColChanged = false;
 
@@ -494,8 +512,9 @@ void InspectorWindow::Draw() {
                     // AABBのサイズ欄はローカルでの半幅を受け取ります。最小・最大の中点は中心オフセットに使います。
                     const engine::Vector3 halfSize = (localMax - localMin) * 0.5f;
 
+                    // 全軸の半幅が十分なモデルだけ箱へ変換し、未設定の衝突属性・マスクは既定の値で補う。
                     if (halfSize.x > 0.001f && halfSize.y > 0.001f && halfSize.z > 0.001f) {
-                        colConfig.type = ColliderType::Aabb;
+                        colConfig.type = engine::ColliderType::kAabb;
                         colConfig.center = (localMin + localMax) * 0.5f;
                         colConfig.size = halfSize;
                         colConfig.rotation = {0.0f, 0.0f, 0.0f};
@@ -504,11 +523,11 @@ void InspectorWindow::Draw() {
                         colConfig.useModelVolume = false;
 
                         if (selectedObject->GetCollisionAttribute() == 0) {
-                            selectedObject->SetCollisionAttribute(CollisionCategories::Get("ground"));
+                            selectedObject->SetCollisionAttribute(engine::collisionCategories::Get("ground"));
                         }
 
                         if (selectedObject->GetCollisionMask() == 0) {
-                            selectedObject->SetCollisionMask(CollisionCategories::GetDefaultGameplayMask());
+                            selectedObject->SetCollisionMask(engine::collisionCategories::GetDefaultGameplayMask());
                         }
 
                         isColChanged = true;
@@ -519,17 +538,18 @@ void InspectorWindow::Draw() {
             }
 
             const char* typeNames[] = { "なし (None)", "球 (Sphere)", "箱 (AABB)", "回転箱 (OBB)", "円柱 (Cylinder)", "リング (Ring)", "地形 (Terrain)" };
-            int currentTypeIndex = (int)colConfig.type;
+            std::int32_t currentTypeIndex = (std::int32_t)colConfig.type;
 
+            // 形状を選び直したとき、回転箱またはリングの寸法が未設定なら初期寸法で補う。
             if (ImGui::Combo(ICON_FA_SHAPES " 形状タイプ", &currentTypeIndex, typeNames, IM_ARRAYSIZE(typeNames))) {
-                colConfig.type = (ColliderType)currentTypeIndex;
+                colConfig.type = (engine::ColliderType)currentTypeIndex;
 
-                if ((colConfig.type == ColliderType::Obb || colConfig.type == ColliderType::Ring) && colConfig.size.x == 0.0f) {
+                if ((colConfig.type == engine::ColliderType::kObb || colConfig.type == engine::ColliderType::kRing) && colConfig.size.x == 0.0f) {
                     colConfig.size = { 1.0f, 1.0f, 1.0f };
                 }
 
                 // 箱以外の形状へ切り替えたときは、箱向けの輪郭・モデル形状判定を持ち越さない。
-                if (colConfig.type != ColliderType::Aabb && colConfig.type != ColliderType::Obb) {
+                if (colConfig.type != engine::ColliderType::kAabb && colConfig.type != engine::ColliderType::kObb) {
                     colConfig.footprint.clear();
                     colConfig.useModelSurface = false;
                     colConfig.useModelVolume = false;
@@ -538,17 +558,18 @@ void InspectorWindow::Draw() {
                 isColChanged = true;
             }
 
-            if (colConfig.type != ColliderType::None) {
+            // 形状がある場合に中心と寸法を編集する。球は半径一つ、リングは内外の半径と厚み、その他は三軸の寸法を扱う。
+            if (colConfig.type != engine::ColliderType::kNone) {
                 if (ImGui::DragFloat3("中心オフセット", &colConfig.center.x, 0.05f))
                     isColChanged = true;
 
-                if (colConfig.type == ColliderType::Sphere) {
+                if (colConfig.type == engine::ColliderType::kSphere) {
                     if (ImGui::DragFloat("半径 (Radius)", &colConfig.size.x, 0.05f, 0.0f, 100.0f)) {
                         colConfig.size.y = colConfig.size.z = colConfig.size.x;
                         isColChanged = true;
                     }
                 }
-                else if (colConfig.type == ColliderType::Ring) {
+                else if (colConfig.type == engine::ColliderType::kRing) {
                     if (ImGui::DragFloat("外径 (Outer Radius)", &colConfig.size.x, 0.05f, 0.0f, 100.0f))
                         isColChanged = true;
                     if (ImGui::DragFloat("内径 (Inner Radius)", &colConfig.size.z, 0.05f, 0.0f, 100.0f))
@@ -563,7 +584,8 @@ void InspectorWindow::Draw() {
                         isColChanged = true;
                 }
 
-                if ((colConfig.type == ColliderType::Aabb || colConfig.type == ColliderType::Obb) &&
+                // モデルを持つ箱形状にだけ、上面または全体のモデル判定を選べる欄を出す。
+                if ((colConfig.type == engine::ColliderType::kAabb || colConfig.type == engine::ColliderType::kObb) &&
                     selectedObject->GetModel()) {
                     // モデル全体の凸形状を選ぶと上面専用判定と手入力輪郭を外し、競合する設定を残さない。
                     if (ImGui::Checkbox("モデル全体の凸形状で判定", &colConfig.useModelVolume)) {
@@ -582,7 +604,8 @@ void InspectorWindow::Draw() {
                     ImGui::EndDisabled();
                 }
 
-                if (colConfig.type == ColliderType::Obb || colConfig.type == ColliderType::Ring) {
+                // 回転箱とリングに限ってローカル回転を度単位で編集し、保存値はラジアンへ戻す。
+                if (colConfig.type == engine::ColliderType::kObb || colConfig.type == engine::ColliderType::kRing) {
                     engine::Vector3 rotDegObj = { ToDegrees(colConfig.rotation.x), ToDegrees(colConfig.rotation.y), ToDegrees(colConfig.rotation.z) };
 
                     if (ImGui::DragFloat3("回転 (Rotation)", &rotDegObj.x, 1.0f, -360.0f, 360.0f)) {
@@ -597,11 +620,11 @@ void InspectorWindow::Draw() {
                     ImGui::TextUnformatted("凸形状の輪郭です。移動床の乗車判定にも使います。");
 
                     for (size_t index = 0; index < colConfig.footprint.size(); ++index) {
-                        ImGui::PushID(static_cast<int>(index));
+                        ImGui::PushID(static_cast<std::int32_t>(index));
                         const engine::Vector2 previous = colConfig.footprint[index];
 
                         if (ImGui::DragFloat2("頂点", &colConfig.footprint[index].x, 0.01f)) {
-                            int winding = 0;
+                            std::int32_t winding = 0;
                             bool convex = true;
 
                             for (size_t i = 0; i < colConfig.footprint.size(); ++i) {
@@ -613,7 +636,7 @@ void InspectorWindow::Draw() {
                                                     (b.y - a.y) * (c.x - b.x);
                                 if (std::abs(cross) < 0.00001f)
                                     continue;
-                                const int sign = cross > 0.0f ? 1 : -1;
+                                const std::int32_t sign = cross > 0.0f ? 1 : -1;
 
                                 if (winding != 0 && sign != winding) {
                                     convex = false;
@@ -622,6 +645,7 @@ void InspectorWindow::Draw() {
                                 winding = sign;
                             }
 
+                            // 曲がる向きが一方向にそろい、曲がりが一度以上あるときだけ頂点変更を確定する。
                             if (convex && winding != 0)
                                 isColChanged = true;
                             else colConfig.footprint[index] = previous;
@@ -633,6 +657,7 @@ void InspectorWindow::Draw() {
                     ImGui::TreePop();
                 }
 
+                // 確定した判定設定は有効な全選択対象へ配り、保存対象として記録する。
                 if (isColChanged) {
                     for (engine::Object3D* object : inspectorTargets) {
                         if (!object)
@@ -644,7 +669,7 @@ void InspectorWindow::Draw() {
                 }
             }
             else {
-                // なしの時も一応反映
+                // 形状を「なし」へ変更したときも全選択対象に反映し、以前の衝突を解除する。
                 if (isColChanged) {
                     for (engine::Object3D* object : inspectorTargets) {
                         if (!object)
@@ -688,12 +713,13 @@ void InspectorWindow::Draw() {
                                          "箱型の草地 PBR (Solid Terrain)"
                 };
 
-                int currentMatType = selectedObject->GetMaterialType();
+                std::int32_t currentMatType = selectedObject->GetMaterialType();
                 // 未知の材質番号では Combo の配列外を参照しないよう標準材質へ表示を戻す。
                 if (currentMatType < 0)
                     currentMatType = 0;
                 if (currentMatType > 36)
                     currentMatType = 0;
+                // 材質の種類を変更すると、一括対象の材質を揃え、後続の専用欄も選んだ種類へ切り替える。
                 if (ImGui::Combo(ICON_FA_PAINT_BRUSH " 質感 (Material Type)", &currentMatType, matTypes, IM_ARRAYSIZE(matTypes))) {
                     for (engine::Object3D* object : inspectorTargets) {
                         if (!object)
@@ -752,6 +778,7 @@ void InspectorWindow::Draw() {
                     ImGui::TextWrapped("上面・側面・底面は1つの箱モデルです。地形全体の大きさはTransform、判定はColliderで調整できます。");
                 }
 
+                // 標準と地形系PBR材質では、金属度・粗さを通常の意味で一括調整する。
                 if (currentMatType == 0 || (currentMatType >= 29 && currentMatType <= 36)) {
                     float metallic = selectedObject->GetMetallic();
 
@@ -835,7 +862,7 @@ void InspectorWindow::Draw() {
                     ImGui::TextDisabled("側面の陰影・色面の差・法線マップ強度をまとめて調整します");
                 }
                 else if (currentMatType == 24) {
-                    // ダッシュパネルの専用シェーダーへ渡す速度と密度を既存の材質値で保持する。
+                    // ダッシュパネルは代表Objectの粗さ・金属度の数値枠を流速・線密度に使う。
                     ImGui::Separator();
                     ImGui::TextColored(ImVec4(0.35f, 0.95f, 1.0f, 1.0f), ICON_FA_FORWARD " --- Dash Panel Settings ---");
                     float flowSpeed = selectedObject->GetRoughness();
@@ -878,6 +905,7 @@ void InspectorWindow::Draw() {
                         isGraphicsChanged = true;
                     }
 
+                    // 結晶の環境反射を編集した場合は、値と一緒に環境マップの使用も有効にする。
                     float environmentIntensity = selectedObject->GetEnvIntensity();
 
                     if (ImGui::SliderFloat("環境反射の強さ (Environment)", &environmentIntensity, 0.0f, 3.0f)) {
@@ -892,6 +920,7 @@ void InspectorWindow::Draw() {
                     }
                 }
 
+                // テクスチャの手動倍率と自動繰り返しは、変更された項目だけ代表Objectへ適用する。
                 ImGui::Separator();
                 ImGui::Text(ICON_FA_EXPAND_ARROWS_ALT " PBRテクスチャ繰り返し");
                 engine::Vector2 textureTiling = selectedObject->GetTextureTiling();
@@ -910,6 +939,7 @@ void InspectorWindow::Draw() {
 
                 ImGui::TextDisabled("大きい床や壁でPBRテクスチャが伸びる時に使います");
 
+                // ローカルフォグ材質を選び、霧データを取得できた場合だけ色や散乱をそのデータへ反映する。
                 if (currentMatType == 7) {
                     ImGui::Separator();
                     ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.5f, 1.0f), ICON_FA_SMOG " --- Local Fog Settings ---");
@@ -932,6 +962,7 @@ void InspectorWindow::Draw() {
                 ImGui::Separator();
                 bool enableNormal = selectedObject->GetEnableNormalMap();
 
+                // 法線画像と環境反射の有効状態を個別に切り替える。環境マップ強度は反射が有効な間に編集できる。
                 if (ImGui::Checkbox(ICON_FA_MAP " 法線マップ (Normal Map) 有効化", &enableNormal)) {
                     selectedObject->SetEnableNormalMap(enableNormal);
                     isGraphicsChanged = true;
@@ -954,6 +985,7 @@ void InspectorWindow::Draw() {
                     }
                 }
 
+                // ライトの影響と影を落とす設定は別の判定として、編集されたチェックだけ反映する。
                 bool enableLighting = selectedObject->GetEnableLighting();
 
                 if (ImGui::Checkbox(ICON_FA_LIGHTBULB " ライト影響を受ける", &enableLighting)) {
@@ -973,19 +1005,20 @@ void InspectorWindow::Draw() {
                 }
 
                 // テクスチャ候補は画面をまたいで保持し、明示的な更新操作で再読込する。
-                static InspectorTextureCatalog textureCatalog;
-                textureCatalog.EnsureLoaded();
-                const auto& albedoPaths = textureCatalog.GetAlbedoPaths();
-                const auto& normalPaths = textureCatalog.GetNormalPaths();
-                const auto& armPaths = textureCatalog.GetOrmPaths();
-                const auto& spriteTexturePaths = textureCatalog.GetSpritePaths();
-                const auto& pbrPresets = textureCatalog.GetPbrPresets();
+                static InspectorTextureCatalog sTextureCatalog;
+                sTextureCatalog.EnsureLoaded();
+                const auto& albedoPaths = sTextureCatalog.GetAlbedoPaths();
+                const auto& normalPaths = sTextureCatalog.GetNormalPaths();
+                const auto& armPaths = sTextureCatalog.GetOrmPaths();
+                const auto& spriteTexturePaths = sTextureCatalog.GetSpritePaths();
+                const auto& pbrPresets = sTextureCatalog.GetPbrPresets();
 
                 ImGui::Separator();
                 std::string currentTexturePath = selectedObject->GetTexturePath();
                 std::string currentNormalPath = selectedObject->GetNormalMapPath();
                 std::string currentOrmPathForPreset = selectedObject->GetOrmMapPath();
 
+                // 現在の画像3枚が同じプリセットと一致した場合だけ、そのセット名を表示に使う。
                 std::string currentPresetName = "未設定 (3枚セットを選択)";
 
                 for (const InspectorTextureCatalog::PbrPreset& preset : pbrPresets) {
@@ -1013,6 +1046,7 @@ void InspectorWindow::Draw() {
                     isGraphicsChanged = true;
                 };
 
+                // コンボが開いた場合はセットを列挙し、選んだセットを適用する。既存の組み合わせには初期フォーカスを置く。
                 if (ImGui::BeginCombo(ICON_FA_IMAGE " PBRプリセット (Albedo/Normal/ORM)", currentPresetName.c_str())) {
                     if (pbrPresets.empty()) {
                         ImGui::TextDisabled("同名の3枚セットが見つかりません。");
@@ -1035,6 +1069,7 @@ void InspectorWindow::Draw() {
                     ImGui::EndCombo();
                 }
 
+                // 球で比較するボタンからギャラリーを開き、画像または準備中のカードを選んだ場合も同じセットを適用する。
                 if (ImGui::Button(ICON_FA_IMAGES " 球プレビューから選ぶ")) {
                     ImGui::OpenPopup("PBR球プレビュー");
                 }
@@ -1046,7 +1081,7 @@ void InspectorWindow::Draw() {
 
                     // 素材パスの索引を作り直した後で、古い組み合わせで生成した球のサムネイルも無効化します。
                     if (ImGui::Button(ICON_FA_SYNC " 素材を再読込")) {
-                        textureCatalog.Refresh();
+                        sTextureCatalog.Refresh();
                         if (projectWindow)
                             projectWindow->InvalidatePbrThumbnails();
                     }
@@ -1057,7 +1092,7 @@ void InspectorWindow::Draw() {
                     if (pbrPresets.empty())
                         ImGui::TextDisabled("Albedo・Normal・ORMの3枚セットがありません。");
                     const float cardWidth = 112.0f;
-                    const int columns = (std::max)(1, static_cast<int>(ImGui::GetContentRegionAvail().x / cardWidth));
+                    const std::int32_t columns = (std::max)(1, static_cast<std::int32_t>(ImGui::GetContentRegionAvail().x / cardWidth));
 
                     if (ImGui::BeginTable("PbrSphereGrid", columns)) {
                         for (const auto& preset : pbrPresets) {
@@ -1146,6 +1181,7 @@ void InspectorWindow::Draw() {
                         ImGui::Separator();
                     }
 
+                    // 既定に戻す項目を選ぶと、上書きテクスチャを外すため空のパスを保存する。
                     if (ImGui::Selectable("デフォルトに戻す", currentTexturePath.empty())) {
                         selectedObject->SetTexture("");
                         isGraphicsChanged = true;
@@ -1171,12 +1207,13 @@ void InspectorWindow::Draw() {
                 ImGui::SameLine();
 
                 if (ImGui::Button(ICON_FA_SYNC_ALT " 更新##TextureList")) {
-                    textureCatalog.Refresh();
+                    sTextureCatalog.Refresh();
                 }
 
                 if (IsSpriteCardObject(selectedObject)) {
                     ImGui::Separator();
 
+                    // Sprite板で専用欄を開いたときに、表示初期化、寸法、正面向き、判定の解除を個別に操作できる。
                     if (ImGui::CollapsingHeader(ICON_FA_IMAGE " 2.5Dスプライト板", ImGuiTreeNodeFlags_DefaultOpen)) {
                         ImGui::TextDisabled("3D空間にSprite画像を置くための板です。画像は上の基本画像から変更できます。");
 
@@ -1189,6 +1226,7 @@ void InspectorWindow::Draw() {
                         const Transform* cardTransform = selectedObject->GetTransform();
                         engine::Vector2 cardSize = { cardTransform->scale.x, cardTransform->scale.y };
 
+                        // 幅と高さのいずれかを編集した場合は正の値へ制限し、板の奥行倍率は1に揃える。
                         if (ImGui::DragFloat2("表示サイズ (幅 / 高さ)", &cardSize.x, 0.02f, 0.01f, 100.0f, "%.2f")) {
                             selectedObject->SetScale({ (std::max)(0.01f, cardSize.x), (std::max)(0.01f, cardSize.y), 1.0f });
                             isTransformChanged = true;
@@ -1203,7 +1241,7 @@ void InspectorWindow::Draw() {
 
                         if (ImGui::Button(ICON_FA_SHIELD_ALT " 当たり判定なし")) {
                             engine::Object3D::ColliderConfig colliderConfig = selectedObject->GetColliderConfig();
-                            colliderConfig.type = ColliderType::None;
+                            colliderConfig.type = engine::ColliderType::kNone;
                             selectedObject->SetColliderConfig(colliderConfig);
                         }
                     }
@@ -1266,13 +1304,14 @@ void InspectorWindow::Draw() {
 
                 ImGui::Separator();
                 const char* blendModes[] = { "なし (None)", "通常 (Normal)", "加算 (Add)", "減算 (Subtract)", "乗算 (Multiply)", "スクリーン (Screen)" };
-                int currentBlend = static_cast<int>(selectedObject->GetBlendMode());
+                std::int32_t currentBlend = static_cast<std::int32_t>(selectedObject->GetBlendMode());
 
                 if (ImGui::Combo(ICON_FA_ADJUST " 合成 (Blend Mode)", &currentBlend, blendModes, IM_ARRAYSIZE(blendModes))) {
                     selectedObject->SetBlendMode(static_cast<BlendMode>(currentBlend));
                     isGraphicsChanged = true;
                 }
 
+                // アニメ調地形は専用欄で差し色を扱うため、それ以外の材質だけ一般の色欄を表示する。
                 if (currentMatType != 23) {
                     engine::Vector4 color = selectedObject->GetColor();
 
@@ -1285,7 +1324,7 @@ void InspectorWindow::Draw() {
                 ImGui::Spacing();
                 float emissive = selectedObject->GetEmissive();
 
-                // 1.0 で光なし。HDR空間で限界突破させるため最大値は大きめ(50.0等)にしておく
+                // 発光強度はHDRで使うため1を基準にし、出力を明るくする値を50まで入力できる。
                 if (ImGui::DragFloat(ICON_FA_SUN " 発光強度 (Emissive)", &emissive, 0.1f, 1.0f, 50.0f, "%.1f")) {
                     selectedObject->SetEmissive(emissive);
                     isGraphicsChanged = true;
@@ -1301,14 +1340,15 @@ void InspectorWindow::Draw() {
                 // --- CPU Particle (Old) ---
                 const auto& cpuParamsMap = ParticleManager::GetInstance()->GetParamsMap();
                 std::vector<const char*> cpuItemNames;
-                int currentCpuIndex = 0;
-                int cpuIdx = 0;
+                std::int32_t currentCpuIndex = 0;
+                std::int32_t cpuIdx = 0;
                 cpuItemNames.push_back("None (CPU)");
 
                 std::string currentCpuName = selectedObject->GetParticleName();
                 if (currentCpuName.empty())
                     currentCpuIndex = 0;
 
+                // 保存名と一致するCPUプリセットを選択表示し、先頭のNoneを選ぶと名前を解除する。
                 for (const auto& [name, param] : cpuParamsMap) {
                     cpuItemNames.push_back(name.c_str());
                     if (name == currentCpuName)
@@ -1316,7 +1356,7 @@ void InspectorWindow::Draw() {
                     cpuIdx++;
                 }
 
-                if (ImGui::Combo("CPU Effect", &currentCpuIndex, cpuItemNames.data(), (int)cpuItemNames.size())) {
+                if (ImGui::Combo("CPU Effect", &currentCpuIndex, cpuItemNames.data(), (std::int32_t)cpuItemNames.size())) {
                     if (currentCpuIndex == 0)
                         selectedObject->SetParticleName("");
                     else selectedObject->SetParticleName(cpuItemNames[currentCpuIndex]);
@@ -1327,14 +1367,15 @@ void InspectorWindow::Draw() {
                 // --- GPU Particle (New) ---
                 const auto& gpuPresets = GpuParticleManager::GetInstance()->GetPresets();
                 std::vector<const char*> gpuItemNames;
-                int currentGpuIndex = 0;
-                int gpuIdx = 0;
+                std::int32_t currentGpuIndex = 0;
+                std::int32_t gpuIdx = 0;
                 gpuItemNames.push_back("None (GPU)");
 
                 std::string currentGpuName = selectedObject->GetGpuParticleName();
                 if (currentGpuName.empty())
                     currentGpuIndex = 0;
 
+                // GPU候補も保存名に一致すれば選択表示する。一覧に無い保存名は警告の対象になる。
                 for (const auto& [name, config] : gpuPresets) {
                     gpuItemNames.push_back(name.c_str());
                     if (name == currentGpuName)
@@ -1343,7 +1384,7 @@ void InspectorWindow::Draw() {
                 }
 
                 // ここではプリセット名の選択だけをObjectへ保存し、粒子の即時生成操作にはしない。
-                if (ImGui::Combo("GPU Effect", &currentGpuIndex, gpuItemNames.data(), (int)gpuItemNames.size())) {
+                if (ImGui::Combo("GPU Effect", &currentGpuIndex, gpuItemNames.data(), (std::int32_t)gpuItemNames.size())) {
                     if (currentGpuIndex == 0)
                         selectedObject->SetGpuParticleName("");
                     else selectedObject->SetGpuParticleName(gpuItemNames[currentGpuIndex]);
@@ -1377,39 +1418,39 @@ void InspectorWindow::Draw() {
                     itemNames.push_back(displayName.c_str());
                 }
 
-                // --- スロット1 ---
+                // 各スロットは保存済みパスに一致する項目を選択表示し、選び直されたときだけ代表Objectに書き戻す。
                 std::string currentEff1 = selectedObject->GetMeshEffect1Name();
-                int selectIdx1 = 0;
+                std::int32_t selectIdx1 = 0;
 
                 for (size_t i = 0; i < effectPaths.size(); ++i) {
                     if (effectPaths[i] == currentEff1) {
-                        selectIdx1 = static_cast<int>(i);
+                        selectIdx1 = static_cast<std::int32_t>(i);
                         break;
                     }
                 }
 
-                if (ImGui::Combo("Slot 1 (Floor etc.)", &selectIdx1, itemNames.data(), (int)itemNames.size())) {
+                if (ImGui::Combo("Slot 1 (Floor etc.)", &selectIdx1, itemNames.data(), (std::int32_t)itemNames.size())) {
                     selectedObject->SetMeshEffect1Name(effectPaths[selectIdx1]);
                 }
 
                 // --- スロット2 ---
                 std::string currentEff2 = selectedObject->GetMeshEffect2Name();
-                int selectIdx2 = 0;
+                std::int32_t selectIdx2 = 0;
 
                 for (size_t i = 0; i < effectPaths.size(); ++i) {
                     if (effectPaths[i] == currentEff2) {
-                        selectIdx2 = static_cast<int>(i);
+                        selectIdx2 = static_cast<std::int32_t>(i);
                         break;
                     }
                 }
 
-                if (ImGui::Combo("Slot 2 (Pillar etc.)", &selectIdx2, itemNames.data(), (int)itemNames.size())) {
+                if (ImGui::Combo("Slot 2 (Pillar etc.)", &selectIdx2, itemNames.data(), (std::int32_t)itemNames.size())) {
                     selectedObject->SetMeshEffect2Name(effectPaths[selectIdx2]);
                 }
             }
 
             ImGui::Separator();
-            // 属性は自分の分類、マスクは相手の分類です。編集結果はそれぞれ元のビット列と比較してから設定します。
+            // 属性は自分、マスクは相手の分類。ビット列が変わったときに代表Objectへ適用し、保存対象として記録する。
             uint32_t currentAttr = selectedObject->GetCollisionAttribute();
             DrawAttributeSelector(ICON_FA_TAGS " 自分の属性 (Attribute)", &currentAttr);
 
@@ -1449,6 +1490,7 @@ void InspectorWindow::Draw() {
 
         std::string controllerPreview = "(なし)";
 
+        // 対象間のControllerに差があれば混在表示、揃っていれば設定ファイル名または未設定を出す。
         if (hasMixedController) {
             controllerPreview = "(複数値)";
         } else if (!controllerPath.empty()) {
@@ -1458,6 +1500,7 @@ void InspectorWindow::Draw() {
         if (ImGui::BeginCombo("Animator Controller##BoneAnim", controllerPreview.c_str())) {
             const bool noneSelected = !hasMixedController && controllerPath.empty();
 
+            // 未設定を選ぶと適用前を控えて全Animator対象のControllerを外し、まとめて履歴に登録する。
             if (ImGui::Selectable("(なし)", noneSelected)) {
                 const auto beforeStates = editor_->CaptureObjectStates(animatorTargets);
 
@@ -1473,6 +1516,7 @@ void InspectorWindow::Draw() {
             std::vector<std::string> controllerFiles;
             const fs::path controllerDirectory = "Resources/json/animator";
 
+            // 登録フォルダーがある場合だけ列挙し、ファイルの拡張子を小文字化してJSONに絞る。
             if (fs::exists(controllerDirectory) && fs::is_directory(controllerDirectory)) {
                 for (const auto& entry : fs::directory_iterator(controllerDirectory)) {
                     if (entry.is_regular_file() && ToLowerAscii(entry.path().extension().string()) == ".json") {
@@ -1512,6 +1556,7 @@ void InspectorWindow::Draw() {
             ImGui::EndCombo();
         }
 
+        // Controllerが設定済みなら、現在ステート名か未再生を表示する。
         if (selectedObject->HasAnimatorController()) {
             const std::string currentState = selectedObject->GetAnimatorCurrentStateName();
             ImGui::TextDisabled("現在State: %s", currentState.empty() ? "(未再生)" : currentState.c_str());
@@ -1528,6 +1573,7 @@ void InspectorWindow::Draw() {
         char animNameBuf[64];
         strncpy_s(animNameBuf, selectedObject->GetAnimationName().c_str(), sizeof(animNameBuf));
 
+        // 旧単発クリップの名前やループは入力が変わった項目を代表Objectに保持する。
         if (ImGui::InputText("アニメ名##BoneAnim", animNameBuf, sizeof(animNameBuf))) {
             selectedObject->SetAnimationName(animNameBuf);
         }
@@ -1538,6 +1584,7 @@ void InspectorWindow::Draw() {
             }
         }
 
+        // PathMoverを持つ代表Objectだけ、パス移動の専用欄を出す。
         if (HasRegisteredComponent(selectedObject, "PathMover")) {
             DrawPathMoverSection(selectedObject);
         }
@@ -1547,39 +1594,39 @@ void InspectorWindow::Draw() {
         pathEditScope.End();
         ImGui::Separator();
 
+        // 削除ボタンは共通コマンドを発行し、削除対象を指したままにしないよう編集選択を外す。
         if (ImGui::Button(ICON_FA_TRASH_ALT " オブジェクト削除", ImVec2(-1, 0))) {
-            EditorCommandRegistry::GetInstance()->Execute(EditorCommandId::EditDelete);
+            EditorCommandRegistry::GetInstance()->Execute(editorCommandId::kEditDelete);
             EditorManager::GetInstance()->ClearSelection();
         }
 
         // --- Gizmo 操作切替 ---
         ImGui::Separator();
         ImGui::Text(ICON_FA_HAND_POINTER " ギズモ操作モード:");
-        static ImGuizmo::OPERATION currentOperation = ImGuizmo::TRANSLATE;
+        static ImGuizmo::OPERATION sCurrentOperation = ImGuizmo::TRANSLATE;
 
+        // ImGuiのウィンドウにフォーカスがない間に、T/R/Sでこの欄の操作種別を変更する。
         if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_AnyWindow)) {
             if (ImGui::IsKeyPressed(ImGuiKey_T))
-                currentOperation = ImGuizmo::TRANSLATE;
+                sCurrentOperation = ImGuizmo::TRANSLATE;
             if (ImGui::IsKeyPressed(ImGuiKey_R))
-                currentOperation = ImGuizmo::ROTATE;
+                sCurrentOperation = ImGuizmo::ROTATE;
             if (ImGui::IsKeyPressed(ImGuiKey_S))
-                currentOperation = ImGuizmo::SCALE;
+                sCurrentOperation = ImGuizmo::SCALE;
         }
 
-        if (ImGui::RadioButton("移動", currentOperation == ImGuizmo::TRANSLATE))
-            currentOperation = ImGuizmo::TRANSLATE;
+        // 各ボタンを選ぶと欄内の操作種別を移動・回転・拡縮のいずれかへ切り替える。
+        if (ImGui::RadioButton("移動", sCurrentOperation == ImGuizmo::TRANSLATE))
+            sCurrentOperation = ImGuizmo::TRANSLATE;
         ImGui::SameLine();
-        if (ImGui::RadioButton("回転", currentOperation == ImGuizmo::ROTATE))
-            currentOperation = ImGuizmo::ROTATE;
+        if (ImGui::RadioButton("回転", sCurrentOperation == ImGuizmo::ROTATE))
+            sCurrentOperation = ImGuizmo::ROTATE;
         ImGui::SameLine();
-        if (ImGui::RadioButton("拡大縮小", currentOperation == ImGuizmo::SCALE))
-            currentOperation = ImGuizmo::SCALE;
+        if (ImGui::RadioButton("拡大縮小", sCurrentOperation == ImGuizmo::SCALE))
+            sCurrentOperation = ImGuizmo::SCALE;
     }
 #endif
 
 
 }
 
-// -------------------------------------------------------------
-// UIヘルパー関数群
-// -------------------------------------------------------------

@@ -64,6 +64,7 @@ public:
     void ChangeSceneAfterFade(const std::string& sceneName);
 
     /// <summary>現在のシーンを再読み込みする。</summary>
+    // 遷移中または現在のシーン名が空なら false。Scene Asset を開いている場合は同じ配置設定を引き継ぐ。
     bool ReloadCurrentScene();
 
     /// <summary>ファクトリに登録済みのシーン名を返す。</summary>
@@ -95,10 +96,12 @@ public:
     /// <summary>ゲームを再生中か取得・設定する。</summary>
     bool IsPlaying() const { return isPlaying_; }
 
+    // エディターがプレイ中かの状態を同期する。
     void SetIsPlaying(bool isPlaying) { isPlaying_ = isPlaying; }
 
     /// <summary>シーン遷移のいずれかの段階を実行中か返す。</summary>
-    bool IsTransitioning() const { return transitionPhase_ != TransitionPhase::Idle; }
+    // 待機段階以外なら遷移中とし、暗転・ロード・ロード画面からの暗転を含める。
+    bool IsTransitioning() const { return transitionPhase_ != TransitionPhase::kIdle; }
 
     /// <summary>メインスレッドで段階的なシーン初期化が進行中か返す。</summary>
     bool IsSceneInitializingAsync() const {
@@ -149,10 +152,10 @@ private:
 
     /// <summary>暗転、ロード、切替で進むシーン遷移の内部段階。</summary>
     enum class TransitionPhase {
-        Idle,
-        FadingOutCurrent,
-        Loading,
-        FadingOutLoading
+        kIdle,
+        kFadingOutCurrent,
+        kLoading,
+        kFadingOutLoading
     };
 
     /// <summary>ロード画面を開始し、次シーンの非同期準備へ移る。</summary>
@@ -169,6 +172,15 @@ private:
 
     /// <summary>生成済みシーンをメインスレッドで初期化する。</summary>
     void PrepareLoadedSceneOnMainThread();
+
+    /// <summary>先読み分のアセット生成とGPU転送を待たずに確認し、揃ったらtrueを返す。</summary>
+    bool PreparePreloadedAssets();
+
+    /// <summary>共通描画リソースとシーンの分割初期化を進め、CPU側の初期化完了でtrueを返す。</summary>
+    bool AdvancePreparedSceneInitialization();
+
+    /// <summary>記録した転送を提出し、転送が不要かGPUで完了した場合にtrueを返す。</summary>
+    bool SubmitAndPollTextureUploads();
 
     /// <summary>事前抽出した素材の読み込みを非同期で開始する。</summary>
     void StartPreparedAssetsAsync();
@@ -193,12 +205,12 @@ private:
 
 private:
     // GetInstanceが参照する共有インスタンス。
-    static SceneManager* instance_;
+    static SceneManager* sInstance;
 
     // 現在表示中、次に切り替える候補、ロード済み候補の各Sceneを所有する。
-    std::unique_ptr<BaseScene> currentScene_ = nullptr;
-    std::unique_ptr<BaseScene> nextScene_ = nullptr;
-    std::unique_ptr<BaseScene> preparedScene_ = nullptr;
+    std::unique_ptr<BaseScene> currentScene_;
+    std::unique_ptr<BaseScene> nextScene_;
+    std::unique_ptr<BaseScene> preparedScene_;
 
     // 背景で進む配置データ読込と素材準備の完了待ち。
     std::future<std::shared_ptr<ScenePreloadData>> loadingFuture_;
@@ -218,7 +230,7 @@ private:
     // 実行中かどうかと、Scene切替を識別する世代番号。
     bool isPlaying_ = false;
     uint64_t sceneGeneration_ = 0;
-    TransitionPhase transitionPhase_ = TransitionPhase::Idle;
+    TransitionPhase transitionPhase_ = TransitionPhase::kIdle;
 
     // 要求、現在、切替直前、ロード中のScene名を段階ごとに分けて保持する。
     std::string nextSceneName_ = "";

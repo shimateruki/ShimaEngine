@@ -1,0 +1,20 @@
+{
+  "version": 2,
+  "events": [
+    {
+      "type": 0,
+      "presetName": "shared/goal_clear_silver_motes",
+      "triggerTime": 0.035,
+      "offset": [
+        0,
+        0.12,
+        0
+      ],
+      "scale": [
+        0.36,
+        0.36,
+        0.36
+      ]
+    }
+  ]
+}

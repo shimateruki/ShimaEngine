@@ -1,7 +1,7 @@
 #pragma once
+#include <cstdint>
 
 // Playerの分割実装から使う、コピー・引き寄せ・シーン参照の内部補助。Playerの代わりに状態を所有しない。
-// 分割実装専用の定数・補助関数。外部からは公開ヘッダーを使用します。
 #define NOMINMAX
 #include "Player.h"
 #include "Easing.h"
@@ -35,7 +35,7 @@
 #include <cmath>
 #include <unordered_set>
 
-namespace PlayerImplementation {
+namespace playerImplementation {
 inline constexpr float kPi = std::numbers::pi_v<float>;
 inline constexpr float kTwoPi = kPi * 2.0f;
 
@@ -69,12 +69,14 @@ inline constexpr const char* kElectricShockAuraEffectPath =
     "Resources/json/effect/shared/effect_thunder_slime_constant_aura.json";
 
 // 描画用の液体には固体Colliderがないため、液面を直接評価します。
-// Water.hlsli / Magma.VS.hlsl と同じ式。波の設定は既存のInspectorに追従します。
+// 水面はWaterのうねりを、マグマ上面はMagmaのノイズ変位を基に近似します。値は描画に使う材質設定から取ります。
 inline float LiquidWaveHeight(const engine::MeshRenderer::WaterParamForGpu& p, float x, float z, bool magma) {
+    // 水の場合は、固定水面かうねる水面かを先に判定する。
     if (!magma) {
         // 穏やかな海はWater.VS.hlslと同じ固定液面で判定します。
         if (p.effectType >= 1.5f)
             return 0.0f;
+        // うねる水面は三方向の波を合成し、材質に設定された振幅を掛ける。
         const float s = std::max(p.waveFrequency, 0.1f) / 5.4f;
         const float t = p.time * std::max(p.waveSpeed, 0.0f);
         const float a =
@@ -108,15 +110,17 @@ inline float LiquidWaveHeight(const engine::MeshRenderer::WaterParamForGpu& p, f
 // 足元の標本点に触れる致死液面を探す。true 時の contactY は触れた液面の最大ワールド高さ。
 inline bool FindLethalLiquidSurface(Player& player, float& contactY) {
     auto* manager = SceneManager::GetInstance();
+    // シーンが再生中で現在の配置を取得できる場合だけ、致死液面との接触を調べる。
     if (!manager || !manager->IsPlaying() || !manager->GetCurrentScene())
         return false;
+    // プレイヤーの最新の姿勢で行列を更新してから、足元の高さと幅を取得する。
     player.UpdateLocalMatrix();
     player.UpdateWorldMatrix();
-    const Aabb body = player.GetModelWorldAabb();
+    const engine::Aabb body = player.GetModelWorldAabb();
     const float cx = (body.min.x + body.max.x) * .5f;
     const float cz = (body.min.z + body.max.z) * .5f;
 
-    // 胴体中心と足元の四隅。足場の端から触れた場合も拾います。
+    // 足元の中央と四方を調べる。四方はモデル幅の30%ずつ中心からずらす。
     const float rx = (body.max.x - body.min.x) * .3f;
     const float rz = (body.max.z - body.min.z) * .3f;
     const engine::Vector3 probes[] = {{cx, body.min.y, cz},
@@ -128,20 +132,23 @@ inline bool FindLethalLiquidSurface(Player& player, float& contactY) {
     contactY = -1.0e30f;
     for (const auto& owned : manager->GetCurrentScene()->GetObjects()) {
         engine::Object3D* liquid = owned.get();
+        // 空の参照、プレイヤー自身、非表示の物体を液面の候補から外す。
         if (!liquid || liquid == &player || !liquid->GetIsVisible())
             continue;
-        const int material = liquid->GetMaterialType();
+        const std::int32_t material = liquid->GetMaterialType();
 
-        // マグマを使った敵・弾・装飾は、通常のダメージ処理のままにします。
+        // 水材質か、マグマ材質を使う対象ギミック・ステージブロックに絞る。敵や弾のマグマ表現は除く。
         if (material != 8 &&
             !(material == 9 && (liquid->GetGimmickType() == "MagmaHazard" ||
                                 liquid->GetGimmickType() == "LiquidLevel" || liquid->GetModelName() == "Stages/block")))
             continue;
         const auto* renderer = liquid->GetMeshRenderer();
         const auto* params = renderer ? renderer->GetWaterParamData() : nullptr;
+        // 波の材質定数を取得できなければ、液面の高さを計算できない。
         if (!params)
             continue;
         const bool isWaterGrid = params->effectType < .5f || (params->effectType >= 1.5f && params->effectType < 2.5f);
+        // 水材質でも水面の板を使う種類でなければ、水平な致死液面として扱わない。
         if (material == 8 && !isWaterGrid)
             continue;
         const auto& world = liquid->GetWorldMatrix();
@@ -151,15 +158,19 @@ inline bool FindLethalLiquidSurface(Player& player, float& contactY) {
             continue;
         // 水面の内外はローカル平面、マグマの内外はワールドのモデル範囲で確認します。
         const engine::Matrix4x4 inverse = engine::Math::Inverse(world);
-        const Aabb bounds = liquid->GetModelWorldAabb();
+        const engine::Aabb bounds = liquid->GetModelWorldAabb();
         for (const engine::Vector3& probe : probes) {
             const engine::Vector3 local = engine::Math::Transform(probe, inverse);
             float surface = 0.0f;
+            // 水はローカルXZの板と、ワールド高さに足す変位から判定する。
             if (material == 8) {
+                // ローカルの水面板の幅または奥行きから外れる足元点は飛ばす。
                 if (std::abs(local.x) > 1.0f || std::abs(local.z) > 1.0f)
                     continue;
                 surface = world.m[3][1] + LiquidWaveHeight(*params, probe.x, probe.z, false);
+            // マグマはモデル全体のワールドの外接箱と、Yスケールを掛けた変位で調べる。
             } else {
+                // マグマのワールド範囲を水平に外れた点は、液面の候補から外す。
                 if (probe.x < bounds.min.x || probe.x > bounds.max.x || probe.z < bounds.min.z ||
                     probe.z > bounds.max.z)
                     continue;
@@ -191,6 +202,7 @@ inline engine::Vector3 GetStableEnemyCarryScale(engine::Object3D* enemy) {
     }
 
     const engine::Vector3 scale = enemy->GetScale();
+    // 運んでいる物が敵でなければ、専用の体積補正をせず現在の拡縮を使う。
     if (!dynamic_cast<BaseEnemy*>(enemy)) {
         return scale;
     }
@@ -200,6 +212,7 @@ inline engine::Vector3 GetStableEnemyCarryScale(engine::Object3D* enemy) {
     const float absZ = std::abs(scale.z);
     const float minScale = (std::min)({absX, absY, absZ});
     const float maxScale = (std::max)({absX, absY, absZ});
+    // 極端に細い軸がある場合は比を求めない。最大軸と最小軸の比が1.18未満の場合も補正不要とする。
     if (minScale <= 0.0001f || maxScale / minScale < 1.18f) {
         return scale;
     }
@@ -211,6 +224,7 @@ inline engine::Vector3 GetStableEnemyCarryScale(engine::Object3D* enemy) {
 
 // Transform が正本にしている Euler／Quaternion を確認して、ラジアンの Euler 角を返す。
 inline engine::Vector3 ResolveTransformEuler(const Transform& transform) {
+    // オイラー角が優先のTransformでは、その角度を直接使う。
     if (!transform.isQuaternionMaster) {
         return transform.rotate;
     }
@@ -218,6 +232,7 @@ inline engine::Vector3 ResolveTransformEuler(const Transform& transform) {
     return engine::Math::MatrixToEuler(engine::Math::MakeRotateQuaternionMatrix(transform.quaternion));
 }
 
+// 雷のオーラが本体を覆うよう、拡縮から直径と中心の持ち上がりを決めます。
 inline void CalculateThunderAuraShape(const engine::Vector3& position, const engine::Vector3& scale, engine::Vector3& center,
                                       float& horizontalDiameter, float& verticalDiameter) {
     const float maxXZ = (std::max)({std::abs(scale.x), std::abs(scale.z), 1.0f});
@@ -230,9 +245,11 @@ inline void CalculateThunderAuraShape(const engine::Vector3& position, const eng
     center.y += (std::max)(0.22f, yScale * 0.43f);
 }
 
-inline void EmitOuterThunderParticles(const engine::Vector3& position, const engine::Vector3& scale, float phase, int count,
+// オーラの外周に沿い、位相をずらした位置へ指定個数の電気粒子を出します。
+inline void EmitOuterThunderParticles(const engine::Vector3& position, const engine::Vector3& scale, float phase, std::int32_t count,
                                       const char* presetName = "shared/thunder_slime_idle_spark") {
     auto* gpuParticleManager = GpuParticleManager::GetInstance();
+    // GPU粒子管理が使えない場合か、個数が正でない場合は生成しない。
     if (!gpuParticleManager || !gpuParticleManager->IsInitialized() || count <= 0) {
         return;
     }
@@ -245,7 +262,7 @@ inline void EmitOuterThunderParticles(const engine::Vector3& position, const eng
     const float horizontalRadius = horizontalDiameter * 0.52f;
     const float verticalRadius = verticalDiameter * 0.38f;
 
-    for (int i = 0; i < count; ++i) {
+    for (std::int32_t i = 0; i < count; ++i) {
         const float angle = phase + kTwoPi * static_cast<float>(i) / static_cast<float>(count);
         engine::Vector3 emitPos = center;
         emitPos.x += std::cos(angle) * horizontalRadius;
@@ -255,12 +272,14 @@ inline void EmitOuterThunderParticles(const engine::Vector3& position, const eng
     }
 }
 
+// 雷コピーへ切り替えたときの外周粒子を、固定位相の四点から出します。
 inline void EmitThunderMorphBurst(const engine::Vector3& position, const engine::Vector3& scale) {
     EmitOuterThunderParticles(position, scale, 0.35f, 4);
 }
 
 inline void EmitCopyMorphPreset(const char* presetName, const engine::Vector3& position) {
     auto* gpuParticleManager = GpuParticleManager::GetInstance();
+    // 粒子管理を取得でき、初期化済みの場合だけ、変身プリセットを発生させる。
     if (gpuParticleManager && gpuParticleManager->IsInitialized()) {
         gpuParticleManager->Emit(presetName, position);
     }
@@ -269,13 +288,11 @@ inline void EmitCopyMorphPreset(const char* presetName, const engine::Vector3& p
 inline void SpawnCopyMorphPulse(const char* effectPath, const engine::Vector3& position,
                                 const engine::Vector3& scale = {1.0f, 1.0f, 1.0f}) {
     auto* meshEffects = MeshEffectManager::GetInstance();
+    // メッシュ効果の管理を取得できる場合だけ、指定した拡縮でパルスを発生させる。
     if (meshEffects) {
         meshEffects->SpawnEffectAt(effectPath, position, {0.0f, 0.0f, 0.0f}, scale);
     }
 }
 
-} // namespace PlayerImplementation
+} // namespace playerImplementation
 
-// =================================================================
-// 初期化・更新・描画
-// =================================================================

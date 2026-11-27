@@ -3,7 +3,7 @@
 #include "BaseGimmick.h"
 
 /// <summary>マグマ面の発光を更新し、旧配置の接触ダメージ設定を保持します。</summary>
-// 関連：BaseGimmickの配置・衝突基盤を使い、固有の状態と表示をこのクラスで更新する。調整項目はInitializeでProperty登録する。
+// マグマの材質と発光を管理する。液面の波を含む死亡判定はPlayerが担当する。
 // 主な入口：Initialize / Update / OnCollision
 class GimmickMagmaHazard : public BaseGimmick {
   public:
@@ -11,21 +11,23 @@ class GimmickMagmaHazard : public BaseGimmick {
     static constexpr const char* kTypeId = "MagmaHazard";
     static constexpr const char* kModelPath = "Stages/block";
 
+    // マグマ材質と、旧配置から読み込む接触ダメージの設定を用意する。
     void Initialize(engine::Object3DCommon* common, const std::string& modelName) override;
 
-    // 配置データがない場合も既定値で危険域を更新できるようにする。
+    // ばらつく発光と波に使う実行時の表示を更新する。
     void Update(float deltaTime) override;
 
-    // 液面接触による死亡はPlayer側で波の高さも含めて判定します。
+    // 液面接触の死亡判定はPlayerに任せ、接触通知では常にtrueを返す。
     bool OnCollision(engine::Object3D* other) override;
 
     // 複製先を初期化してから危険域の設定と配置を移す。
     std::unique_ptr<engine::Object3D> Clone() const override;
 
   private:
-    // エディター設定から接触ダメージと再適用間隔を解決します。
+    // 旧配置が使うダメージ設定を0以上で返す。未設定なら12。
     float GetDamage() const;
 
+    // 旧配置が使うダメージ間隔を秒で返す。未設定なら0.8秒。
     float GetDamageInterval() const;
 
     float damageCooldownTimer_ = 0.0f;

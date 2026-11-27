@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "32e3db8f03ac85082bab50643d7b53c7",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/sprite/guide_sign/wood_frame.dds",
+  "version": 1
+}

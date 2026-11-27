@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "f17cd90d2d388374be9589ff62f5b1da",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/sprite/ui/result/clear/japanese/result_shade.png",
+  "version": 1
+}

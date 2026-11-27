@@ -48,11 +48,14 @@ struct CopyAbilityPreviewDescriptor {
     std::string profileType;
     std::string description;
     std::string profileActionId;
+    // 個別実装の技IDと、プレビューで送る操作IDの対応。
+    std::vector<std::pair<std::string, std::string>> profileActions;
     std::string bookmarkHelp;
     std::vector<CopyAbilityPreviewAction> actions;
     std::vector<CopyAbilityPreviewBookmark> bookmarks;
 
     const CopyAbilityPreviewAction* FindAction(const std::string& id) const {
+        // 同じ形態に登録した操作の中から、指定IDに一致した操作を借用する。未登録のIDは空を返す。
         for (const auto& action : actions) if (action.id == id) return &action;
         return nullptr;
     }
@@ -67,6 +70,7 @@ public:
         std::unordered_set<std::string> types;
         for (const auto& entry : Entries()) types.insert(entry.type);
         for (const auto& entry : entries) {
+            // 形態名・表示名・設定の参照元・操作一覧は必須で、登録済みと同じ型も受け付けない。
             if (entry.type.empty() || entry.displayName.empty() || entry.profileType.empty() ||
                 entry.actions.empty() || !types.insert(entry.type).second) return false;
             // 入力を開始する時刻と動作IDを先に検証し、同じ形態に同名の動作ができないようにします。
@@ -76,7 +80,11 @@ public:
                     action.startTime < 0.0f || !ids.insert(action.id).second) return false;
             // 設定画面の既定動作とジャンプ先の動作IDも、実際の候補一覧に存在するか確認します。
             if (!entry.profileActionId.empty() && !entry.FindAction(entry.profileActionId)) return false;
+            std::unordered_set<std::string> profileIds;
+            for (const auto& [attackId, actionId] : entry.profileActions)
+                if (attackId.empty() || !entry.FindAction(actionId) || !profileIds.insert(attackId).second) return false;
             for (const auto& bookmark : entry.bookmarks)
+                // 登録済みの操作を指し、ジャンプ時刻が有限の0秒以上の場合だけ受け付ける。
                 if (!entry.FindAction(bookmark.actionId) || !std::isfinite(bookmark.time) || bookmark.time < 0.0f)
                     return false;
         }
@@ -88,13 +96,14 @@ public:
     static const std::vector<CopyAbilityPreviewDescriptor>& GetEntries() { return Entries(); }
     // 未登録の種類は nullptr。返す定義は内部配列の借用参照で、追加入力登録後は取得し直す。
     static const CopyAbilityPreviewDescriptor* Find(const std::string& type) {
+        // 要求された形態が登録済みの場合だけ、その入力・操作一覧の定義を借用する。
         for (const auto& entry : Entries()) if (entry.type == type) return &entry;
         return nullptr;
     }
 
 private:
     static std::vector<CopyAbilityPreviewDescriptor>& Entries() {
-        static std::vector<CopyAbilityPreviewDescriptor> entries;
-        return entries;
+        static std::vector<CopyAbilityPreviewDescriptor> sEntries;
+        return sEntries;
     }
 };

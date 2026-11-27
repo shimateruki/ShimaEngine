@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include <cstdint>
 #include "game/actor/player/animation/PlayerDeathAnimation.h"
 #include "Easing.h"
 #include <numbers>
@@ -26,7 +27,6 @@ constexpr const char* kDeathSoftMistPreset = "shared/player_death_slime_soft_mis
 
 // 死亡演出の補間率を0～1へ制限します。
 float Clamp01(float value) {
-    // 演出時計を曲線の有効区間へ収める。
     return std::clamp(value, 0.0f, 1.0f);
 }
 
@@ -42,7 +42,7 @@ engine::Vector3 MakeSafeScale(const engine::Vector3& scale) {
 } // namespace
 
 void PlayerDeathAnimation::Start(Player* player, bool finalDeath) {
-    // 表示と接触の元状態を退避し、死亡演出を途中で止めても復元できるようにする。
+    // 破裂前後の時計を0秒に戻し、最終残機かどうかを記録する。
     timer_ = 0.0f;
     puddleEmitTimer_ = 0.0f;
     active_ = true;
@@ -51,6 +51,7 @@ void PlayerDeathAnimation::Start(Player* player, bool finalDeath) {
     collisionStored_ = false;
     childVisible_.clear();
 
+    // 対象がいなくても時計は初期化済み。姿勢や衝突の退避だけは行わない。
     if (!player) {
         return;
     }
@@ -75,6 +76,7 @@ void PlayerDeathAnimation::Start(Player* player, bool finalDeath) {
     player->SetIsVisible(true);
 
     for (engine::Object3D* child : player->GetChildren()) {
+        // 有効な子モデルを破裂前の見た目に含めるため、開始時は表示する。
         if (child) {
             child->SetIsVisible(true);
         }
@@ -84,7 +86,7 @@ void PlayerDeathAnimation::Start(Player* player, bool finalDeath) {
 }
 
 void PlayerDeathAnimation::Update(Player* player, float deltaTime) {
-    // 破裂前の予兆と破裂後のフェードを、同じタイマー上で進めます。
+    // 演出が有効でプレイヤーも存在する場合だけ、予兆・破裂・余韻の時計を進める。
     if (!active_ || !player) {
         return;
     }
@@ -99,16 +101,17 @@ void PlayerDeathAnimation::Update(Player* player, float deltaTime) {
         return;
     }
 
-    // タイマーが破裂時刻を越えた最初の更新だけ破裂を発生させ、身体を隠します。
+    // 0.38秒に達した後、未発生なら一度だけ破裂を出して身体を隠す。
     if (!burstEmitted_) {
         burstEmitted_ = true;
         EmitBurst(player);
         HidePlayerBody(player);
     }
 
-    // 身体を隠した後は画面暗転を許可する時刻まで、足元の余韻だけを間欠的に出します。
+    // 破裂後の足元粒子は、暗転開始が可能になるまで間隔を空けて出す。
     puddleEmitTimer_ -= safeDeltaTime;
 
+    // 暗転開始時刻の前で発生間隔を使い切ったときだけ、足元の余韻を足す。
     if (timer_ < kFadeReadyTime && puddleEmitTimer_ <= 0.0f) {
         EmitPuddle(player);
         puddleEmitTimer_ = finalDeath_ ? 0.065f : 0.085f;
@@ -116,9 +119,10 @@ void PlayerDeathAnimation::Update(Player* player, float deltaTime) {
 }
 
 void PlayerDeathAnimation::RestoreVisual(Player* player) {
-    // 復活時に死亡演出が変更した表示状態を戻します。
+    // 演出の進行を停止し、プレイヤーに残った死亡時の表示と衝突を戻す。
     active_ = false;
 
+    // 対象がなければ、保存してある姿勢や衝突を復元できない。
     if (!player) {
         return;
     }
@@ -130,6 +134,7 @@ void PlayerDeathAnimation::RestoreVisual(Player* player) {
     for (size_t i = 0; i < children.size(); ++i) {
         engine::Object3D* child = children[i];
 
+        // 子の参照を取得できない位置は、表示を復元せず飛ばす。
         if (!child) {
             continue;
         }
@@ -139,32 +144,35 @@ void PlayerDeathAnimation::RestoreVisual(Player* player) {
         child->SetColor({1.0f, 1.0f, 1.0f, 1.0f});
     }
 
-    // 演出の変形を消し、記録できていた場合だけ衝突設定も復元します。
+    // 親の変形を消すため、保存しておいたサイズと回転を戻す。
     player->SetScale(baseScale_);
     player->SetRotation(baseRotation_);
 
+    // 開始時に衝突属性・マスクを保存できた場合だけ、その値を復元する。
     if (collisionStored_) {
         player->SetCollisionAttribute(baseCollisionAttribute_);
         player->SetCollisionMask(baseCollisionMask_);
     }
 
+    // 色は演出前の控えを持たないため、親と子を白へ戻す。
     player->SetColor({1.0f, 1.0f, 1.0f, 1.0f});
     player->UpdateLocalMatrix();
     player->UpdateWorldMatrix();
 }
 
+// 死亡演出が有効で0.88秒経過した場合に、呼び出し側へ暗転可能と伝えます。
 bool PlayerDeathAnimation::IsReadyForFade() const {
-    // 死亡演出が始まって一定時間経ってから画面暗転を許可する。
     return active_ && timer_ >= kFadeReadyTime;
 }
 
+// 演出が有効で1.08秒経過した場合に、モーション完了を返します。
 bool PlayerDeathAnimation::IsFinished() const {
-    // 未開始の時計だけが進んでも終了扱いにしない。
     return active_ && timer_ >= kFinishTime;
 }
 
 void PlayerDeathAnimation::ApplyPreBurstPose(Player* player) {
     // ヒットストップから膨張へ移る間の形状を、共通の演出時計で決める。
+    // プレイヤーが存在しなければ、予兆のスケール・回転・色を反映できない。
     if (!player) {
         return;
     }
@@ -177,18 +185,20 @@ void PlayerDeathAnimation::ApplyPreBurstPose(Player* player) {
 
     engine::Vector3 scale = baseScale_;
 
-    // 衝撃直後は短い明滅に合わせて潰し、その後は破裂に向けてスケールを増やします。
+    // 最初の0.10秒は、衝撃に合わせて身体を一度縮める。
     if (timer_ < kHitStopTime) {
         const float flashPulse = std::sin(hitT * kPi);
         scale.x *= 1.0f + flashPulse * 0.10f;
         scale.y *= 1.0f - flashPulse * 0.08f;
         scale.z *= 1.0f + flashPulse * 0.10f;
+    // 衝撃の区間が終われば、破裂に向けて身体を膨らませる。
     } else {
         scale.x *= 1.0f + charge * 0.42f + pulse * 0.08f;
         scale.y *= 1.0f + charge * 0.10f - pulse * 0.05f;
         scale.z *= 1.0f + charge * 0.38f + pulse * 0.06f;
     }
 
+    // 基準角へ短い震えを重ね、最後に表示用のワールド行列まで確定する。
     engine::Vector3 rotation = baseRotation_;
     rotation.z += tinyShake;
     rotation.x += std::sin(timer_ * 50.0f) * (1.0f - chargeT) * 0.025f;
@@ -202,6 +212,7 @@ void PlayerDeathAnimation::ApplyPreBurstPose(Player* player) {
     player->SetColor(color);
 
     for (engine::Object3D* child : player->GetChildren()) {
+        // 有効な子モデルにも親と同じ明滅色を反映する。
         if (child) {
             child->SetColor(color);
         }
@@ -212,7 +223,7 @@ void PlayerDeathAnimation::ApplyPreBurstPose(Player* player) {
 }
 
 void PlayerDeathAnimation::EmitBurst(Player* player) {
-    // 一時死亡と最終死亡で粒子数と色を変え、身体が消える瞬間を強調する。
+    // プレイヤーが無ければ、身体中心や足元の粒子発生位置を決められない。
     if (!player) {
         return;
     }
@@ -222,7 +233,7 @@ void PlayerDeathAnimation::EmitBurst(Player* player) {
     const engine::Vector3 center = origin + engine::Vector3{0.0f, baseScale_.y * 0.45f, 0.0f};
     const engine::Vector3 foot = origin + engine::Vector3{0.0f, 0.08f, 0.0f};
 
-    // 身体の中心から上向き、足元から低い角度へ粒子を出し、飛散と水しぶきを分けます。
+    // 通常の粒子を使える場合は、身体中心から上へ飛散させ、足元からは低く広げる。
     if (particle) {
         engine::Vector3 up = {0.0f, 1.0f, 0.0f};
         particle->SpawnParticles(center, finalDeath_ ? 24 : 18, finalDeath_ ? 5.6f : 4.8f, &up, 124.0f,
@@ -236,18 +247,18 @@ void PlayerDeathAnimation::EmitBurst(Player* player) {
                                  engine::Vector4{0.04f, 0.22f, 0.34f, 0.0f}, 0.38f, 0.92f, 0.20f, 0.055f);
     }
 
-    // 閃光と地表の輪を配置し、弧のメッシュを中心の周囲に散らします。
+    // メッシュエフェクトを発生できる場合は、閃光・輪・周囲へ飛ぶ弧を重ねる。
     if (MeshEffectManager::GetInstance()) {
         MeshEffectManager* meshEffects = MeshEffectManager::GetInstance();
         meshEffects->SpawnEffectAt(kDeathCoreFlashEffect, center, {0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f});
         meshEffects->SpawnEffectAt(kDeathSplashRingEffect, foot, {0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f});
         meshEffects->SpawnRingWaveEffect(foot);
 
-        const int arcCount = finalDeath_ ? 7 : 5;
+        const std::int32_t arcCount = finalDeath_ ? 7 : 5;
 
-        for (int i = 0; i < arcCount; ++i) {
+        for (std::int32_t i = 0; i < arcCount; ++i) {
             const float ratio = static_cast<float>(i) / static_cast<float>(arcCount);
-            // 粒子を一周に等間隔で置き、最後の残機での破裂だけ角度の始点をずらします。
+            // 弧のメッシュを等間隔で並べ、最後の残機での破裂だけ角度の始点をずらす。
             const float angle = ratio * kTwoPi + (finalDeath_ ? 0.23f : 0.0f);
             engine::Vector3 arcPos = center;
             arcPos.x += std::cos(angle) * 0.20f;
@@ -260,9 +271,9 @@ void PlayerDeathAnimation::EmitBurst(Player* player) {
         }
     }
 
-    // GPU粒子を使える場合は筋と霧を既存の破裂演出に重ねます。
     GpuParticleManager* gpuParticles = GpuParticleManager::GetInstance();
 
+    // GPU粒子が初期化済みの場合は、中心の飛散する筋と足元の霧を重ねる。
     if (gpuParticles && gpuParticles->IsInitialized()) {
         gpuParticles->Emit(kDeathSplashStreakPreset, center);
         gpuParticles->Emit(kDeathSplashStreakPreset, center + engine::Vector3{0.0f, 0.22f, 0.0f});
@@ -271,7 +282,7 @@ void PlayerDeathAnimation::EmitBurst(Player* player) {
 }
 
 void PlayerDeathAnimation::EmitPuddle(Player* player) {
-    // 足元の低い位置だけに少量の粒子を出し、飛散後の余韻を作る。
+    // プレイヤーと粒子システムの両方がある場合だけ、破裂後の足元に少量の飛沫を出す。
     if (!player || !player->GetParticleSystem()) {
         return;
     }
@@ -285,7 +296,7 @@ void PlayerDeathAnimation::EmitPuddle(Player* player) {
 }
 
 void PlayerDeathAnimation::HidePlayerBody(Player* player) {
-    // 親だけでなく子の表示も消し、装飾が残るのを防ぐ。
+    // プレイヤーが無ければ、身体や子の表示を変更できない。
     if (!player) {
         return;
     }
@@ -293,6 +304,7 @@ void PlayerDeathAnimation::HidePlayerBody(Player* player) {
     player->SetIsVisible(false);
 
     for (engine::Object3D* child : player->GetChildren()) {
+        // 有効な子モデルも非表示にし、破裂後に装飾だけ残るのを防ぐ。
         if (child) {
             child->SetIsVisible(false);
         }

@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "GimmickMovingFloor.h"
 #include <numbers>
 #include "ObjectPropertyDefinition.h"
@@ -30,10 +31,11 @@ constexpr float kFloatRollScale = 0.035f;
 constexpr float kTwoPi = (2.0f * std::numbers::pi_v<float>);
 
 bool HasCurvedSupportBelow(engine::Object3D& floor, const Player& player) {
-    // 互換モーターは接地相手を保持しないため、曲面の実形状を足元だけ照会する。
+    // 互換モーターで接地相手を得られないときは、足元を延長した身体の箱を使って曲面を照会する。
     // AABB最高点との比較では、円柱が少し回っただけで乗車が途切れてしまう。
+    // 地面属性があり凸モデル形状を持つコライダーに対して、身体の箱を組み立てる。
     if (auto* collider = floor.GetCollider(); collider && collider->HasModelVolume() &&
-        (floor.GetCollisionAttribute() & CollisionCategories::Get("ground"))) {
+        (floor.GetCollisionAttribute() & engine::collisionCategories::Get("ground"))) {
         // 足の中心だけのレイでは、箱形の足の端が曲面に乗る接触を見落とす。
         // 実際の身体の幅を使い、押し戻し直後の隙間だけ下へ補う。
         auto bounds = player.GetAabb();
@@ -43,14 +45,16 @@ bool HasCurvedSupportBelow(engine::Object3D& floor, const Player& player) {
         queryTransform.UpdateMatrix();
         engine::Collider query(&queryTransform);
         engine::ColliderConfig config;
-        config.type = ColliderType::Aabb;
+        config.type = engine::ColliderType::kAabb;
         config.size = (bounds.max - bounds.min) * 0.5f;
         query.SetConfig(config);
         const auto contact = query.CheckCollision(collider);
+        // 身体幅を使った照会で実際に重なり、法線が上向きなら曲面で支えられている。
         if (contact.isColliding && contact.normal.y > 0.5f)
             return true;
     }
     for (auto* child : floor.GetChildren()) {
+        // この部品で接地が見つからなければ、有効な子部品の曲面も調べる。
         if (child && HasCurvedSupportBelow(*child, player)) return true;
     }
     return false;
@@ -63,15 +67,17 @@ void GimmickMovingFloor::Initialize(engine::Object3DCommon* common, const std::s
     SetClassName("Gimmick");
     SetGimmickType("MovingFloor");
 
+    // 旧配置に設定が無ければ、移動方式と速度の格納先を用意する。
     if (!GetParameters().has_value())
         ResetParameters();
+    // 速度が0の配置には、初期化時に既定の速度2を入れる。
     if (GetParameters()->speed == 0.0f)
-        SetParameter(&engine::EntityParameter::speed, 2.0f); // デフォルト速度
+        SetParameter(&engine::EntityParameter::speed, 2.0f);
 
     // 当たり判定設定 (地面として扱う)
-    SetCollisionAttribute(CollisionCategories::Get("ground"));
+    SetCollisionAttribute(engine::collisionCategories::Get("ground"));
 
-    // 編集項目の宣言です。動作処理と旧paramの保存キーは変更しません。
+    // タイムラインと速度、方式ごとの移動幅をInspectorに登録する。
     using Self = GimmickMovingFloor;
     engine::ObjectPropertyDefinition<Self> properties(*this, kTypeId, "移動床",
         "噴出口連動ではTarget IDを噴出口のMy Event IDへ接続します。高さと周期は噴出口側、記録軌道はGhost Recorderで調整します。");
@@ -83,12 +89,14 @@ void GimmickMovingFloor::Initialize(engine::Object3DCommon* common, const std::s
         },
         [](Self& object, const std::string& value) {
             object.EnsurePathMoverComponent()->SetRideSequence(value);
+            // 乗車タイムラインを指定した場合は、旧Recorderの経路を解除する。
             if (!value.empty()) {
                 object.SetRecordPathName("");
+                // 旧Recorderがある場合は、経路名を外した後に再生も停止する。
                 if (object.GetRecorder()) object.GetRecorder()->Stop(false);
             }
         }, 0, 0, nullptr, {},
-        {.assetDirectory = "Resources/json/scenario", .assetEditor = EditorPropertyAssetEditor::Scenario,
+        {.assetDirectory = "Resources/json/scenario", .assetEditor = EditorPropertyAssetEditor::kScenario,
          .help = +[](const Self& object) -> std::string {
              const auto* path = object.GetPathMoverComponent();
              return !path || path->GetRideSequence().empty() ? "" :
@@ -107,14 +115,16 @@ void GimmickMovingFloor::Initialize(engine::Object3DCommon* common, const std::s
         +[](const Self& object) { return object.GetParameters() && (object.GetParameters()->actionMode >= 2 && object.GetParameters()->actionMode <= 4); }, {}, {.speed = 0.1f, .parameterId = "moveAmount"});
 }
 
+// プレイ中の移動元を選び、床を動かす前に確認した乗員をその変位で運びます。
 void GimmickMovingFloor::Update(float deltaTime) {
+    // 編集中は手続き移動を行わず、配置を次の再生の原点として保存する。
     if (!SceneManager::GetInstance()->IsPlaying()) {
-        // 編集中の配置を次回再生の原点にする。手続き移動でInspectorの座標を上書きしない。
         startPosition_ = GetTranslate();
         startRotation_ = GetRotation();
         hasCapturedStartTransform_ = true;
         time_ = 0.0f;
         frameDelta_ = {};
+        // 噴出口連動の床は、編集中に警告時の発光を残さない。
         if (GetParameters() && GetParameters()->actionMode == 5)
             SetEmissive(0.10f);
         BaseGimmick::Update(deltaTime);
@@ -123,6 +133,7 @@ void GimmickMovingFloor::Update(float deltaTime) {
 
     // 乗車用のタイムラインがあれば専用コントローラーが運行を担当し、以降の手続き移動は実行しません。
     if (IsRidePlatform()) {
+        // 乗車用タイムラインを初めて更新する場合は、運行を管理するコントローラーを作る。
         if (!ride_)
             ride_ = std::make_unique<RidingPlatformController>();
         ride_->Update(*this, deltaTime);
@@ -135,23 +146,29 @@ void GimmickMovingFloor::Update(float deltaTime) {
     bool playerRidingPath = false;
     auto* scene = SceneManager::GetInstance()->GetCurrentScene();
 
+    // 実行中のシーンと正の経過秒数がある場合だけ、移動前の乗員を集める。
     if (scene && SceneManager::GetInstance()->IsPlaying() && deltaTime > 0.0f) {
         for (auto& object : scene->GetObjects()) {
             auto* actor = object && !object->IsReplayRemoved() ? dynamic_cast<Character*>(object.get()) : nullptr;
             const bool standing = actor && IsStandingOnMovingFloor(*this, *actor);
+            // 共通の接地判定を満たした実体を、追従させる一覧へ入れる。
             if (standing) passengers.push_back(actor);
             // 既存の乗員走査で通知も集め、Pathごとの追加衝突照会を避ける。
             auto* player = dynamic_cast<Player*>(actor);
+            // 生存したプレイヤーが接地し上昇していない場合は、経路への乗車も調べる。
             if (player && !player->IsDead() && player->IsGrounded() && player->GetVelocity().y <= 0.1f) {
                 const auto& ground = player->GetCharacterMotor().GetResult();
+                // モーターが接地と判定している場合だけ、接地相手から親を確認する。
                 if (ground.grounded) {
                     for (auto* support = ground.groundObject; support; support = support->GetParent())
+                        // この床または子の上にいる場合は、経路に乗車を通知できる。
                         if (support == this) playerRidingPath = true;
                 }
                 // 旧モーターで接地相手が得られない場合だけ上端照会へ戻す。
                 if (!ground.groundObject && (standing || HasCurvedSupportBelow(*this, *player)))
                     playerRidingPath = true;
                 // 円柱の斜面はAABBの最高点と一致しない。Motorで接地が確定した乗員も運ぶ。
+                // 別経路で乗車を確認でき、通常判定の一覧に入っていない場合は追従に追加する。
                 if (playerRidingPath && !standing) passengers.push_back(player);
             }
         }
@@ -163,6 +180,7 @@ void GimmickMovingFloor::Update(float deltaTime) {
             actor->SetTranslate(actor->GetTranslate() + frameDelta_);
             actor->UpdateLocalMatrix();
             actor->UpdateWorldMatrix(false);
+            // プレイヤーには床の変位に加え、秒当たりの移動量を伝える。
             if (auto* player = dynamic_cast<Player*>(actor))
                 player->SetPlatformMotion(frameDelta_ * (1.0f / deltaTime));
         }
@@ -172,6 +190,7 @@ void GimmickMovingFloor::Update(float deltaTime) {
     // 手続き的な往復移動を先に重ねると、Editorで調整したPathと乗り移り判定がずれる。
     if (!GetRecordPathName().empty()) {
         // 丸い床や傾斜でも、AABB上端ではなくMotorの接地相手で再生を判断する。
+        // 経路名が登録済みで Recorder が存在する場合は、移動前に調べた乗車状態を渡す。
         if (GetRecorder()) GetRecorder()->SetPlayerRiding(playerRidingPath);
         const engine::Vector3 previousPosition = GetTransform()->translate;
         UpdateLocalMatrix();
@@ -181,7 +200,7 @@ void GimmickMovingFloor::Update(float deltaTime) {
         BaseGimmick::Update(deltaTime);
         frameDelta_ = GetTransform()->translate - previousPosition;
 
-        // RecorderはObject更新の終盤で座標を変える。乗員の接地照会より前に反映する。
+        // Recorder が座標を書き換えた後、新しい床行列を先に確定し、その行列から乗員の移動量を求める。
         UpdateWorldMatrix(false);
         hasCapturedStartTransform_ = true;
         // 足の接触点を旧床座標から新床座標へ移す。円柱の回転でも乗員を置き去りにしない。
@@ -197,13 +216,14 @@ void GimmickMovingFloor::Update(float deltaTime) {
                 : nextWorld);
             actor->UpdateLocalMatrix();
             actor->UpdateWorldMatrix(false);
+            // プレイヤーを運んだ場合、正の経過秒数で変位を割って足場速度を渡す。
             if (auto* player = dynamic_cast<Player*>(actor); player && deltaTime > 0.0f)
                 player->SetPlatformMotion(displacement * (1.0f / deltaTime));
         }
         return;
     }
 
-    // JSONのTransformはInitialize後に反映されるため、最初のUpdateで実際の配置を記録する。
+    // 編集時の配置がまだ捕捉されていなければ、現在の Transform を手続き移動の原点にする。
     if (!hasCapturedStartTransform_) {
         startPosition_ = GetTransform()->translate;
         startRotation_ = GetTransform()->rotate;
@@ -216,7 +236,7 @@ void GimmickMovingFloor::Update(float deltaTime) {
     time_ += deltaTime;
 
     const float speed = GetParameters().has_value() ? (std::max)(GetParameters()->speed, 0.0f) : 0.0f;
-    const int actionMode = GetParameters().has_value() ? GetParameters()->actionMode : 0;
+    const std::int32_t actionMode = GetParameters().has_value() ? GetParameters()->actionMode : 0;
 
     // 配置位置を往復運動の中心として扱う。位相差は自然な浮遊モードだけに適用する。
     const float waveTime = time_ * speed + (actionMode == 1 ? phaseOffset_ : 0.0f);
@@ -225,12 +245,14 @@ void GimmickMovingFloor::Update(float deltaTime) {
     transform->translate = startPosition_;
     transform->rotate = startRotation_;
 
+    // 方式5では、割り当てられたマグマ噴出口の進行から高さを決める。
     if (actionMode == 5) {
-        // Target IDで噴出口に接続する。未接続なら原点で待機する。
+        // 有効な宛先IDが設定され、シーンが実行中なら噴出口を探す。
         if (scene && GetTargetId() >= 0 && SceneManager::GetInstance()->IsPlaying()) {
             for (const auto& object : scene->GetObjects()) {
                 auto* geyser = dynamic_cast<GimmickMagmaGeyser*>(object.get());
 
+                // 型とイベントIDが一致した噴出口の警告発光と上昇量を採用する。
                 if (geyser && geyser->GetEventId() == GetTargetId()) {
                     SetEmissive(0.10f + geyser->GetWarningProgress() * 0.65f);
                     const float desiredY = startPosition_.y + geyser->GetLiftOffset();
@@ -241,26 +263,29 @@ void GimmickMovingFloor::Update(float deltaTime) {
                 }
             }
         }
+    // 浮遊方式では上下移動と緩やかな二軸の傾きを加える。
     } else if (actionMode == 1) {
-        // 溶岩に浮く足場用。移動床の位置を保ったまま、緩やかな浮き沈みと傾きだけを加える。
         const float amplitude = (std::clamp)(std::abs(GetParameters()->moveAmount), 0.0f, kMaxFloatAmplitude);
         const float tiltWeight = (std::min)(amplitude, 1.0f);
         transform->translate.y += std::sin(waveTime) * amplitude;
         transform->rotate.x += std::sin(waveTime * 0.73f + 1.2f) * kFloatPitchScale * tiltWeight;
         transform->rotate.z += std::sin(waveTime * 0.91f) * kFloatRollScale * tiltWeight;
         transform->isQuaternionMaster = false;
+    // 往復方式では設定の振幅から変位を求め、指定軸だけを移動させる。
     } else if (actionMode >= 2 && actionMode <= 4) {
-        // ステージ制作用の往復移動。振幅と速度はInspectorから調整できる。
         const float travel = (std::max)(0.0f, std::abs(GetParameters()->moveAmount));
         const float offset = std::sin(waveTime) * travel;
+        // 方式2ならX方向へ往復する。
         if (actionMode == 2)
             transform->translate.x += offset;
+        // 方式3ならZ方向へ往復する。
         if (actionMode == 3)
             transform->translate.z += offset;
+        // 方式4ならY方向へ往復する。
         if (actionMode == 4)
             transform->translate.y += offset;
+    // 専用の方式に該当しない場合は、既定の幅で上下に往復する。
     } else {
-        // 従来ステージとの互換性を保つ通常の上下移動。
         transform->translate.y += std::sin(waveTime) * kLegacyMoveRange;
     }
 
@@ -274,7 +299,7 @@ void GimmickMovingFloor::Update(float deltaTime) {
 }
 
 bool GimmickMovingFloor::OnCollision(engine::Object3D* other) {
-    // 全移動床で更新前に乗員を運ぶ。衝突処理は押し戻しだけにする。
+    // 乗員の移動はUpdate()が担当する。この通知では運搬を行わず、共通の衝突解決を許可する。
     (void)other;
     return true;
 }
@@ -292,6 +317,7 @@ void GimmickMovingFloor::ResetEscapeCycle() {
     time_ = 0.0f;
     frameDelta_ = {};
 
+    // 初期姿勢を取得済みの場合だけ、位置を原点へ戻して行列を作り直す。
     if (hasCapturedStartTransform_) {
         SetTranslate(startPosition_);
         UpdateLocalMatrix();

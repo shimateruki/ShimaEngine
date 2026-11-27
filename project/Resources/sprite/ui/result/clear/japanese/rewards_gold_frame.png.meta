@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "011d2e17807923a3077876323ece4b89",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/sprite/ui/result/clear/japanese/rewards_gold_frame.png",
+  "version": 1
+}

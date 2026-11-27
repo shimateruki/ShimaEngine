@@ -55,24 +55,25 @@ D3D12_DESCRIPTOR_RANGE RootSignatureBuilder::MakeRange(D3D12_DESCRIPTOR_RANGE_TY
     D3D12_DESCRIPTOR_RANGE range{};
     range.RangeType = type;
     range.NumDescriptors = numDescriptors;
+    // 指定範囲の先頭レジスタと空間を保持する。テーブル内での配置は後で決める。
     range.BaseShaderRegister = shaderRegister;
     range.RegisterSpace = registerSpace;
 
-    // テーブル内の連続したメモリに配置されるよう自動設定
+    // 先行範囲があればその直後、最初の範囲ならテーブル先頭に配置する。
     range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
     return range;
 }
 
 void RootSignatureBuilder::AddDescriptorTable(const std::vector<D3D12_DESCRIPTOR_RANGE>& ranges, D3D12_SHADER_VISIBILITY visibility) {
     // 複数のディスクリプタ範囲をまとめたテーブルをルートパラメータとして追加する。
-    // 構築完了までメモリポインタが破棄されないよう、unique_ptr(ヒープ領域)にベクターごと退避させる
+    // Buildのシリアライズまで範囲の生ポインターが有効になるよう、入力配列をBuilderの所有領域へ複製する。
     auto rangeCopy = std::make_unique<std::vector<D3D12_DESCRIPTOR_RANGE>>(ranges);
 
     D3D12_ROOT_PARAMETER param{};
     param.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     param.DescriptorTable.NumDescriptorRanges = static_cast<UINT>(rangeCopy->size());
     // パラメータには範囲の先頭ポインターだけを渡します。保持リストが再確保されても範囲自体のアドレスは変わりません。
-    param.DescriptorTable.pDescriptorRanges = rangeCopy->data(); // ポインタを渡す
+    param.DescriptorTable.pDescriptorRanges = rangeCopy->data();
     param.ShaderVisibility = visibility;
 
     tableRanges_.push_back(std::move(rangeCopy)); // メモリの所有権を保持リストへ移動
@@ -118,14 +119,16 @@ void RootSignatureBuilder::AddStaticSamplerCustom(const D3D12_STATIC_SAMPLER_DES
 // 4. ビルド実行 & 初期化
 // =================================================================================
 void RootSignatureBuilder::Build(ID3D12Device* device, ID3D12RootSignature** outRootSignature, D3D12_ROOT_SIGNATURE_FLAGS flags) {
-    // 登録済みパラメータとサンプラーからルートシグネチャをシリアライズして作成する。
+    // デバイスか出力先が空の場合は、ルートシグネチャを作れないので終了する。
     if (!device || !outRootSignature) {
         assert(false && "Root signature build requires a device and output pointer");
         return;
     }
 
+    // 生成に失敗した場合も、呼び出し側の出力先を空の状態にしておく。
     *outRootSignature = nullptr;
 
+    // ルートパラメータと静的サンプラーを登録順のまま並べ、空の配列はnullptrで表す。
     D3D12_ROOT_SIGNATURE_DESC rsDesc{};
     rsDesc.NumParameters = static_cast<UINT>(parameters_.size());
     rsDesc.pParameters = parameters_.empty() ? nullptr : parameters_.data();
@@ -139,7 +142,9 @@ void RootSignatureBuilder::Build(ID3D12Device* device, ID3D12RootSignature** out
     // バージョン 1.0 でシリアライズ
     HRESULT hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1_0, &signatureBlob, &errorBlob);
 
+    // 記述子をシリアライズできなければ、デバイスへ渡すバイナリがないため作成へ進まない。
     if (FAILED(hr)) {
+        // シリアライズの診断データを取得できた場合は、作成に失敗した理由をデバッガーへ出す。
         if (errorBlob) {
             OutputDebugStringA(reinterpret_cast<char*>(errorBlob->GetBufferPointer()));
         }

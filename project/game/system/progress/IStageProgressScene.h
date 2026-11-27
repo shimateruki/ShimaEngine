@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 namespace engine { class Object3D; }
 namespace engine { struct Vector3; }
@@ -14,5 +15,5 @@ class IStageProgressScene {
     virtual bool TryStartGoalFromContact(engine::Object3D* actor, engine::Object3D* goal) = 0;
 
     // coinIndexはステージ内の収集番号、worldPositionは取得演出の発生地点として渡す。
-    virtual void CollectStarCoinFromContact(int coinIndex, const engine::Vector3& worldPosition) = 0;
+    virtual void CollectStarCoinFromContact(std::int32_t coinIndex, const engine::Vector3& worldPosition) = 0;
 };

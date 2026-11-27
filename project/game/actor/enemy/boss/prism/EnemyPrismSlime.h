@@ -35,20 +35,23 @@ class EnemyPrismSlime : public BaseEnemy, public ISequencePreviewEnemy {
     /// 遭遇状態、属性段階、各攻撃と召喚を進める。
     void Update(float deltaTime) override;
 
-    /// 本体と所有する結晶・詠唱演出を描く。
+    /// 本体と結晶などの不透明な部品を描く。半透明の詠唱・魔法陣は専用パスが担当する。
     void Draw(ID3D12Resource* pointLightResource, ID3D12Resource* spotLightResource) override;
 
+    // 床の深度を描き終えた後に、可視の半透明効果と詠唱の層を描く。
     void DrawOwnedTransparentVisuals(ID3D12Resource* pointLightResource,
                                      ID3D12Resource* spotLightResource) override;
 
+    // 指定カメラへ本体と所有する部品を描く。詠唱だけのプレビュー中はこのパスを省く。
     void DrawForCamera(engine::Camera* camera, ID3D12Resource* pointLightResource,
-                       ID3D12Resource* spotLightResource, int previewBufferIndex = 0) override;
+                       ID3D12Resource* spotLightResource, std::int32_t previewBufferIndex = 0) override;
 
+    // 指定カメラへ半透明効果と詠唱を描く。previewBufferIndex はビュー用定数の参照番号。
     void DrawOwnedTransparentVisualsForCamera(engine::Camera* camera, ID3D12Resource* pointLightResource,
                                               ID3D12Resource* spotLightResource,
-                                              int previewBufferIndex = 0) override;
+                                              std::int32_t previewBufferIndex = 0) override;
 
-    /// 召喚した敵を追加するシーンを登録する。
+    /// 共通の追跡対象を接続し、召喚した敵の所有権を同じシーンへ渡す経路を設定する。
     void BindSceneSpawnContext(BaseScene* scene) override;
 
     /// 配置用の中ボス複製を作る。
@@ -57,6 +60,7 @@ class EnemyPrismSlime : public BaseEnemy, public ISequencePreviewEnemy {
     /// スイッチの有効化に合わせて登場状態を切り替える。
     void OnSwitchEvent(bool active) override;
 
+    // 接触したフックは命中表示までは出せるが、この中ボスは拘束・運搬へ移らない。
     bool IsPullImmune() const override { return true; }
 
     /// <summary>敵攻撃プレビューで指定した技だけを繰り返します。</summary>
@@ -65,7 +69,7 @@ class EnemyPrismSlime : public BaseEnemy, public ISequencePreviewEnemy {
 
     void SetSequencePreviewAttackId(const std::string& attackId) override { SetDebugPreviewAttackId(attackId); }
 
-    /// 攻撃シーケンスが有効な場合、その段階名を返す。
+    /// データ定義の炎弾を実行中に段階名を返す。それ以外の攻撃段階は nullptr。
     const char* GetSequenceStateLabel() const override;
 
     /// 詠唱だけを確認するプレビューへ切り替える。
@@ -80,7 +84,7 @@ class EnemyPrismSlime : public BaseEnemy, public ISequencePreviewEnemy {
     const char* GetDebugAttackPhaseName() const;
 
     // -2 は詠唱待機、-1 は生成失敗、0 は生成済みだが表示対象なしを表します。
-    int GetDebugChantVisibleLayerCount() const;
+    std::int32_t GetDebugChantVisibleLayerCount() const;
 
     /// 配置スケールを結晶と攻撃判定の基準にする。
     void ApplyManagedScale(const engine::Vector3& scale) override;
@@ -95,7 +99,7 @@ class EnemyPrismSlime : public BaseEnemy, public ISequencePreviewEnemy {
     /// HUD の分母となる最大 HP を返す。
     float GetEncounterMaximumHp() const;
 
-    /// 登場演出の進行率を HUD 向けに返す。
+    /// 遭遇 HUD 向けに、登場前は0、登場中は0〜1、戦闘中は1を返す。
     float GetEncounterAppearanceProgress() const;
 
     /// 開発用に中ボスの撃破処理を発火する。
@@ -104,28 +108,28 @@ class EnemyPrismSlime : public BaseEnemy, public ISequencePreviewEnemy {
   private:
     void ForEachOwnedEffect(const std::function<void(engine::Object3D*)>& visit) const;
     enum class ElementPhase {
-        Neutral,
-        Fire,
-        Thunder,
-        Wind,
+        kNeutral,
+        kFire,
+        kThunder,
+        kWind,
     };
 
     enum class AttackKind {
-        None,
-        PrismSpikes,
-        CrystalLanceVolley,
-        FireFan,
-        ThunderChain,
-        WindWave,
-        SlimeSummon,
+        kNone,
+        kPrismSpikes,
+        kCrystalLanceVolley,
+        kFireFan,
+        kThunderChain,
+        kWindWave,
+        kSlimeSummon,
     };
 
     enum class AttackState {
-        Idle,
-        Windup,
-        Active,
-        Recovery,
-        Reposition,
+        kIdle,
+        kWindup,
+        kActive,
+        kRecovery,
+        kReposition,
     };
 
     // 地面から伸びる結晶一本の表示。完成時のスケールを基準に経過時間で形を変える。
@@ -138,7 +142,7 @@ class EnemyPrismSlime : public BaseEnemy, public ISequencePreviewEnemy {
         // 出現後の経過秒数。
         float age = 0.0f;
         // 結晶ごとの演出のずれに使う番号。
-        int index = 0;
+        std::int32_t index = 0;
     };
 
     // 結晶槍の予告枠・発射済み状態・飛翔位置をまとめ、表示 Object の寿命を所有する。
@@ -153,16 +157,16 @@ class EnemyPrismSlime : public BaseEnemy, public ISequencePreviewEnemy {
         // 軌跡粒子を出す間隔の管理に使う。
         float trailTimer = 0.0f;
         // 溜め中の左右位置や立ち上がり順を決める番号。
-        int slotIndex = 0;
+        std::int32_t slotIndex = 0;
         // 本体近くで溜める状態を終え、飛行に移ったか。
         bool launched = false;
     };
 
     enum class SummonSlimeKind {
-        Fire,
-        Bomber,
-        Pink,
-        Thunder,
+        kFire,
+        kBomber,
+        kPink,
+        kThunder,
     };
 
     // 召喚口の表示と出現させる敵種。spawned により同じ口からの重複生成を防ぐ。
@@ -174,7 +178,7 @@ class EnemyPrismSlime : public BaseEnemy, public ISequencePreviewEnemy {
         // 召喚口と敵の出現位置の基準になるワールド座標。
         engine::Vector3 groundPosition{};
         engine::Vector4 color{1.0f, 1.0f, 1.0f, 1.0f};
-        SummonSlimeKind slimeKind = SummonSlimeKind::Pink;
+        SummonSlimeKind slimeKind = SummonSlimeKind::kPink;
         // 召喚口を作ってからの経過秒数。
         float age = 0.0f;
         // 次の粒子発生までの残り時間を管理する。
@@ -204,10 +208,10 @@ class EnemyPrismSlime : public BaseEnemy, public ISequencePreviewEnemy {
     };
 
     enum class EncounterState {
-        Normal,
-        Dormant,
-        Appearing,
-        Active,
+        kNormal,
+        kDormant,
+        kAppearing,
+        kActive,
     };
 
     // 遭遇演出。編集時に配置された座標とスケールは退避し、再生終了時に復元します。
@@ -250,6 +254,7 @@ class EnemyPrismSlime : public BaseEnemy, public ISequencePreviewEnemy {
 
     /// 対象距離と攻撃段階から移動速度を決める。
     void UpdateBehavior(float deltaTime, const engine::Vector3& direction, float distance, engine::Vector3& velocity);
+    // 専用移動が位置を決めたフレームだけ、位置と接地を直接反映して通常の速度を0にする。
     void UpdateLocomotion(float deltaTime, const engine::Vector3& targetDirection, engine::Vector3& velocity);
 
     /// <summary>攻撃の対象方向・距離を固定し、予備動作を開始します。</summary>
@@ -302,12 +307,12 @@ class EnemyPrismSlime : public BaseEnemy, public ISequencePreviewEnemy {
     AttackSequenceContext MakeSequenceContext();
 
     /// 本編とプレビューが共有する攻撃種別・IDの対応表を返す。
-    std::span<const EnemyAttackSelection::Entry<AttackKind>> GetAttackEntries() const;
+    std::span<const enemyAttackSelection::Entry<AttackKind>> GetAttackEntries() const;
 
     /// 内部の攻撃種別を JSON プロファイルの ID へ変換する。
     const char* GetAttackId(AttackKind kind) const;
 
-    // 晶槍の候補位置と発生後の成長・破砕を管理します。
+    // 結晶棘の起点と順番を準備する。主棘は現在の標的位置を優先し、攻撃の射程に収める。
     void PreparePrismSpikePoints();
 
     /// 候補位置に次の結晶棘を発生させる。
@@ -334,6 +339,7 @@ class EnemyPrismSlime : public BaseEnemy, public ISequencePreviewEnemy {
     // 攻撃範囲と術者の詠唱を示す魔法陣です。
     void UpdatePrismSpikeSectorVisual(float deltaTime);
 
+    // 風の技の予備動作と実行中だけ各渦の表示を進め、該当しなくなったら隠す。
     void UpdateWindSpellVisual(float deltaTime);
 
     // 攻撃状態から詠唱共通部品の進行率を作り、見た目を本体に追従させる。
@@ -346,9 +352,9 @@ class EnemyPrismSlime : public BaseEnemy, public ISequencePreviewEnemy {
     void ClearPrismAttackVisuals();
 
     /// 指定番号の結晶棘の表示オブジェクトを作る。
-    std::unique_ptr<engine::Object3D> CreatePrismSpikeObject(int index) const;
+    std::unique_ptr<engine::Object3D> CreatePrismSpikeObject(std::int32_t index) const;
 
-    /// <summary>晶槍が到達した扇形の範囲に攻撃判定を適用します。</summary>
+    /// <summary>結晶棘が到達した扇形の範囲に攻撃判定を適用する。</summary>
     /// <param name="reachedDistance">術者から今回の攻撃前線までの距離。</param>
     void ApplyPrismSpellDamage(float reachedDistance);
 
@@ -386,6 +392,7 @@ class EnemyPrismSlime : public BaseEnemy, public ISequencePreviewEnemy {
     // 演出データの再生状態だけ準備し、実際の表示時刻は攻撃状態が決める。
     std::unique_ptr<EffectObject3D> CreateSpellEffect(const char* path) const;
 
+    // 詠唱陣の中心を、攻撃開始時に固定した方向に沿う本体前方のワールド座標で返す。
     engine::Vector3 GetChantSigilCenter() const;
 
     // 予告や着弾を空中に置かないよう、周囲の地形面を探す。
@@ -419,14 +426,15 @@ class EnemyPrismSlime : public BaseEnemy, public ISequencePreviewEnemy {
     void EmitDirectedPreset(const char* presetName, const engine::Vector3& position, const engine::Vector3& direction,
                             float speedScale);
 
+    // 被弾・詠唱の伸縮で接地点が変わらないよう、Collider を配置時の基準スケールに合わせる。
     void SyncCollisionRadius();
 
     // 現在の属性。自動攻撃の候補と本体の見た目を決める。
-    ElementPhase elementPhase_ = ElementPhase::Neutral;
+    ElementPhase elementPhase_ = ElementPhase::kNeutral;
     // 攻撃の種類。技ごとの設定や更新処理を選ぶ。
-    AttackKind currentAttack_ = AttackKind::None;
+    AttackKind currentAttack_ = AttackKind::kNone;
     // 現在の技が予備動作・実行・硬直のどの段階にいるか。
-    AttackState attackState_ = AttackState::Idle;
+    AttackState attackState_ = AttackState::kIdle;
 
     // 開始時に選んだ炎の扇の攻撃定義。再生に渡すため保持する。
     EnemyAttackDefinition selectedFireFan_;
@@ -463,7 +471,7 @@ class EnemyPrismSlime : public BaseEnemy, public ISequencePreviewEnemy {
     // 再配置を始めた直後に、跳躍を一度だけ起こすためのフラグ。
     bool repositionJumpPending_ = false;
 
-    int actionIndex_ = 0; // 技内で次に発生させる弾・着弾点の番号。
+    std::int32_t actionIndex_ = 0; // 技内で次に発生させる弾・着弾点の番号。
     bool hasBaseScale_ = false; // モデルの基準倍率を一度取得したか。
 
     bool warningTriggered_ = false; // 現在の技で予告の強調を一度だけ発生させるための印。
@@ -521,9 +529,9 @@ class EnemyPrismSlime : public BaseEnemy, public ISequencePreviewEnemy {
     std::function<void(std::unique_ptr<BaseEnemy>)> spawnCallback_;
     // 召喚パターンの乱数と生成する敵の識別名に使う連番。
     std::uint32_t summonRandomSerial_ = 0;
-    int automaticAttackSerial_ = 0; // 自動選択した技の通算番号。攻撃周期をまたいで進む。
+    std::int32_t automaticAttackSerial_ = 0; // 自動選択した技の通算番号。攻撃周期をまたいで進む。
     // これまでに使った召喚回数。次の攻撃候補に召喚を入れるかの判定に使う。
-    int summonWavesUsed_ = 0;
+    std::int32_t summonWavesUsed_ = 0;
     // 現在の属性で一巡する攻撃候補の並び。
     std::array<AttackKind, 3> attackCycle_{};
     // 配列のうち今回の一巡で実際に使う候補数。
@@ -531,9 +539,9 @@ class EnemyPrismSlime : public BaseEnemy, public ISequencePreviewEnemy {
     // 次の候補の位置。末尾や属性変更で候補を組み直す。
     std::size_t attackCycleIndex_ = 0;
     // 攻撃候補を作った時点の属性。属性変更の検出に使う。
-    ElementPhase attackCyclePhase_ = ElementPhase::Neutral;
+    ElementPhase attackCyclePhase_ = ElementPhase::kNeutral;
     // 最後にAIが選んだ技。次の候補を決めるときに連続使用を避けるため参照する。
-    AttackKind lastAutomaticAttack_ = AttackKind::None;
+    AttackKind lastAutomaticAttack_ = AttackKind::kNone;
     // AIの攻撃候補を並べ替えるための乱数生成器。
     std::mt19937 attackRandom_{std::random_device{}()};
     // 本体の姿勢に追従する左右の目。
@@ -545,7 +553,7 @@ class EnemyPrismSlime : public BaseEnemy, public ISequencePreviewEnemy {
     std::unique_ptr<engine::Object3D> coreFramePart_;
 
     // 待機・登場中・戦闘中のどの段階か。通常AIを実行するかの判定にも使う。
-    EncounterState encounterState_ = EncounterState::Normal;
+    EncounterState encounterState_ = EncounterState::kNormal;
 
     engine::Vector3 encounterBasePosition_{}; // Editorで設定された登場前の位置。Playの退避・復帰に使う。
     engine::Vector3 encounterBaseScale_{1.0f, 1.0f, 1.0f}; // 登場演出で縮める前の配置倍率。
@@ -558,7 +566,7 @@ class EnemyPrismSlime : public BaseEnemy, public ISequencePreviewEnemy {
     uint32_t encounterCollisionMask_ = 0; // 登場待機中に無効化する前の衝突マスク。
 
     // 登場演出で材質を切り替える前に退避した材質番号。
-    int encounterMaterialType_ = 27;
+    std::int32_t encounterMaterialType_ = 27;
 
     // 登場を開始してからの経過秒数。演出時間で割って進捗を求める。
     float encounterTimer_ = 0.0f;

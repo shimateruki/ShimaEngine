@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "engine/animation/AnimatorController.h"
 
 #include <array>
@@ -27,7 +28,7 @@ int main() {
             "Idle", "Run", "Jump", "Dash", "AimHook", "ShootHook", "PullEnemy", "Carry", "GateReturn", "Disabled"
         };
 
-        for (int mode = 1; mode < static_cast<int>(kModeStates.size()); ++mode) {
+        for (std::int32_t mode = 1; mode < static_cast<std::int32_t>(kModeStates.size()); ++mode) {
             runtime.SetInt("LocomotionMode", mode);
             runtime.Update(1.0f / 60.0f, {});
             Check(runtime.IsPlayingState(kModeStates[mode]), "LocomotionMode did not select the expected state");

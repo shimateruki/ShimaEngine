@@ -35,7 +35,7 @@ class EnemyRingBurner : public BaseEnemy {
 
   private:
     // 数値は Replay JSON に保存されるため変更しない。
-    enum class State { Idle = 0, Charge = 1, Wave = 2, Recovery = 3, Suppressed = 4 };
+    enum class State { kIdle = 0, kCharge = 1, kWave = 2, kRecovery = 3, kSuppressed = 4 };
 
     class StateBehavior;
     class IdleBehavior;
@@ -65,8 +65,8 @@ class EnemyRingBurner : public BaseEnemy {
     /// 前回半径から新たに通過した範囲へのダメージを判定する。
     void UpdateWaveDamage(float previousRadius);
 
-    /// 熱輪に属する演出の発生を止める。
-    void StopWaveEffects();
+    /// 現在の攻撃状態が所有する予告または波を止める。
+    void StopAttackEffects();
 
     /// 攻撃状態に応じて砲台の姿勢を更新する。
     void UpdateVisualPose(float deltaTime);
@@ -94,7 +94,7 @@ class EnemyRingBurner : public BaseEnemy {
     /// 熱輪の拡大に合わせた演出を発生させる。
     void SpawnWaveEffects();
 
-    State state_ = State::Idle;
+    State state_ = State::kIdle;
     engine::Vector3 baseScale_ = {1.0f, 1.0f, 1.0f};
     float stateTimer_ = 0.0f; // 現在の状態までの残り秒数。
     float stateDuration_ = 0.0f;
@@ -104,5 +104,5 @@ class EnemyRingBurner : public BaseEnemy {
     float particleTimer_ = 0.0f;
     bool hasBaseScale_ = false;
     bool waveDamageDone_ = false;
-    uint64_t waveEffectScope_ = 0;
+    uint64_t attackEffectScope_ = 0;
 };

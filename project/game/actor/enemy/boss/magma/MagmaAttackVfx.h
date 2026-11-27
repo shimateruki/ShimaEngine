@@ -4,7 +4,7 @@
 
 #include <array>
 
-namespace MagmaAttackVfx {
+namespace magmaAttackVfx {
 
 // 再生と先読みで、同じ攻撃設定と空欄時の既定プリセットを使う。
 struct ActivePreset {
@@ -15,6 +15,7 @@ struct ActivePreset {
 
     // 設定が使える場合は、その攻撃定義が保持するプリセット名を返す。
     const char* Resolve(const EnemyAttackDefinition* attack) const {
+        // 攻撃定義がない、プリセット名が空、またはパスの区切りやコロンを含む場合は組み込み名を使用する。
         if (!attack || attack->activeVfx.empty() || attack->activeVfx.find_first_of(R"(/\:)") != std::string::npos) {
             return defaultName;
         }
@@ -27,4 +28,4 @@ inline constexpr ActivePreset kFireColumn{"fire_column", "enemy/magma_slime/magm
 inline constexpr ActivePreset kFlood{"magma_flood", "enemy/magma_slime/magma_slime_flood_splash"};
 inline constexpr std::array kProfilePresets{kMortar, kFireColumn, kFlood};
 
-} // namespace MagmaAttackVfx
+} // namespace magmaAttackVfx

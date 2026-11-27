@@ -1,7 +1,6 @@
 ﻿#pragma once
 #include "engine/utility/math/Math.h"
 
-// 前方宣言
 namespace engine { class InputManager; }
 namespace engine { class Camera; }
 struct Transform;
@@ -17,9 +16,9 @@ class IMoveStrategy {
     virtual ~IMoveStrategy() = default;
 
     /// <summary>
-    /// 入力と状態に基づき、このフレームの移動ベクトルを計算する
+    /// 入力と状態から、プレイヤーに適用する水平速度の要求値を計算する。
     /// </summary>
-    /// <param name="player">操作対象のプレイヤー</param>
-    /// <returns>水平面での移動速度。横移動用の実装では X 成分だけを使います。</returns>
-    virtual engine::Vector3 CalculateVelocity(Player* player) = 0; // 純粋仮想関数
+    /// <param name="player">操作対象の有効な非所有参照。実装はこの引数から入力を取得する。</param>
+    /// <returns>ワールド単位/秒の水平移動速度。2DではワールドX成分に限定する。</returns>
+    virtual engine::Vector3 CalculateVelocity(Player* player) = 0;
 };

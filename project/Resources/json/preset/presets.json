@@ -8890,7 +8890,7 @@
             0.03999999910593033,
             1.0
         ],
-        "emissive": 3.2745449542999268,
+        "emissive": 3.434544801712036,
         "enableEnvMap": false,
         "enableLighting": true,
         "enableNormalMap": false,
@@ -9015,9 +9015,9 @@
         "roughness": 0.41999998688697815,
         "saveCategory": "Object",
         "scale": [
-            1.0,
-            1.0,
-            1.0
+            3.530050277709961,
+            0.99998539686203,
+            4.305408000946045
         ],
         "tag": "",
         "targetID": -1,

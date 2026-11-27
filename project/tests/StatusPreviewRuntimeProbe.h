@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #ifdef USE_IMGUI
 #include "DebugEditor.h"
 #include "EditorManager.h"
@@ -16,7 +17,7 @@
 
 // 専用実行で、統合UIと同じ対象選択・反映・再生成・保存の経路を確認します。
 struct StatusPreviewRuntimeProbe {
-    inline static int drawnStatusFrames = 0;
+    inline static std::int32_t sDrawnStatusFrames = 0;
     static bool Enabled() { return GetEnvironmentVariableA("CG2_STATUS_PREVIEW_TEST", nullptr, 0) > 0; }
     static void Require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
     static void Near(float a, float b, const char* message) { Require(std::abs(a-b) < 0.01f, message); }
@@ -50,7 +51,7 @@ struct StatusPreviewRuntimeProbe {
         auto* status = manager->FindMutableEnemyStatus("FireSlime");
         status->maxHp = 140; status->speed = 17;
         manager->MarkDirty();
-        Require(CharacterStatusEditor::Apply(scene, "FireSlime") >= 1, "live status target missing");
+        Require(characterStatusEditor::Apply(scene, "FireSlime") >= 1, "live status target missing");
         Near(firePtr->GetParameters()->hp, 70, "current HP ratio changed");
         Near(firePtr->GetParameters()->speed, 17, "selected type speed not applied");
         Near(otherPtr->GetParameters()->hp, otherHp, "other type modified");
@@ -65,7 +66,7 @@ struct StatusPreviewRuntimeProbe {
         Require(preview.previewEnemy_ && !preview.IsPlayerCopyMode(), "enemy target selection");
         Near(preview.previewEnemy_->GetParameters()->maxHp, 140, "enemy preview did not use edited status");
         status->maxHp = 100; status->speed = 9; manager->MarkDirty();
-        CharacterStatusEditor::Apply(scene, "FireSlime");
+        characterStatusEditor::Apply(scene, "FireSlime");
         Near(preview.previewEnemy_->GetParameters()->maxHp, 140, "live apply touched preview actor");
         preview.RefreshStatusPreview();
         Near(preview.previewEnemy_->GetParameters()->maxHp, 100, "restart did not refresh status");
@@ -101,7 +102,7 @@ struct StatusPreviewRuntimeProbe {
         *manager->FindMutableEnemyStatus("FireSlime") = originalFire;
         manager->GetMutablePlayerStatus() = originalPlayer;
         manager->MarkDirty(); manager->SaveIfDirty();
-        CharacterStatusEditor::Apply(scene, "*");
+        characterStatusEditor::Apply(scene, "*");
         preview.StopPreview();
         for (auto* object : {firePtr, otherPtr, dummyPtr}) scene->RequestRemoveObject(object);
         preview.SelectStatusTarget("FireSlime");
@@ -118,7 +119,7 @@ struct StatusPreviewRuntimeProbe {
         // 実際のInspector描画経路を通った回数で、UIが非表示のまま成功するのを防ぎます。
         auto observedEditor = service;
         observedEditor.draw = [draw = service.draw](BaseScene* targetScene, const std::string& type) {
-            ++drawnStatusFrames;
+            ++sDrawnStatusFrames;
             return draw(targetScene, type);
         };
         EnemyAttackPreviewRegistry::RegisterStatusEditor(std::move(observedEditor));
@@ -129,23 +130,23 @@ struct StatusPreviewRuntimeProbe {
     static void AfterDraw(SceneManager* scenes, DebugEditor* editor, const std::string& path) {
         if (!Enabled() || !scenes || !editor) return;
         static std::ofstream log(path, std::ios::trunc);
-        static int phase = 0, frames = 0;
-        static bool done = false;
-        if (done || scenes->IsTransitioning()) return;
+        static std::int32_t sPhase = 0, sFrames = 0;
+        static bool sDone = false;
+        if (sDone || scenes->IsTransitioning()) return;
         try {
-            if (phase == 0) { scenes->ChangeScene("GAMEPLAY"); phase = 1; return; }
-            if (scenes->GetCurrentSceneName() != "GAMEPLAY" || ++frames < 3) return;
-            if (phase == 1) { Check(scenes, editor, log); phase = 2; frames = 0; return; }
-            if (phase == 2) {
+            if (sPhase == 0) { scenes->ChangeScene("GAMEPLAY"); sPhase = 1; return; }
+            if (scenes->GetCurrentSceneName() != "GAMEPLAY" || ++sFrames < 3) return;
+            if (sPhase == 1) { Check(scenes, editor, log); sPhase = 2; sFrames = 0; return; }
+            if (sPhase == 2) {
                 auto* preview = GetGameActorDebugPanel();
                 Require(EditorManager::GetInstance()->GetSelectedObject() == preview, "integrated inspector selection lost");
-                Require(drawnStatusFrames > 0, "integrated status panel was not drawn" );
+                Require(sDrawnStatusFrames > 0, "integrated status panel was not drawn" );
                 log << "PASS: integrated character status, live apply, preview refresh, persistence and normal UI frames" << std::endl;
-                done = true; WinApp::CloseNow();
+                sDone = true; WinApp::CloseNow();
             }
         } catch (const std::exception& e) {
             log << "FAIL: " << e.what() << std::endl;
-            done = true; WinApp::CloseNow();
+            sDone = true; WinApp::CloseNow();
         }
     }
 };

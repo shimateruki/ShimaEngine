@@ -1,52 +1,65 @@
 #define NOMINMAX
+#include <cstdint>
 #include "game/actor/player/copy/CopyAbilitySession.h"
 #include "game/actor/player/Player.h"
 
-// Controllerは能力の生成と寿命、呼び出しの転送だけを担当します。
-using namespace CopyAbilityDetail;
+// コピー能力の生成・保持・終了を担当し、入力と毎フレームの更新は能力ごとのセッションへ渡す。
+using namespace copyAbilityDetail;
 namespace {
-std::unique_ptr<ICopyAbilitySession> CreateSession(int morphType, const EnemyAttackProfile& profile) {
+std::unique_ptr<ICopyAbilitySession> CreateSession(std::int32_t morphType, const EnemyAttackProfile& profile) {
     // 変身種別に対応する状態付きセッションを生成し、未対応種別は空で返す。
-    if (morphType == static_cast<int>(Player::EnemyMorphType::Crown)) {
+    // 王冠形態では、王冠の技と進行状態を持つセッションを作る。
+    if (morphType == static_cast<std::int32_t>(Player::EnemyMorphType::kCrown)) {
         return CreateCrownCopyAbility(profile);
     }
 
-    if (morphType == static_cast<int>(Player::EnemyMorphType::Slime)) {
+    // 通常Slimeのコピーでは、ピンク形態のセッションを作る。
+    if (morphType == static_cast<std::int32_t>(Player::EnemyMorphType::kSlime)) {
         return CreatePinkSlimeCopyAbility(profile);
     }
 
-    if (morphType == static_cast<int>(Player::EnemyMorphType::FireSlime)) {
+    // 炎形態では、炎の技用セッションを作る。
+    if (morphType == static_cast<std::int32_t>(Player::EnemyMorphType::kFireSlime)) {
         return CreateFireSlimeCopyAbility(profile);
     }
 
-    if (morphType == static_cast<int>(Player::EnemyMorphType::ThunderSlime)) {
+    // 雷形態では、雷の技用セッションを作る。
+    if (morphType == static_cast<std::int32_t>(Player::EnemyMorphType::kThunderSlime)) {
         return CreateThunderSlimeCopyAbility(profile);
     }
 
-    if (morphType == static_cast<int>(Player::EnemyMorphType::WindSlime)) {
+    // 風形態では、風の技用セッションを作る。
+    if (morphType == static_cast<std::int32_t>(Player::EnemyMorphType::kWindSlime)) {
         return CreateWindSlimeCopyAbility(profile);
     }
 
-    if (morphType == static_cast<int>(Player::EnemyMorphType::Bomber)) {
+    // Bomber形態では、爆弾の技用セッションを作る。
+    if (morphType == static_cast<std::int32_t>(Player::EnemyMorphType::kBomber)) {
         return CreateBomberCopyAbility(profile);
     }
 
     return nullptr;
 }
 
-const char* GetEnemyTypeForMorph(int morphType) {
+const char* GetEnemyTypeForMorph(std::int32_t morphType) {
     // 既定の攻撃プロファイルを読む際の敵種別へ変換する。
-    if (morphType == static_cast<int>(Player::EnemyMorphType::Crown))
+    // 王冠形態の既定技は、FalseKingSlimeの設定から読む。
+    if (morphType == static_cast<std::int32_t>(Player::EnemyMorphType::kCrown))
         return "FalseKingSlime";
-    if (morphType == static_cast<int>(Player::EnemyMorphType::Slime))
+    // ピンク形態の既定技は、Slimeの設定から読む。
+    if (morphType == static_cast<std::int32_t>(Player::EnemyMorphType::kSlime))
         return "Slime";
-    if (morphType == static_cast<int>(Player::EnemyMorphType::FireSlime))
+    // 炎形態の既定技は、FireSlimeの設定から読む。
+    if (morphType == static_cast<std::int32_t>(Player::EnemyMorphType::kFireSlime))
         return "FireSlime";
-    if (morphType == static_cast<int>(Player::EnemyMorphType::ThunderSlime))
+    // 雷形態の既定技は、ThunderSlimeの設定から読む。
+    if (morphType == static_cast<std::int32_t>(Player::EnemyMorphType::kThunderSlime))
         return "ThunderSlime";
-    if (morphType == static_cast<int>(Player::EnemyMorphType::WindSlime))
+    // 風形態の既定技は、WindSlimeの設定から読む。
+    if (morphType == static_cast<std::int32_t>(Player::EnemyMorphType::kWindSlime))
         return "WindSlime";
-    if (morphType == static_cast<int>(Player::EnemyMorphType::Bomber))
+    // 爆弾形態の既定技は、Bomberの設定から読む。
+    if (morphType == static_cast<std::int32_t>(Player::EnemyMorphType::kBomber))
         return "Bomber";
     return "";
 }
@@ -55,7 +68,7 @@ const char* GetEnemyTypeForMorph(int morphType) {
 // 現在のコピー種別と能力セッションの所有者。具体的な能力型を公開ヘッダーから隠す。
 class PlayerCopyAbilityController::Impl {
   public:
-    int morphType_ = static_cast<int>(Player::EnemyMorphType::None);
+    std::int32_t morphType_ = static_cast<std::int32_t>(Player::EnemyMorphType::kNone);
     std::unique_ptr<ICopyAbilitySession> session_;
 };
 
@@ -65,49 +78,52 @@ PlayerCopyAbilityController::PlayerCopyAbilityController() : impl_(std::make_uni
 
 PlayerCopyAbilityController::~PlayerCopyAbilityController() = default;
 
-void PlayerCopyAbilityController::Activate(int morphType, const EnemyAttackProfile& attackProfile) {
+void PlayerCopyAbilityController::Activate(std::int32_t morphType, const EnemyAttackProfile& attackProfile) {
     // 種別を切り替える時に新しいセッションへ置き換え、前の状態を持ち越さない。
     impl_->morphType_ = morphType;
     impl_->session_ = CreateSession(morphType, attackProfile);
 }
 
-void PlayerCopyAbilityController::ActivateDefault(int morphType) {
-    // コピー元の敵種別から共有プロファイルを読み、未対応なら能力を外す。
+void PlayerCopyAbilityController::ActivateDefault(std::int32_t morphType) {
+    // 変身種別を、既定の攻撃プロファイルを取得する敵タイプへ変換する。
     const char* enemyType = GetEnemyTypeForMorph(morphType);
 
+    // 対応する敵種別名が無ければ、既存のセッションを破棄して未コピーへ戻す。
     if (!enemyType || enemyType[0] == '\0') {
         impl_->session_.reset();
-        impl_->morphType_ = static_cast<int>(Player::EnemyMorphType::None);
+        impl_->morphType_ = static_cast<std::int32_t>(Player::EnemyMorphType::kNone);
         return;
     }
 
+    // 対応する敵種別のプロファイルを取得し、その種別のセッションへ渡す。
     EnemyAttackProfile profile;
+    // プロファイルを取得できない場合も、この時点で保持している内容をセッションへ渡す。
     EnemyAttackProfile::LoadCachedForEnemy(enemyType, profile);
     Activate(morphType, profile);
 }
 
 void PlayerCopyAbilityController::ProcessInput(Player& player, const PlayerCopyAbilityInput& input) {
-    // 入力の意味付けは能力別セッションへ委譲する。
+    // 現在の能力が存在する場合だけ入力を渡し、入力が意味する技の判断は能力側に任せる。
     if (impl_->session_) {
         impl_->session_->ProcessInput(player, input);
     }
 }
 
 void PlayerCopyAbilityController::Update(Player& player, float deltaTime) {
-    // 時間が進まないフレームでは能力の時計も進めない。
+    // 能力が存在し、経過時間が正の場合だけ、その能力の時計と状態を進める。
     if (impl_->session_ && deltaTime > 0.0f) {
         impl_->session_->Update(player, deltaTime);
     }
 }
 
 void PlayerCopyAbilityController::NotifyDamageStarted(Player& player) {
-    // 被弾で進行中の技をどう扱うかは能力別のセッションに任せます。
+    // 能力が存在する場合は被弾を通知し、進行中の技を中断するかは能力側に任せる。
     if (impl_->session_)
         impl_->session_->NotifyDamageStarted(player);
 }
 
 void PlayerCopyAbilityController::Interrupt(Player& player) {
-    // 実行中の処理をキャンセルします。コピー自体を解除する場合は外側の Cancel() がセッションを破棄します。
+    // 能力が存在する場合は技を中断して演出を片付ける。セッションの破棄はCancel()が行う。
     if (impl_->session_)
         impl_->session_->Cancel(player);
 }
@@ -117,11 +133,11 @@ void PlayerCopyAbilityController::Cancel(Player& player) {
     Interrupt(player);
     impl_->session_.reset();
 
-    impl_->morphType_ = static_cast<int>(Player::EnemyMorphType::None);
+    impl_->morphType_ = static_cast<std::int32_t>(Player::EnemyMorphType::kNone);
 }
 
 void PlayerCopyAbilityController::Draw(Player& player, ID3D12Resource* pointLight, ID3D12Resource* spotLight,
-                                       engine::Camera* camera, int previewBufferIndex) {
+                                       engine::Camera* camera, std::int32_t previewBufferIndex) {
     // 能力固有の3D表示を、現在のセッションがある時だけ描く。
     if (impl_->session_)
         impl_->session_->Draw(player, pointLight, spotLight, camera, previewBufferIndex);
@@ -138,14 +154,14 @@ const char* PlayerCopyAbilityController::GetStateLabel() const {
 }
 
 void PlayerCopyAbilityController::SetPreviewAttackId(const std::string& id) {
-    // 攻撃プレビュー中の絞り込み指定だけを現セッションへ渡す。
+    // 能力が存在する場合だけ、攻撃プレビューで表示する技IDを渡す。
     if (impl_->session_)
         impl_->session_->SetPreviewAttackId(id);
 }
 
 void PlayerCopyAbilityController::DrawOwnedVisuals(Player& player, uint32_t depthSrvHandle, uint32_t grabSrvHandle,
-                                                   engine::Camera* camera, int previewBufferIndex) {
-    // 深度・画面取得テクスチャを使う能力の見た目を専用パスへ転送する。
+                                                   engine::Camera* camera, std::int32_t previewBufferIndex) {
+    // 能力が存在する場合だけ、深度と背景テクスチャを使う固有表示を描く。
     if (impl_->session_) {
         impl_->session_->DrawOwnedVisuals(player, depthSrvHandle, grabSrvHandle, camera, previewBufferIndex);
     }
@@ -156,7 +172,7 @@ bool PlayerCopyAbilityController::NotifyGuardedHit(Player& player, const engine:
     return impl_->session_ && impl_->session_->NotifyGuardedHit(player, sourcePosition);
 }
 
-bool PlayerCopyAbilityController::HandlesMorphType(int morphType) const {
+bool PlayerCopyAbilityController::HandlesMorphType(std::int32_t morphType) const {
     // セッションの実在と変身種別の一致をともに確認する。
     return impl_->session_ && impl_->morphType_ == morphType;
 }

@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "149c63143634601deddee2415a14a198",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/sprite/ui/result/clear/japanese/card_1.png",
+  "version": 1
+}

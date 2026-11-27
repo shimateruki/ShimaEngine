@@ -70,7 +70,7 @@ private:
     void RemoveModelPreviews();
 
     // エディター専用の一時 Object だけ数え、通常のシーン資産は含めない。
-    int CountModelPreviews() const;
+    std::int32_t CountModelPreviews() const;
 
     // カテゴリや参照元も検索対象に含め、一覧ごとに別の検索処理を持たない。
     bool MatchesSearch(const nlohmann::json& item) const;
@@ -97,8 +97,8 @@ private:
     bool showPreviewThumbnails_ = false;
 
     bool auditRunning_ = false;
-    int categoryFilter_ = 0;
-    int maxRowsToDraw_ = 200;
+    std::int32_t categoryFilter_ = 0;
+    std::int32_t maxRowsToDraw_ = 200;
     std::future<std::uint32_t> auditFuture_; // 非同期の監査プロセス終了待ち。
 
     std::map<std::string, uint32_t> previewTextureHandles_;

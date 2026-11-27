@@ -7,12 +7,15 @@
 namespace {
 // エミッターが空の親に付いていても、子階層にある描画メッシュを使う。
 engine::Object3D* FindModelObject(engine::Object3D* obj) {
+    // 空の子参照は探索できないため、モデルなしを返す。
     if (!obj)
         return nullptr;
+    // 現在のオブジェクトにモデルがあれば、子を探索せず発生元に選ぶ。
     if (obj->GetModel())
         return obj;
     for (auto child : obj->GetChildren()) {
         engine::Object3D* found = FindModelObject(child);
+        // 一つの子階層でモデルが見つかったら、残りの子を調べず返す。
         if (found)
             return found;
     }
@@ -21,6 +24,7 @@ engine::Object3D* FindModelObject(engine::Object3D* obj) {
 }
 } // namespace
 
+// 発生設定名と追従先を保持し、停止状態から開始します。
 void GpuParticleEmitter::Initialize(const std::string& presetName, engine::Object3D* targetObject) {
     presetName_ = presetName;
     targetObject_ = targetObject;
@@ -29,9 +33,12 @@ void GpuParticleEmitter::Initialize(const std::string& presetName, engine::Objec
 }
 
 
+// 再生中は経過秒数を積み、条件が揃えばこのフレームに一度だけ発生させます。
 void GpuParticleEmitter::Update(float deltaTime) {
+    // 停止中または設定名なしの場合は、発生時刻を進めない。
     if (!isPlaying_ || presetName_.empty())
         return;
+    // 非有限か負の経過秒数では、発生時刻を更新しない。
     if (!std::isfinite(deltaTime) || deltaTime < 0.0f)
         return;
 
@@ -44,6 +51,7 @@ void GpuParticleEmitter::Update(float deltaTime) {
 
     emitTimer_ += deltaTime;
 
+    // 発生間隔に達した場合は一回だけ発生させ、次回のために端数を残す。
     if (emitTimer_ >= emitInterval_) {
         EmitOnce();
         // 長いフレームでも発生要求は一回に絞り、次回へは間隔未満の経過時間だけを持ち越します。
@@ -58,22 +66,25 @@ void GpuParticleEmitter::Stop() { isPlaying_ = false; emitTimer_ = 0.0f; }
 
 // 発生元Objectのモデル情報と姿勢を収集し、設定済みSystemへ一回分の粒子を発生させます。
 void GpuParticleEmitter::EmitOnce() {
-    engine::Vector3 spawnPos = engine::Vector3::ZERO;
+    engine::Vector3 spawnPos = engine::Vector3::kZero;
     ID3D12Resource* vb = nullptr;
     uint32_t vCount = 0;
     uint32_t vStride = 0;
     uint32_t boneSrv = 0;
     engine::Matrix4x4 worldMat = { 1.0f,0.0f,0.0f,0.0f, 0.0f,1.0f,0.0f,0.0f, 0.0f,0.0f,1.0f,0.0f, 0.0f,0.0f,0.0f,1.0f };
 
+    // 追従先がある場合は、その階層からメッシュを探して発生位置も求める。
     if (targetObject_) {
         // ルートにメッシュがない場合は、子階層のモデルを発生元として使う。
         engine::Object3D* modelObj = FindModelObject(targetObject_);
 
+        // モデルを見つけた場合は、実際のモデルのワールド行列を使う。
         if (modelObj && modelObj->GetModel()) {
             worldMat = modelObj->GetWorldMatrix();
             engine::Model* model = modelObj->GetModel();
             const auto& modelData = model->GetModelData();
 
+            // メッシュが存在する場合だけ、先頭メッシュの頂点とスキニング用の情報を渡す。
             if (!modelData.meshes.empty()) {
                 vb = modelData.meshes[0].vertexResource.Get();
                 vCount = static_cast<uint32_t>(modelData.meshes[0].vertices.size());
@@ -81,6 +92,7 @@ void GpuParticleEmitter::EmitOnce() {
                 boneSrv = model->GetBoneSrvIndex();
             }
         }
+        // モデルが無ければ、追従先の行列だけを発生位置に使う。
         else {
             worldMat = targetObject_->GetWorldMatrix();
         }
@@ -92,6 +104,7 @@ void GpuParticleEmitter::EmitOnce() {
         spawnPos.y = worldMat.m[3][1] + worldOffset.y;
         spawnPos.z = worldMat.m[3][2] + worldOffset.z;
     }
+    // 追従先が無ければ、オフセットをそのままワールド発生位置に使う。
     else {
         spawnPos = offset_;
     }

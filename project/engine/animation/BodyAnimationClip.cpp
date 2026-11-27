@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include <cstdint>
 #include "BodyAnimationClip.h"
 
 #include "engine/utility/math/AnimationInterpolation.h"
@@ -17,7 +18,7 @@ constexpr const char* kLegacyAnimationDirectory = "Resources/json/enemy_animatio
 constexpr float kTimeEpsilon = 0.0001f;
 
 engine::Vector3 ReadVector3(const json& object, const char* key, const engine::Vector3& fallback) {
-    // 古いClipに成分が無い場合は、その姿勢要素の既定値を使う。
+    // キーがないか3成分の配列を読めない場合は、その姿勢要素の既定値を使う。
     if (!object.contains(key) || !object[key].is_array() || object[key].size() < 3) {
         return fallback;
     }
@@ -30,9 +31,9 @@ engine::Vector3 ReadVector3(const json& object, const char* key, const engine::V
     };
 }
 
-AnimationInterpolation::EasingType ToEasing(int value) {
+animationInterpolation::EasingType ToEasing(std::int32_t value) {
     // JSONの不正な番号で補間テーブルの範囲外を参照しないよう制限する。
-    return static_cast<AnimationInterpolation::EasingType>(std::clamp(value, 0, 4));
+    return static_cast<animationInterpolation::EasingType>(std::clamp(value, 0, 4));
 }
 }
 
@@ -46,10 +47,12 @@ void BodyAnimationClip::Clear() {
 }
 
 bool BodyAnimationClip::Load(const std::string& filePath) {
+    // 前回の姿勢を再利用しないよう、開く前に読み込み状態を空にする。
     Clear();
 
     std::ifstream file(filePath, std::ios::binary);
 
+    // ファイルを開けなければ、有効なキーがない状態で読み込み失敗を返す。
     if (!file.is_open()) {
         return false;
     }
@@ -58,6 +61,7 @@ bool BodyAnimationClip::Load(const std::string& filePath) {
         json root;
         file >> root;
 
+        // 名前がなければファイル名を使い、再生時間は最低0.01秒にする。
         name_ = root.value("name", std::filesystem::path(filePath).stem().string());
         modelName_ = root.value("model", "");
         duration_ = std::max(0.01f, root.value("duration", 1.0f));
@@ -84,21 +88,26 @@ bool BodyAnimationClip::Load(const std::string& filePath) {
             return lhs.time < rhs.time;
         });
 
+        // キーがある場合だけ最後の時刻を参照する。
         if (!keys_.empty()) {
             // 宣言時間が短くても最後の姿勢キーまで再生できるように、終了秒を後ろへ延ばします。
             duration_ = std::max(duration_, keys_.back().time);
         }
+    // JSONの解析や型変換で失敗したときは、途中まで入ったメタ情報とキーも破棄する。
     } catch (...) {
         Clear();
         return false;
     }
 
+    // 読めたJSONでも、評価に使えるキーがなければ読み込み失敗として扱う。
     return IsValid();
 }
 
 bool BodyAnimationClip::Evaluate(float timeSeconds, bool loop, Sample& sampleOut) const {
+    // 評価に失敗したときに呼び出し側へ以前の姿勢を残さないよう、先に出力を初期化する。
     sampleOut = {};
 
+    // 姿勢キーがないか再生時間が正でなければ、補間区間を選べないため終了する。
     if (!IsValid()) {
         return false;
     }
@@ -109,9 +118,11 @@ bool BodyAnimationClip::Evaluate(float timeSeconds, bool loop, Sample& sampleOut
     if (loop && duration_ > kTimeEpsilon) {
         sampleTime = std::fmod(sampleTime, duration_);
 
+        // 剰余が負なら周期を1回足して戻す。入力は上で0秒以上に制限している。
         if (sampleTime < 0.0f) {
             sampleTime += duration_;
         }
+    // 単発再生または周期が短すぎる場合は剰余を使わず、末尾時刻で止める。
     } else {
         sampleTime = std::min(sampleTime, duration_);
     }
@@ -124,21 +135,24 @@ bool BodyAnimationClip::Evaluate(float timeSeconds, bool loop, Sample& sampleOut
         sampleOut.shearPivotY = key.shearPivotY;
     };
 
-    // 最初のキーより前は外挿せず、先頭の姿勢を保ちます。末尾より後も同様に最後の姿勢を使います。
+    // キーが1個だけ、または再生時刻が最初のキー以前なら、先頭の姿勢をそのまま使う。
     if (keys_.size() == 1 || sampleTime <= keys_.front().time) {
         copyKeyToSample(keys_.front());
         return true;
     }
 
+    // 評価時刻が末尾キー以降なら、次周または再生終端まで最後の姿勢を保つ。
     if (sampleTime >= keys_.back().time) {
         copyKeyToSample(keys_.back());
         return true;
     }
 
+    // 先頭と末尾の間では、評価時刻を挟む隣り合ったキーを探す。
     for (size_t index = 0; index + 1 < keys_.size(); ++index) {
         const Key& from = keys_[index];
         const Key& to = keys_[index + 1];
 
+        // この2キーの時刻範囲外なら、次の区間へ進む。
         if (sampleTime < from.time || sampleTime > to.time) {
             continue;
         }
@@ -148,6 +162,7 @@ bool BodyAnimationClip::Evaluate(float timeSeconds, bool loop, Sample& sampleOut
         return true;
     }
 
+    // 一致する区間を選び切れなかった場合も、最後の姿勢を返す。
     copyKeyToSample(keys_.back());
     return true;
 }
@@ -157,27 +172,29 @@ BodyAnimationClip::Sample BodyAnimationClip::InterpolatePose(
     // 同時刻のキーでもゼロ除算せず、開始キーが指定する補間曲線を使う。
     const float segmentDuration = std::max(minimumSegmentDuration, to.time - from.time);
     const float rawRate = (time - from.time) / segmentDuration;
-    const float rate = AnimationInterpolation::ApplyEasing(rawRate, ToEasing(from.easingToNext));
+    const float rate = animationInterpolation::ApplyEasing(rawRate, ToEasing(from.easingToNext));
 
     // 回転は球面補間し、残りの姿勢は同じ進行率で線形補間する。
     Sample pose;
-    pose.translate = AnimationInterpolation::Lerp(from.translate, to.translate, rate);
-    pose.rotate = AnimationInterpolation::SlerpEuler(from.rotate, to.rotate, rate);
-    pose.scale = AnimationInterpolation::Lerp(from.scale, to.scale, rate);
-    pose.shear = AnimationInterpolation::Lerp(from.shear, to.shear, rate);
+    pose.translate = animationInterpolation::Lerp(from.translate, to.translate, rate);
+    pose.rotate = animationInterpolation::SlerpEuler(from.rotate, to.rotate, rate);
+    pose.scale = animationInterpolation::Lerp(from.scale, to.scale, rate);
+    pose.shear = animationInterpolation::Lerp(from.shear, to.shear, rate);
     pose.shearPivotY = engine::Math::Lerp(from.shearPivotY, to.shearPivotY, rate);
     return pose;
 }
 
 std::string BodyAnimationClip::ResolveAssetPath(const std::string& assetNameOrPath) {
-    // 名前のみなら新ディレクトリを優先し、旧データの配置も読み込めるようにする。
+    // 空の名前は素材の指定なしとして、候補を組み立てず終了する。
     if (assetNameOrPath.empty()) {
         return {};
     }
 
     std::filesystem::path path(assetNameOrPath);
 
+    // フォルダー付きなら呼び出し側が指定した場所を使い、素材ディレクトリの検索は行わない。
     if (path.has_parent_path()) {
+        // 拡張子を省略した明示パスにだけJSONの拡張子を補う。
         if (path.extension().empty()) {
             path += ".json";
         }
@@ -187,21 +204,25 @@ std::string BodyAnimationClip::ResolveAssetPath(const std::string& assetNameOrPa
 
     std::string fileName = path.string();
 
+    // ファイル名だけの場合も、拡張子の省略時だけJSONを補う。
     if (path.extension().empty()) {
         fileName += ".json";
     }
 
     const std::filesystem::path primary = std::filesystem::path(kBodyAnimationDirectory) / fileName;
 
+    // 現行の素材ディレクトリにあれば、旧配置を検索せず採用する。
     if (std::filesystem::exists(primary)) {
         return primary.generic_string();
     }
 
     const std::filesystem::path legacy = std::filesystem::path(kLegacyAnimationDirectory) / fileName;
 
+    // 現行側に存在せず旧配置にあれば、既存の素材を読み込めるよう旧パスを返す。
     if (std::filesystem::exists(legacy)) {
         return legacy.generic_string();
     }
 
+    // 両方に見つからない場合は、呼び出し側が失敗を報告できるよう現行側の候補を返す。
     return primary.generic_string();
 }

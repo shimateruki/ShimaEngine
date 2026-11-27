@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "e03e5ba9b9f29af77738d2c7046a1f68",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/sprite/guide_sign/bomb_title.dds",
+  "version": 1
+}

@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "MeshEffectEditor.h"
 #include <numbers>
 #include "ModelManager.h"
@@ -16,6 +17,7 @@
 #include "EffectPreviewStage.h"
 #include "EditorManager.h"
 #include "VfxAssetPicker.h"
+#include "VfxAssetCandidates.h"
 
 using json = nlohmann::json;
 static const char* kEasingNames[] = {
@@ -34,7 +36,7 @@ static const char* kEasingNames[] = {
 
 namespace {
 // 追加レイヤーは本体と同じ形状を使い、当たり判定の設定はレイヤーごとに保持する。
-void SyncAdditionalPreviewMesh(EffectObject3D& layer, const EffectObject3D::MeshSettings& shape, int type) {
+void SyncAdditionalPreviewMesh(EffectObject3D& layer, const EffectObject3D::MeshSettings& shape, std::int32_t type) {
     const auto ownSettings = layer.GetMeshSettings();
     auto settings = shape;
     settings.hasCollision = ownSettings.hasCollision;
@@ -46,9 +48,9 @@ void SyncAdditionalPreviewMesh(EffectObject3D& layer, const EffectObject3D::Mesh
     layer.UpdateProceduralMesh();
 }
 
-// 本体の形状を確定してから、表示中の追加レイヤーを同じ形状で作り直す。
+// 本体の形状を確定してから、所有する追加レイヤーを同じ形状で作り直します。
 void SyncPreviewMesh(EffectObject3D& preview,
-    const std::vector<std::unique_ptr<EffectObject3D>>& layers, int type) {
+    const std::vector<std::unique_ptr<EffectObject3D>>& layers, std::int32_t type) {
     preview.SetProceduralType(type);
     preview.UpdateProceduralMesh();
     for (const auto& layer : layers) {
@@ -58,23 +60,26 @@ void SyncPreviewMesh(EffectObject3D& preview,
 }
 
 void MeshEffectEditor::Initialize(SceneManager* sceneManager) {
-    // SceneManager のポインタを保持
+    // プレビューが使うシーン管理を保持し、画像の選択候補を先に読み込みます。
     sceneManager_ = sceneManager;
     RefreshTextureList();
 }
 
 void MeshEffectEditor::RefreshTextureList() {
+    // 画像候補を収集し直し、相対パスで保持して選択欄の順序と索引を揃えます。
     textureFileList_.clear();
     std::string path = "Resources/sprite/"; // テクスチャフォルダのパス
 
     // 指定フォルダ内のファイルを走査
     for (const auto& entry : std::filesystem::recursive_directory_iterator(path)) {
+        // ディレクトリなどはテクスチャ候補に登録しません。
         if (!entry.is_regular_file()) {
             continue;
         }
 
         const std::string ext = entry.path().extension().string();
 
+        // 選択欄で扱うPNG・DDS・JPGの拡張子だけを登録します。
         if (ext != ".png" && ext != ".dds" && ext != ".jpg") {
             continue;
         }
@@ -84,16 +89,18 @@ void MeshEffectEditor::RefreshTextureList() {
 
     std::sort(textureFileList_.begin(), textureFileList_.end());
 
-    // currentTextureIndex_ の安全対策
+    // 画像候補が空の場合は、どの項目も選べないよう索引を無効にします。
     if (textureFileList_.empty()) {
         currentTextureIndex_ = -1;
     }
+    // 候補があれば、編集パスと同じ項目を探します。
     else {
         // 現在の editTexturePath_ に一致するものを探してインデックスを合わせる
         currentTextureIndex_ = 0; // デフォルト
 
-        for (int i = 0; i < textureFileList_.size(); ++i) {
+        for (std::int32_t i = 0; i < textureFileList_.size(); ++i) {
             std::string fullPath = "Resources/sprite/" + textureFileList_[i];
+            // 相対パス、素材フォルダーから始まるパス、またはファイル名が一致した最初の候補を選びます。
             if (textureFileList_[i] == editTexturePath_ ||
                 fullPath == editTexturePath_ ||
                 std::filesystem::path(textureFileList_[i]).filename() == std::filesystem::path(editTexturePath_).filename()) {
@@ -107,6 +114,7 @@ void MeshEffectEditor::RefreshTextureList() {
 }
 
 void MeshEffectEditor::Update(float deltaTime) {
+    // シーン管理が無ければプレビューの描画基盤を取得できないため、更新しません。
     if (!sceneManager_)
         return;
 
@@ -121,6 +129,7 @@ void MeshEffectEditor::Update(float deltaTime) {
 
     BaseScene* currentScene = sceneManager_->GetCurrentScene();
 
+    // 現在のシーンが切り替わった場合は、以前の描画基盤や追従先を引き継ぎません。
     if (lastScene_ != currentScene) {
         // Scene切替後は借用していた描画基盤と対象Objectを再利用しない。
         previewEffect_.reset();
@@ -131,6 +140,7 @@ void MeshEffectEditor::Update(float deltaTime) {
 
     engine::Object3DCommon* objectCommon = currentScene ? currentScene->GetObject3DCommon() : nullptr;
 
+    // 本体プレビューが未作成で、新しいシーンの描画基盤が取得できたときに生成します。
     if (!previewEffect_ && objectCommon) {
         auto previewEffect = std::make_unique<EffectObject3D>();
         previewEffect->Initialize(objectCommon);
@@ -143,7 +153,9 @@ void MeshEffectEditor::Update(float deltaTime) {
         previewEffect_ = std::move(previewEffect);
         previewEffect_->SetModel(editModelName_);
 
+        // 描画実体がある場合に画像設定を反映できます。
         if (auto renderer = previewEffect_->GetMeshRenderer()) {
+            // 画像パスが空でない場合だけ読み込みを依頼します。
             if (strlen(editTexturePath_) > 0)
                 renderer->SetTexture(editTexturePath_);
         }
@@ -158,24 +170,29 @@ void MeshEffectEditor::Update(float deltaTime) {
         previewEffect_->SetRingSpinSpeed(editRingSpinSpeed_);
     }
 
+    // 本体プレビューを用意できるまでは、レイヤーの同期と再生を進めません。
     if (!previewEffect_)
         return;
 
-    int neededExtras = 0;
-    // ボリューム表現のモードに必要な追加レイヤーだけを所有する。
+    std::int32_t neededExtras = 0;
+    // 十字表示では本体と交差する面を1枚追加します。
     if (editVolumeMode_ == 1)
         neededExtras = 1;
+    // 三枚重ねでは本体の前後に配置する面を2枚追加します。
     else if (editVolumeMode_ == 2) neededExtras = 2;
 
+    // 要求された枚数に達するまで、描画できる追加レイヤーを作成します。
     while (extraPreviewEffects_.size() < neededExtras) {
         auto extra = std::make_unique<EffectObject3D>();
 
+        // 共通基盤が無ければ、新しい面の作成を打ち切ります。
         if (!objectCommon) {
             break;
         }
 
         extra->Initialize(objectCommon);
 
+        // 描画用の材質を確保できない面は、レイヤーとして登録しません。
         if (!extra->GetMaterialData()) {
             break;
         }
@@ -187,6 +204,7 @@ void MeshEffectEditor::Update(float deltaTime) {
         extraPreviewEffects_.push_back(std::move(extra));
     }
 
+    // モード変更によって余った面は破棄します。
     while (extraPreviewEffects_.size() > neededExtras) {
         extraPreviewEffects_.pop_back();
     }
@@ -195,6 +213,7 @@ void MeshEffectEditor::Update(float deltaTime) {
     activePreviews.push_back(previewEffect_.get());
 
     for (auto& ex : extraPreviewEffects_) {
+        // 作成済みで材質が使える面だけを、本体と一緒に更新する一覧へ加えます。
         if (ex && ex->GetMaterialData()) {
             activePreviews.push_back(ex.get());
         }
@@ -204,11 +223,13 @@ void MeshEffectEditor::Update(float deltaTime) {
     const bool isThisEditorSelected = EditorManager::GetInstance()->GetSelectedObject() == this;
     bool usePreviewStage = previewStage && previewStage->IsEnabled() && isThisEditorSelected;
 
+    // 専用ステージで新しい再生要求を受け取ったら、全レイヤーの再生を後段で始めます。
     if (usePreviewStage && previewStage->GetPlayRequestSerial() != lastStagePlayRequestSerial_) {
         lastStagePlayRequestSerial_ = previewStage->GetPlayRequestSerial();
         forcePlayRequest_ = true;
     }
 
+    // 専用ステージで新しい停止要求を受け取ったら、全レイヤーを寿命の終端にそろえます。
     if (usePreviewStage && previewStage->GetStopRequestSerial() != lastStageStopRequestSerial_) {
         lastStageStopRequestSerial_ = previewStage->GetStopRequestSerial();
 
@@ -221,6 +242,7 @@ void MeshEffectEditor::Update(float deltaTime) {
         forcePlayRequest_ = false;
     }
 
+    // 専用ステージで新しいシーク要求を受け取ったら、指定時刻へ各レイヤーをそろえます。
     if (usePreviewStage && previewStage->GetSeekRequestSerial() != lastStageSeekRequestSerial_) {
         // 時刻を戻すときは再生を先頭から作り直し、過去フレームの残像を残さない。
         lastStageSeekRequestSerial_ = previewStage->GetSeekRequestSerial();
@@ -235,6 +257,7 @@ void MeshEffectEditor::Update(float deltaTime) {
     // 専用ステージでは編集座標を原点からのオフセットとして扱う。
     engine::Vector3 basePos = usePreviewStage ? previewStage->GetPreviewPosition() : editPosition_;
 
+    // 専用ステージ中は、原点へ編集された位置の成分を足します。
     if (usePreviewStage) {
         basePos.x += editPosition_.x;
         basePos.y += editPosition_.y;
@@ -244,21 +267,23 @@ void MeshEffectEditor::Update(float deltaTime) {
     engine::Vector3 baseRot = editRotation_;
     float targetWorldY = 0.0f;
 
+    // 追従先が指定されていれば、ステージや固定座標の代わりに対象のワールド座標を基準にします。
     if (targetObject_) {
         engine::Vector3 targetPos = targetObject_->GetWorldPosition();
 
-        // ターゲットのボーン構造を無視し、ルートノードの向きを優先
+        // 階層を一番上まで辿り、子自身の姿勢から独立した水平向きを求めます。
         engine::Object3D* rootObj = targetObject_;
 
         while (rootObj && rootObj->GetParent()) {
             rootObj = rootObj->GetParent(); // 一番上の親（プレイヤー本体など）まで遡る
         }
 
+        // 最上位の実体があれば、そのY回転をオフセットの向きに使います。
         if (rootObj) {
-            targetWorldY = rootObj->GetRotation().y; // 本体の大元の向きだけを使う！
+            targetWorldY = rootObj->GetRotation().y;
         }
 
-        // 位置のオフセット計算（sin/cosを使う元の計算が一番安全）
+        // ローカルの位置オフセットを最上位のY回転で水平回転してから対象に足します。
         float s = sinf(targetWorldY);
         float c = cosf(targetWorldY);
         engine::Vector3 rotatedOffset;
@@ -270,14 +295,15 @@ void MeshEffectEditor::Update(float deltaTime) {
         basePos.y = targetPos.y + rotatedOffset.y;
         basePos.z = targetPos.z + rotatedOffset.z;
 
-        // 回転はY軸オフセットとして適用（行列演算の誤差回避）
+        // 編集回転にも最上位のY回転を加え、位置の基準と向きを合わせます。
         baseRot = editRotation_;
         baseRot.y += targetWorldY;
     }
 
-    // 再生リクエストまたは自動ループの同期
+    // 各レイヤーが同時に始まるよう、再生要求とループの終端を共通で確認します。
     bool loopPreview = isAutoLoop_ ||
         (usePreviewStage && previewStage->IsLoopEnabled() && previewStage->IsTransportPlaying());
+    // 明示的な再生要求があるか、ループが有効で先頭レイヤーの再生が停止している場合に全レイヤーを再生します。
     if (forcePlayRequest_ || (loopPreview && !activePreviews.empty() && !activePreviews[0]->IsPlaying())) {
         for (auto* fx : activePreviews) {
             fx->Play(editLifetime_);
@@ -286,6 +312,7 @@ void MeshEffectEditor::Update(float deltaTime) {
         forcePlayRequest_ = false; // フラグを消化
     }
 
+    // 追加レイヤーを前後にずらすため、回転後のローカルZ軸を計算します。
     engine::Vector3 localZ;
     localZ.x = sinf(baseRot.y) * cosf(baseRot.x);
     localZ.y = -sinf(baseRot.x);
@@ -293,6 +320,7 @@ void MeshEffectEditor::Update(float deltaTime) {
 
     float timeStep = (deltaTime <= 0.0001f) ? (1.0f / 60.0f) : deltaTime;
 
+    // 専用ステージ中は、更新秒数にタイムラインの再生速度を掛けます。
     if (usePreviewStage) {
         timeStep *= previewStage->GetPlaybackSpeed();
     }
@@ -300,19 +328,24 @@ void MeshEffectEditor::Update(float deltaTime) {
     for (size_t i = 0; i < activePreviews.size(); ++i) {
         auto* fx = activePreviews[i];
 
+        // 更新対象が無効か材質を取得できない場合、その面の設定と描画更新を飛ばします。
         if (!fx || !fx->GetMaterialData()) {
             continue;
         }
 
+        // 生成形状を使わない場合に、選択した外部モデルを割り当てます。
         if (editProceduralType_ == 0) {
             fx->SetModel(editModelName_);
         }
 
+        // 描画実体がある面に、画像指定を適用します。
         if (auto renderer = fx->GetMeshRenderer()) {
+            // 編集パスが空でなければ、テクスチャを割り当てます。
             if (strlen(editTexturePath_) > 0)
                 renderer->SetTexture(editTexturePath_);
         }
 
+        // 全レイヤーに共通の色、拡縮、材質アニメーションを反映します。
         fx->SetBlendMode(static_cast<BlendMode>(currentBlendModeIndex_));
         fx->SetStartScale(editStartScale_);
         fx->SetEndScale(editEndScale_);
@@ -340,10 +373,12 @@ void MeshEffectEditor::Update(float deltaTime) {
         fx->SetEnableColorRamp(useRamp);
         fx->SetEnableNoiseTexture(useNoise);
 
+        // ノイズのパスが指定されている場合に、画像データを取得します。
         if (useNoise)
-            fx->SetNoiseTexture(TextureManager::GetInstance()->Load(editNoiseTexturePath_));
+            fx->SetNoiseTexture(engine::TextureManager::GetInstance()->Load(editNoiseTexturePath_));
+        // カラーランプのパスが指定されている場合に、画像データを取得します。
         if (useRamp)
-            fx->SetRampTexture(TextureManager::GetInstance()->Load(editRampTexturePath_));
+            fx->SetRampTexture(engine::TextureManager::GetInstance()->Load(editRampTexturePath_));
 
         engine::Vector3 finalPos = basePos;
         engine::Vector3 finalRot = baseRot;
@@ -352,14 +387,17 @@ void MeshEffectEditor::Update(float deltaTime) {
         if (editVolumeMode_ == 1 && i == 1) {
             finalRot.x += (std::numbers::pi_v<float> * 0.5f);
         }
+        // 三枚重ねの場合だけ、追加面をそれぞれ手前と奥へずらします。
         else if (editVolumeMode_ == 2) {
             float gap = 0.02f;
 
+            // 最初の追加面をローカルZの正方向へ0.02単位移動します。
             if (i == 1) {
                 finalPos.x += localZ.x * gap;
                 finalPos.y += localZ.y * gap;
                 finalPos.z += localZ.z * gap;
             }
+            // 二枚目の追加面をローカルZの負方向へ0.02単位移動します。
             if (i == 2) {
                 finalPos.x -= localZ.x * gap;
                 finalPos.y -= localZ.y * gap;
@@ -376,6 +414,7 @@ void MeshEffectEditor::Update(float deltaTime) {
         fx->UpdateWorldMatrix();
     }
 
+    // 専用ステージへ表示している場合は、再生位置とトラック情報をタイムラインへ渡します。
     if (usePreviewStage) {
         const float duration = (std::max)(editLifetime_, 0.01f);
         // 本体レイヤーの時計をタイムラインに渡し、追加面は表示中の枚数にだけ反映する。
@@ -385,58 +424,62 @@ void MeshEffectEditor::Update(float deltaTime) {
         events.push_back({ "Scale / color", 0.0f, duration, engine::Vector4{ 0.9f, 0.45f, 1.0f, 1.0f } });
         events.push_back({ "Reveal", 0.0f, duration, engine::Vector4{ 0.35f, 0.8f, 1.0f, 1.0f } });
         previewStage->ReportToolState(
-            EffectPreviewStage::ToolKind::MeshEffect,
+            EffectPreviewStage::ToolKind::kMeshEffect,
             "Mesh Effect",
             currentTime,
             duration,
             previewStage->IsTransportPlaying(),
-            static_cast<int>(activePreviews.size()),
+            static_cast<std::int32_t>(activePreviews.size()),
             events);
     }
 }
 
 void MeshEffectEditor::Draw() {
+    // シーン管理が無い場合や切り替え中は、旧シーンの描画基盤に触れません。
     if (!sceneManager_ || sceneManager_->IsTransitioning()) {
         return;
     }
 
-    // シーン遷移やNULLチェック
     BaseScene* currentScene = sceneManager_->GetCurrentScene();
 
+    // 有効な現在シーンで最後に更新したプレビューだけを描画します。
     if (lastScene_ != currentScene || !currentScene) {
         return;
     }
 
+    // 本体が用意できたシーンでは、描画できる本体と追加面を順に処理します。
     if (previewEffect_) {
+        // 本体の材質が用意できている場合に、本体を描きます。
         if (previewEffect_->GetMaterialData()) {
             previewEffect_->Draw();
         }
 
         for (auto& ex : extraPreviewEffects_) {
+            // 作成済みで材質を持つ追加面だけを描きます。
             if (ex && ex->GetMaterialData()) {
                 ex->Draw();
             }
         }
     }
     else {
-        // プレビューオブジェクトの欠損チェック
-        DebugConsole::GetInstance()->AddLog(LogLevel::Error, "Error: previewEffect_ is NULL!");
+        // 現在シーンで本体が作成されていない場合は、描画できない原因をログに残します。
+        DebugConsole::GetInstance()->AddLog(LogLevel::kError, "Error: previewEffect_ is NULL!");
     }
 }
 
 void MeshEffectEditor::DrawImGui() {
 #ifdef USE_IMGUI
+    // 編集対象の本体がまだ無ければ、表示や保存でその設定に触れません。
     if (!previewEffect_)
         return;
 
     // ウィンドウの横幅を取得
     float availWidth = ImGui::GetContentRegionAvail().x;
 
-    // ==========================================
-    // 1. エフェクト再生コントロール
-    // ==========================================
+    // 再生要求や時間リセットを、本体と追加レイヤーの両方へ反映します。
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
 
+    // 再生ボタンを押したら、次の Update() へ再生要求を渡します。
     if (ImGui::Button(ICON_FA_PLAY " エフェクト再生 (ATTACK!)", ImVec2(availWidth, 40))) {
         forcePlayRequest_ = true;
     }
@@ -446,6 +489,7 @@ void MeshEffectEditor::DrawImGui() {
     ImGui::Checkbox("自動ループ (Auto Loop)", &isAutoLoop_);
     ImGui::SameLine();
 
+    // 時間リセットを押したら、本体と全追加面の時計を同じ位置へ戻します。
     if (ImGui::Button(ICON_FA_UNDO " 時間リセット")) {
         previewEffect_->ResetTime();
 
@@ -458,29 +502,33 @@ void MeshEffectEditor::DrawImGui() {
     ImGui::Separator();
     ImGui::Text(ICON_FA_CROSSHAIRS " --- ターゲット追従 (Target Tracking) ---");
 
-    // SceneManager経由で現在のシーンのオブジェクトリストを取得
+    // 現在のシーンがある場合だけ、追従先の候補をシーンの所有オブジェクトから集めます。
     if (sceneManager_ && sceneManager_->GetCurrentScene()) {
         auto& objects = sceneManager_->GetCurrentScene()->GetObjects();
 
         // 現在選ばれているターゲットの名前
         std::string currentTargetName = targetObject_ ? targetObject_->GetName() : "なし (None)";
 
+        // 追従先の選択欄を開いたときに、未指定と有効な対象を並べます。
         if (ImGui::BeginCombo("追従対象", currentTargetName.c_str())) {
             // 「追従解除（None）」の選択肢
+            // 未指定が選ばれたら、対象への借用参照を解除します。
             if (ImGui::Selectable("なし (None)", targetObject_ == nullptr)) {
                 targetObject_ = nullptr;
             }
 
-            // シーン内の全オブジェクトをリストアップ
+            // 通常の配置物を候補にし、無効な参照とエディター内部用の実体は除きます。
             for (auto& obj : objects) {
                 if (!obj || obj->IsEditorInternal())
                     continue;
                 bool isSelected = (targetObject_ == obj.get());
 
+                // 新しい対象が選ばれたら、以降の位置と向きの基準にします。
                 if (ImGui::Selectable(obj->GetName().c_str(), isSelected)) {
                     targetObject_ = obj.get();
                 }
 
+                // 現在の選択に対応する項目へ、コンボを開いたときのフォーカスを合わせます。
                 if (isSelected) {
                     ImGui::SetItemDefaultFocus();
                 }
@@ -492,15 +540,15 @@ void MeshEffectEditor::DrawImGui() {
 
     ImGui::Separator();
 
-    // ==========================================
-    // 2. ブレンドモード設定
-    // ==========================================
+    // ブレンドや画像RGBの設定を変更したフレームに、本体へ即時反映します。
     const char* blendModeNames[] = { "なし (None)", "通常 (半透明)", "加算発光 (Add)", "減算 (Subtract)", "乗算 (Multiply)", "スクリーン (Screen)" };
 
+    // ブレンドモードを変更したときは、本体へ設定して次の描画に反映します。
     if (ImGui::Combo(ICON_FA_ADJUST " ブレンドモード", &currentBlendModeIndex_, blendModeNames, IM_ARRAYSIZE(blendModeNames))) {
         previewEffect_->SetBlendMode(static_cast<BlendMode>(currentBlendModeIndex_));
     }
 
+    // 画像RGBの選択を切り替えたら、本体の材質設定にも反映します。
     if (ImGui::Checkbox("画像のRGBを反映", &editUseTextureColor_)) {
         previewEffect_->SetUseTextureColor(editUseTextureColor_);
     }
@@ -512,11 +560,13 @@ void MeshEffectEditor::DrawImGui() {
 
     ImGui::Checkbox(ICON_FA_RULER_HORIZONTAL " 伸びるアニメーション (Reveal Mode)", &editEnableReveal_);
 
+    // 伸びる演出が有効な場合だけ、伸びる方向を選べるようにします。
     if (editEnableReveal_) {
         const char* revealModes[] = { "なし", "横方向", "円周方向" };
         ImGui::Combo("表示の組み立て方", &editRevealMode_, revealModes, IM_ARRAYSIZE(revealModes));
     }
 
+    // イージングが変更されたら、本体の時間補間を更新します。
     if (ImGui::Combo(ICON_FA_CHART_LINE " イージング (Easing)", &editEasingType_, kEasingNames, IM_ARRAYSIZE(kEasingNames))) {
         previewEffect_->SetEasingType(editEasingType_);
     }
@@ -539,15 +589,17 @@ void MeshEffectEditor::DrawImGui() {
         "13: 地表の全域放電",
         "14: 空間の雷撃バースト" };
 
+    // 形状の選択が変わった場合は、本体と追加レイヤーを同じ形へ再構成します。
     if (ImGui::Combo("エフェクト形状", &editProceduralType_, procTypes, IM_ARRAYSIZE(procTypes))) {
-        // スピン形状選択時の初期角度調整
+        // 回転切りで既存の角度が一周未満なら、初期角度を400度にして切れ目が出にくくします。
         if (editProceduralType_ == 2 && previewEffect_->GetMeshSettings().slashAngle < 360.0f) {
-            previewEffect_->SetMeshSetting(&EffectObject3D::MeshSettings::slashAngle, 400.0f); // 少し余分に回して透明部分を隠す
+            previewEffect_->SetMeshSetting(&EffectObject3D::MeshSettings::slashAngle, 400.0f);
         }
 
         SyncPreviewMesh(*previewEffect_, extraPreviewEffects_, editProceduralType_);
     }
 
+    // プロシージャル形状を使っている場合にだけ、形状の寸法とOBJ出力を表示します。
     if (editProceduralType_ >= 1) {
         ImGui::Indent();
         bool changed = false;
@@ -555,45 +607,54 @@ void MeshEffectEditor::DrawImGui() {
 
         // SlashおよびSpinの両方でパラメータ調整を可能にする
         if (editProceduralType_ == 1 || editProceduralType_ == 2) {
-            // スライダーの上限を 1080度（3周）に拡張
+            // 斜め切りと回転切りは、30〜1080度の弧とその太さ・ねじれを調整します。
             changed |= ImGui::SliderFloat("斬撃の角度", &meshSettings.slashAngle, 30.0f, 1080.0f);
             changed |= ImGui::SliderFloat("内側の半径", &meshSettings.innerRadius, 0.0f, 5.0f);
             changed |= ImGui::SliderFloat("外側の半径", &meshSettings.outerRadius, 1.0f, 15.0f);
             changed |= ImGui::SliderFloat("軌跡の厚み", &meshSettings.thickness, 0.01f, 3.0f);
             changed |= ImGui::SliderFloat("螺旋の高さ(Zズレ)", &meshSettings.spiralPitch, -5.0f, 5.0f);
         }
+        // 突き形状では、突きの長さと根元の半径を調整します。
         else if (editProceduralType_ == 3) {
             changed |= ImGui::SliderFloat("突きの長さ", &meshSettings.thrustLength, 1.0f, 20.0f);
             changed |= ImGui::SliderFloat("根元の太さ", &meshSettings.thrustRadius, 0.1f, 5.0f);
         }
+        // 球形状では、半径と縦方向の分割数を調整します。
         else if (editProceduralType_ == 4) {
             changed |= ImGui::SliderFloat("半径", &meshSettings.sphereRadius, 0.1f, 20.0f);
             changed |= ImGui::SliderInt("縦の分割数", &meshSettings.sphereRings, 4, 64);
         }
+        // 円柱形状では、底面の半径と高さを調整します。
         else if (editProceduralType_ == 5) {
             changed |= ImGui::SliderFloat("半径", &meshSettings.cylinderRadius, 0.1f, 20.0f);
             changed |= ImGui::SliderFloat("高さ", &meshSettings.cylinderHeight, 0.1f, 20.0f);
         }
 
+        // 箱形状では、幅・高さ・奥行きを調整します。
         else if (editProceduralType_ == 6) {
             changed |= ImGui::DragFloat3("サイズ (W,H,D)", &meshSettings.boxSize.x, 0.1f);
         }
+        // 平面と二種類の放電形状では、幅と奥行きの入力を共有します。
         else if (editProceduralType_ == 7 || editProceduralType_ == 13 || editProceduralType_ == 14) {
             changed |= ImGui::DragFloat2("サイズ (W,D)", &meshSettings.planeSize.x, 0.1f);
         }
+        // トーラス形状では、輪の主半径・管の半径・断面の分割を調整します。
         else if (editProceduralType_ == 8) {
             changed |= ImGui::SliderFloat("主半径 (全体サイズ)", &meshSettings.torusMajorRadius, 0.1f, 20.0f);
             changed |= ImGui::SliderFloat("副半径 (太さ)", &meshSettings.torusMinorRadius, 0.01f, 5.0f);
             changed |= ImGui::SliderInt("断面の分割数", &meshSettings.sphereRings, 3, 64);
         }
+        // 円錐と槍では、根元の半径と先端までの高さを調整します。
         else if (editProceduralType_ == 9 || editProceduralType_ == 12) {
             changed |= ImGui::SliderFloat("半径", &meshSettings.coneRadius, 0.1f, 20.0f);
             changed |= ImGui::SliderFloat("高さ", &meshSettings.coneHeight, 0.1f, 20.0f);
         }
+        // リング形状では、内側と外側の半径を調整します。
         else if (editProceduralType_ == 10) {
             changed |= ImGui::SliderFloat("外側の半径", &meshSettings.ringOuterRadius, 0.1f, 20.0f);
             changed |= ImGui::SliderFloat("内側の半径", &meshSettings.ringInnerRadius, 0.0f, 19.9f);
         }
+        // 三角形状では、形状全体の大きさを調整します。
         else if (editProceduralType_ == 11) {
             changed |= ImGui::SliderFloat("サイズ", &meshSettings.triangleSize, 0.1f, 20.0f);
         }
@@ -617,26 +678,25 @@ void MeshEffectEditor::DrawImGui() {
 
         // 外部OBJエクスポート機能
         ImGui::Spacing();
-        static char objName[128] = "my_custom_primitive";
-        ImGui::InputText("OBJファイル名", objName, sizeof(objName));
+        static char sObjName[128] = "my_custom_primitive";
+        ImGui::InputText("OBJファイル名", sObjName, sizeof(sObjName));
 
+        // OBJ出力を押した場合に、現在の生成メッシュを入力名で保存します。
         if (ImGui::Button(ICON_FA_DOWNLOAD " この形状をOBJとして保存 (Export)", ImVec2(availWidth, 30))) {
             std::filesystem::create_directories("Resources/model");
-            std::string path = "Resources/model/" + std::string(objName) + ".obj";
+            std::string path = "Resources/model/" + std::string(sObjName) + ".obj";
             previewEffect_->ExportToObj(path);
             DebugConsole::GetInstance()->AddLog("Exported OBJ to " + path);
         }
     }
 
-    // ==========================================
-    // 3. リソース設定 (メッシュ・テクスチャ)
-    // ==========================================
+    // 表示中の形状に応じて、外部モデルと画像の選択候補を出し分けます。
     if (ImGui::CollapsingHeader(ICON_FA_CUBES " リソース設定 (Resources)", ImGuiTreeNodeFlags_DefaultOpen)) {
 
-        // --- 共通のテクスチャ選択ヘルパー (ラムダ式) ---
-        auto textureCombo = [&](const char* label, int& currentIndex, char* targetPath,
+        // 共通の画像選択では、項目が変わったときだけパスを保存し反映用の処理を呼びます。
+        auto textureCombo = [&](const char* label, std::int32_t& currentIndex, char* targetPath,
                                 char* query, auto callback) {
-            if (VfxAssetPicker::DrawCombo(label, textureFileList_, currentIndex,
+            if (vfxAssetPicker::DrawCombo(label, textureFileList_, currentIndex,
                                           query, 128, "なし (None)", true)) {
                 const std::string fullPath = currentIndex >= 0
                     ? "Resources/sprite/" + textureFileList_[currentIndex] : "";
@@ -645,74 +705,79 @@ void MeshEffectEditor::DrawImGui() {
             }
         };
 
-        // --- メッシュ選択 (UI修正) ---
+        // 外部モデルを使う設定の場合だけ、モデルの選択を受け付けます。
         if (editProceduralType_ == 0) {
-            std::vector<std::string> modelNames = ModelManager::GetInstance()->GetAvailableModelNames();
-            int selectedModel = -1;
+            static vfxAssetCandidates::CandidateList modelCandidates;
+            const auto& modelNames = modelCandidates.Get(vfxAssetCandidates::ModelName,
+                ModelManager::GetInstance()->GetLoadedModelNames());
+            std::int32_t selectedModel = -1;
 
-            for (int i = 0; i < static_cast<int>(modelNames.size()); ++i) {
+            for (std::int32_t i = 0; i < static_cast<std::int32_t>(modelNames.size()); ++i) {
+                // 現在のモデル名に一致する候補を見つけたら、コンボの初期選択にします。
                 if (modelNames[i] == editModelName_) {
                     selectedModel = i;
                     break;
                 }
             }
 
-            if (VfxAssetPicker::DrawCombo(ICON_FA_CUBE " メッシュ選択", modelNames,
+            // 別のモデルを選んだら、編集値とプレビューのモデルを揃えます。
+            if (vfxAssetPicker::DrawCombo(ICON_FA_CUBE " メッシュ選択", modelNames,
                                           selectedModel, modelSearch_, sizeof(modelSearch_))) {
                 strcpy_s(editModelName_, sizeof(editModelName_), modelNames[selectedModel].c_str());
                 previewEffect_->SetModel(editModelName_);
             }
 
+            // 現在のモデルが候補一覧になければ、文字情報で現在値を示します。
             if (selectedModel < 0)
                 ImGui::TextDisabled("現在のモデル: %s", editModelName_);
         }
         else {
-            // プロシージャル使用時は無効化されていることを明記する
+            // 生成形状を使う場合は、外部モデル欄が利用できないことを示します。
             ImGui::TextDisabled(ICON_FA_CUBE " メッシュ選択 (無効)");
             ImGui::TextDisabled("※プロシージャル生成を使用しているためモデル選択は不要です");
         }
 
-        // --- ① メインテクスチャ (t0) ---
+        // メイン画像を更新し、描画実体がある場合はその場で割り当てます。
         textureCombo(ICON_FA_IMAGE " メインテクスチャ", currentTextureIndex_, editTexturePath_, textureSearch_[0], [&](const std::string& path) {
+            // 本体の描画実体を取得できた場合だけ、メイン画像のパスを渡します。
             if (auto renderer = previewEffect_->GetMeshRenderer()) {
                 renderer->SetTexture(path);
             }
             });
+        // 生成形状でもメイン画像を適用できることを表示します。
         if (editProceduralType_ != 0) {
             ImGui::TextDisabled("プロシージャル形状にも発光テクスチャやストリークを貼れます。");
         }
 
-        // --- ② ノイズテクスチャ (t2) ---
+        // ノイズを自動生成する斜め切り以外では、外部ノイズ画像を設定できます。
 
+        // 形状が斜め切り以外なら、外部ノイズ画像を選べます。
         if (editProceduralType_ != 1) {
             textureCombo(ICON_FA_WIND " ノイズテクスチャ", currentNoiseTextureIndex_, editNoiseTexturePath_, textureSearch_[1], [&](const std::string& path) {
-                uint32_t handle = path.empty() ? 0 : TextureManager::GetInstance()->Load(path);
+                uint32_t handle = path.empty() ? 0 : engine::TextureManager::GetInstance()->Load(path);
                 previewEffect_->SetNoiseTexture(handle);
                 });
         }
+        // 斜め切りではノイズの選択を出さず、自動生成を使うことを示します。
         else {
             ImGui::TextDisabled(ICON_FA_WIND " ノイズテクスチャ (無効)");
             ImGui::TextDisabled("※プロシージャルで斬撃の筋(ノイズ)を自動生成しています");
         }
 
-        // --- ③ カラーランプ (t3) ---
+        // カラーランプの指定を変えたら、テクスチャを更新します。
         textureCombo(ICON_FA_PALETTE " カラーランプ", currentRampTextureIndex_, editRampTexturePath_, textureSearch_[2], [&](const std::string& path) {
-            uint32_t handle = path.empty() ? 0 : TextureManager::GetInstance()->Load(path);
+            uint32_t handle = path.empty() ? 0 : engine::TextureManager::GetInstance()->Load(path);
             previewEffect_->SetRampTexture(handle);
             });
     }
 
-    // ==========================================
-    // 4. 配置設定 (Transform)
-    // ==========================================
+    // 配置欄を展開した場合に、位置とラジアン単位の回転を調整します。
     if (ImGui::CollapsingHeader(ICON_FA_ARROWS_ALT " 配置設定 (Transform)", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::DragFloat3("座標 (Position)", &editPosition_.x, 0.1f);
         ImGui::DragFloat3("回転 (Rotation)", &editRotation_.x, 0.01f);
     }
 
-    // ==========================================
-    // 5. アニメーション設定
-    // ==========================================
+    // アニメーション欄を展開した場合に、秒単位の寿命と開始・終了の状態を調整します。
     if (ImGui::CollapsingHeader(ICON_FA_FILM " アニメーション設定", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::SliderFloat(ICON_FA_CLOCK " 寿命 (秒)", &editLifetime_, 0.05f, 3.0f);
 
@@ -723,22 +788,20 @@ void MeshEffectEditor::DrawImGui() {
 
         ImGui::Spacing();
 
-        // カラーランプ設定の有無による表示切り替え
+        // カラーランプのパスが空なら、開始色と終了色を直接調整できます。
         if (strlen(editRampTexturePath_) == 0) {
             ImGui::Text(ICON_FA_TINT " [ カラー (Color) ]");
             ImGui::ColorEdit4("開始カラー", &editStartColor_.x);
             ImGui::ColorEdit4("終了カラー", &editEndColor_.x);
         }
         else {
-            // カラーランプ使用時は非表示にし、理由を明記する
+            // カラーランプが指定されている場合は、個別の色入力を置き換えます。
             ImGui::TextDisabled(ICON_FA_TINT " [ カラー設定無効 ]");
             ImGui::TextDisabled("※カラーランプが適用されているため無効化されています");
         }
     }
 
-    // ==========================================
-    // 6. シェーダーパラメータ
-    // ==========================================
+    // 材質欄を展開した場合に、発光や歪みと形状による表示の差を調整します。
     if (ImGui::CollapsingHeader(ICON_FA_SLIDERS_H " シェーダーパラメータ", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::DragFloat2("スクロール速度", &editScrollSpeed_.x, 0.01f);
         ImGui::DragFloat("発光強度 (HDR)", &editIntensity_, 0.01f, 0.0f, 100.0f);
@@ -747,8 +810,10 @@ void MeshEffectEditor::DrawImGui() {
         ImGui::TextDisabled("平面の光の流れ／回転切りの光帯で有効。スクロール速度で流れを調整します。");
         ImGui::SliderFloat(editProceduralType_ >= 13 ? "放電の密度" : "リング刃のエネルギー密度", &editRingEnergyStrength_, 0.0f, 1.0f);
         ImGui::SliderFloat(editProceduralType_ >= 13 ? "雷撃の更新速度" : "リング刃の周回速度", &editRingSpinSpeed_, -40.0f, 40.0f);
+        // 放電形状では、分岐を更新するパラメーターとして案内します。
         if (editProceduralType_ >= 13)
             ImGui::TextDisabled("放電形状はUVを流さず、分岐の更新と電流の走行で動きを作ります。");
+        // 通常の形状用の表示では、リングの明暗を周回させる調整として案内します。
         else
             ImGui::TextDisabled("トーラス形状で有効。輪郭に明暗を作り、発光部を周回させます。");
 
@@ -766,30 +831,27 @@ void MeshEffectEditor::DrawImGui() {
         ImGui::SliderFloat("透過足切り (AlphaReference)", &editAlphaReference_, 0.0f, 1.0f);
     }
 
-    // ---------------------------------------------------------
-    // 当たり判定 (Collision) の設定
-    // ---------------------------------------------------------
+    // 衝突欄を展開した場合に、プレビューの判定設定とデバッグ表示を同期します。
     if (ImGui::CollapsingHeader("Collision Settings")) {
         auto meshSettings = previewEffect_->GetMeshSettings();
         ImGui::Checkbox("Has Collision", &meshSettings.hasCollision);
 
+        // 衝突が有効の場合に、形状・大きさ・中心のオフセットを設定します。
         if (meshSettings.hasCollision) {
             ImGui::Combo("Shape", &meshSettings.collisionShape, "Sphere\0AABB\0OBB\0Cylinder\0\0");
             ImGui::DragFloat3("Size/Radius", &meshSettings.collisionSize.x, 0.1f);
             ImGui::DragFloat3("Offset", &meshSettings.collisionOffset.x, 0.1f);
 
-            // 型を決定
-            ColliderType cType = ColliderType::None;
+            // プレビュー判定の型は球・AABB・OBBを割り当てます。Cylinderを選んだ場合、この分岐では既定の None を維持します。
+            engine::ColliderType cType = engine::ColliderType::kNone;
             if (meshSettings.collisionShape == 0)
-                cType = ColliderType::Sphere;
-            else if (meshSettings.collisionShape == 1) cType = ColliderType::Aabb;
-            else if (meshSettings.collisionShape == 2) cType = ColliderType::Obb;
+                cType = engine::ColliderType::kSphere;
+            else if (meshSettings.collisionShape == 1) cType = engine::ColliderType::kAabb;
+            else if (meshSettings.collisionShape == 2) cType = engine::ColliderType::kObb;
 
-            // =======================================================
-            //  現在の設定を取り出して、正しく上書きする！
-            // =======================================================
+            // 既存の設定を基準に、判定の種類・サイズ・中心を編集値で置き換えます。
             engine::Object3D::ColliderConfig cConfig = previewEffect_->GetColliderConfig();
-            cConfig.type = cType; // ここで確実に Sphere や Cylinder をセット！
+            cConfig.type = cType;
             cConfig.size = meshSettings.collisionSize;
             cConfig.center = meshSettings.collisionOffset;
 
@@ -797,8 +859,9 @@ void MeshEffectEditor::DrawImGui() {
             previewEffect_->SetColliderConfig(cConfig);
 
         }
+        // 衝突を無効にしたときは、プレビュー側の衝突形状も解除します。
         else {
-            previewEffect_->SetColliderType(ColliderType::None);
+            previewEffect_->SetColliderType(engine::ColliderType::kNone);
         }
 
         previewEffect_->SetMeshSettings(meshSettings);
@@ -813,17 +876,18 @@ void MeshEffectEditor::DrawImGui() {
 #endif
 }
 
-// ==========================================
-// JSON 保存処理
-// ==========================================
+// 編集中のパラメーターをJSONへ保存し、ファイルを閉じた後の状態を返します。
 bool MeshEffectEditor::SaveToJson(const std::filesystem::path& path) const {
+    // 本体が生成されていなければ、形状と衝突設定を取得できないため保存しません。
     if (!previewEffect_) return false;
 
     json j;
 
+    // 追従先がある場合、実体の参照の代わりに名前を保存します。
     if (targetObject_) {
         j["TargetName"] = targetObject_->GetName();
     }
+    // 追従先を使わない場合は、空の名前を明示します。
     else {
         j["TargetName"] = "";
     }
@@ -867,11 +931,10 @@ bool MeshEffectEditor::SaveToJson(const std::filesystem::path& path) const {
     j["EasingType"] = editEasingType_;
     j["VolumeMode"] = editVolumeMode_;
 
-    // ==========================================
-    // プロシージャルパラメータの保存
-    // ==========================================
+    // 形状の種類と、その本体に設定されている生成パラメーターを記録します。
     j["ProceduralType"] = editProceduralType_;
 
+    // 本体を取得できる場合はメッシュの寸法、分割数、UV倍率を保存します。
     if (previewEffect_) {
         j["SlashAngle"] = previewEffect_->GetMeshSettings().slashAngle;
         j["InnerRadius"] = previewEffect_->GetMeshSettings().innerRadius;
@@ -897,6 +960,7 @@ bool MeshEffectEditor::SaveToJson(const std::filesystem::path& path) const {
         j["UvTiling"] = {previewEffect_->GetMeshSettings().uvTiling.x, previewEffect_->GetMeshSettings().uvTiling.y};
     }
 
+    // 実行側でも判定を再現できるよう、形状とは別に衝突の編集値を保存します。
     j["Collision"]["HasCollision"] = previewEffect_->GetMeshSettings().hasCollision;
     j["Collision"]["Shape"] = previewEffect_->GetMeshSettings().collisionShape;
     j["Collision"]["Size"] = { previewEffect_->GetMeshSettings().collisionSize.x, previewEffect_->GetMeshSettings().collisionSize.y, previewEffect_->GetMeshSettings().collisionSize.z };
@@ -908,16 +972,17 @@ bool MeshEffectEditor::SaveToJson(const std::filesystem::path& path) const {
 }
 
 bool MeshEffectEditor::LoadFromJson(const std::filesystem::path& path) {
+    // 設定ファイルを開き、現在の本体に反映できるかを最初に確認します。
     std::ifstream file(path);
+    // 入力または反映先を用意できなければ、編集値を更新しません。
     if (!file || !previewEffect_) return false;
 
     json j;
     file >> j;
+    // ルートがオブジェクトでないか、モデル名が文字列でなければ設定として受け付けません。
     if (!j.is_object() || (j.contains("ModelName") && !j["ModelName"].is_string())) return false;
 
-    // ==========================================
-    // 読み込んだデータをUIバッファと実際のプレビューに反映
-    // ==========================================
+    // パス項目を順に読み、保存されている場合に編集欄とプレビューへ適用します。
 
     if (j.contains("ModelName")) {
         std::string modelName = j["ModelName"];
@@ -929,7 +994,9 @@ bool MeshEffectEditor::LoadFromJson(const std::filesystem::path& path) {
         std::string texPath = j["TexturePath"];
         strncpy_s(editTexturePath_, texPath.c_str(), sizeof(editTexturePath_) - 1);
 
+        // 描画実体があり、復元したメイン画像のパスが空でない場合に割り当てます。
         if (auto renderer = previewEffect_->GetMeshRenderer()) {
+            // 復元された画像パスに内容があれば、描画実体へ指定します。
             if (strlen(editTexturePath_) > 0) {
                 renderer->SetTexture(editTexturePath_);
             }
@@ -940,8 +1007,9 @@ bool MeshEffectEditor::LoadFromJson(const std::filesystem::path& path) {
         std::string noisePath = j["NoiseTexturePath"];
         strncpy_s(editNoiseTexturePath_, noisePath.c_str(), sizeof(editNoiseTexturePath_) - 1);
 
+        // 保存されたノイズパスが空でなければ、画像を読み込んで本体へ渡します。
         if (strlen(editNoiseTexturePath_) > 0) {
-            uint32_t texHandle = TextureManager::GetInstance()->Load(editNoiseTexturePath_);
+            uint32_t texHandle = engine::TextureManager::GetInstance()->Load(editNoiseTexturePath_);
             previewEffect_->SetNoiseTexture(texHandle);
         }
     }
@@ -950,8 +1018,9 @@ bool MeshEffectEditor::LoadFromJson(const std::filesystem::path& path) {
         std::string rampPath = j["RampTexturePath"];
         strncpy_s(editRampTexturePath_, rampPath.c_str(), sizeof(editRampTexturePath_) - 1);
 
+        // 保存されたカラーランプのパスが空でなければ、画像を読み込んで本体へ渡します。
         if (strlen(editRampTexturePath_) > 0) {
-            uint32_t texHandle = TextureManager::GetInstance()->Load(editRampTexturePath_);
+            uint32_t texHandle = engine::TextureManager::GetInstance()->Load(editRampTexturePath_);
             previewEffect_->SetRampTexture(texHandle);
         }
     }
@@ -963,13 +1032,14 @@ bool MeshEffectEditor::LoadFromJson(const std::filesystem::path& path) {
         editPosition_.z = j["Position"][2];
     }
 
+    // 回転が保存されている場合は、3成分を次のプレビュー更新に使います。
     if (j.contains("Rotation")) {
         editRotation_.x = j["Rotation"][0];
         editRotation_.y = j["Rotation"][1];
         editRotation_.z = j["Rotation"][2];
     }
 
-    // アニメーション関連の読み込み
+    // 秒単位の寿命、ループ、拡縮と色の始点・終点は各保存キーがある場合だけ上書きします。
     if (j.contains("Lifetime"))
         editLifetime_ = j["Lifetime"];
     if (j.contains("AutoLoop"))
@@ -1001,18 +1071,20 @@ bool MeshEffectEditor::LoadFromJson(const std::filesystem::path& path) {
         editEndColor_.w = j["EndColor"][3];
     }
 
+    // UVスクロール速度が指定されていれば2成分を復元します。
     if (j.contains("ScrollSpeed")) {
         editScrollSpeed_.x = j["ScrollSpeed"][0];
         editScrollSpeed_.y = j["ScrollSpeed"][1];
         previewEffect_->SetScrollSpeed(editScrollSpeed_);
     }
 
+    // 発光の強度が保存されていれば、編集値と本体の強度を揃えます。
     if (j.contains("Intensity")) {
         editIntensity_ = j["Intensity"];
         previewEffect_->SetIntensity(editIntensity_);
     }
 
-    // 機能追加前のJSONにも対応できるよう、歪みなど一部の項目は未記載時に既定値に戻す。
+    // 描画設定は記載がある項目を読みます。歪み強度・有効状態、透過の足切り、画像RGBは欠落時に無効相当へ戻します。
     if (j.contains("DistortionStrength"))
         editDistortionStrength_ = j["DistortionStrength"];
     else editDistortionStrength_ = 0.0f;
@@ -1040,17 +1112,21 @@ bool MeshEffectEditor::LoadFromJson(const std::filesystem::path& path) {
     previewEffect_->SetRingEnergyStrength(editRingEnergyStrength_);
     editRingSpinSpeed_ = j.value("RingSpinSpeed", 0.0f);
     previewEffect_->SetRingSpinSpeed(editRingSpinSpeed_);
+    // 伸びる演出の有効設定を確認し、旧形式で未指定なら有効にします。
     if (j.contains("EnableReveal"))
         editEnableReveal_ = j["EnableReveal"];
     else editEnableReveal_ = true;
+    // 伸び方の指定を有効範囲へ補正し、省略時は伸びる演出の有効状態から決めます。
     if (j.contains("RevealMode"))
-        editRevealMode_ = std::clamp(j["RevealMode"].get<int>(), 0, 2);
+        editRevealMode_ = std::clamp(j["RevealMode"].get<std::int32_t>(), 0, 2);
     else editRevealMode_ = editEnableReveal_ ? 1 : 0;
 
+    // イージングがあれば保存値を使い、省略時は線形に戻します。
     if (j.contains("EasingType"))
         editEasingType_ = j["EasingType"];
     else editEasingType_ = 0;
 
+    // 立体化モードが保存されていなければ、追加レイヤーを作らない設定にします。
     if (j.contains("VolumeMode"))
         editVolumeMode_ = j["VolumeMode"];
     else editVolumeMode_ = 0;
@@ -1058,10 +1134,12 @@ bool MeshEffectEditor::LoadFromJson(const std::filesystem::path& path) {
     // プロシージャルパラメータの読み込み
     if (j.contains("ProceduralType"))
         editProceduralType_ = j["ProceduralType"];
+    // 本体が用意できていれば、形状の各パラメーターをJSONから復元します。
     if (previewEffect_) {
         previewEffect_->ReadProceduralMeshSettings(j);
     }
 
+    // 衝突設定が含まれる場合は、判定の種類と寸法も復元します。
     if (j.contains("Collision")) {
         previewEffect_->SetMeshSetting(&EffectObject3D::MeshSettings::hasCollision, j["Collision"]["HasCollision"]);
         previewEffect_->SetMeshSetting(&EffectObject3D::MeshSettings::collisionShape, j["Collision"]["Shape"]);
@@ -1071,6 +1149,7 @@ bool MeshEffectEditor::LoadFromJson(const std::filesystem::path& path) {
 
     // 先に前回の対象を解除し、保存名があれば実行時と同じ走査順で解決する。
     targetObject_ = nullptr;
+    // 対象名が指定されている場合に、現在のシーンから追従先を探します。
     if (j.contains("TargetName")) {
         targetObject_ = FindMeshEffectTarget(sceneManager_ ? sceneManager_->GetCurrentScene() : nullptr,
             j["TargetName"].get<std::string>());
@@ -1081,6 +1160,7 @@ bool MeshEffectEditor::LoadFromJson(const std::filesystem::path& path) {
     SyncTextureIndices();
 
 
+    // 生成形状を選択しており本体がある場合は、読み込んだ値で各面を作り直します。
     if (editProceduralType_ >= 1 && previewEffect_) {
         SyncPreviewMesh(*previewEffect_, extraPreviewEffects_, editProceduralType_);
     }
@@ -1132,11 +1212,13 @@ void MeshEffectEditor::ResetDocument() {
 
 void MeshEffectEditor::SyncTextureIndices() {
     // 保存済みパスの表記ゆれを吸収し、画像一覧の選択位置へ戻す。
-    auto findIndex = [&](const std::string& path) -> int {
+    auto findIndex = [&](const std::string& path) -> std::int32_t {
+        // 空の画像パスは選択なしとして扱います。
         if (path.empty())
             return -1;
-        for (int i = 0; i < (int)textureFileList_.size(); ++i) {
+        for (std::int32_t i = 0; i < (std::int32_t)textureFileList_.size(); ++i) {
             std::string fullPath = "Resources/sprite/" + textureFileList_[i];
+            // パス表記かファイル名のいずれかが一致した場合に、対応する候補の索引を返します。
             if (textureFileList_[i] == path ||
                 fullPath == path ||
                 std::filesystem::path(textureFileList_[i]).filename() == std::filesystem::path(path).filename()) {

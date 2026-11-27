@@ -6,23 +6,22 @@ namespace engine {
 
 /// <summary>二次元の座標や方向を表す浮動小数ベクトル。</summary>
 // 関連：Math（この型を使う機能の本体）
-struct Vector2
-{
+struct Vector2 {
 	/// <summary>全成分が0の値。座標や速度の初期化に使う。</summary>
-	static const Vector2 ZERO;
+	static const Vector2 kZero;
 	float x;
 	float y;
 };
 
 /// <summary>三次元の座標や方向を表す浮動小数ベクトル。</summary>
 // 関連：Math（この型を使う機能の本体）
-struct Vector3
-{
+struct Vector3 {
 	/// <summary>全成分が0の値。座標や速度の初期化に使う。</summary>
-	static const Vector3 ZERO;
+	static const Vector3 kZero;
 	float x;
 	float y;
 	float z;
+	// 他のベクトルの3成分をコピーし、代入先を参照で返す。
 	Vector3& operator=(const Vector3& other) {
 		x = other.x;
 		y = other.y;
@@ -38,10 +37,9 @@ struct Vector3
 
 /// <summary>四次元のベクトル。RGBA色や同次座標にも使う。</summary>
 // 関連：Math（この型を使う機能の本体）
-struct Vector4
-{
+struct Vector4 {
 	/// <summary>全成分が0の値。座標や速度の初期化に使う。</summary>
-	static const Vector4 ZERO;
+	static const Vector4 kZero;
 	float x;
 	float y;
 	float z;
@@ -50,16 +48,16 @@ struct Vector4
 
 
 // インスタンスの大きさや集成体初期化を変えず、コンパイル時に使える共有値を定義する。
-inline constexpr Vector2 Vector2::ZERO{0.0f, 0.0f};
-inline constexpr Vector3 Vector3::ZERO{0.0f, 0.0f, 0.0f};
-inline constexpr Vector4 Vector4::ZERO{0.0f, 0.0f, 0.0f, 0.0f};
+inline constexpr Vector2 Vector2::kZero{0.0f, 0.0f};
+inline constexpr Vector3 Vector3::kZero{0.0f, 0.0f, 0.0f};
+inline constexpr Vector4 Vector4::kZero{0.0f, 0.0f, 0.0f, 0.0f};
 
-namespace Colors {
+namespace colors {
 /// <summary>不透明な白。描画色の初期値に使う。</summary>
-inline constexpr Vector4 White{1.0f, 1.0f, 1.0f, 1.0f};
+inline constexpr Vector4 kWhite{1.0f, 1.0f, 1.0f, 1.0f};
 /// <summary>不透明な黒と完全透明色。アルファ値の違いを明示する。</summary>
-inline constexpr Vector4 Black{0.0f, 0.0f, 0.0f, 1.0f};
-inline constexpr Vector4 Transparent = Vector4::ZERO;
+inline constexpr Vector4 kBlack{0.0f, 0.0f, 0.0f, 1.0f};
+inline constexpr Vector4 Transparent = Vector4::kZero;
 }
 
 /// <summary>四成分で三次元回転を表すクォータニオン。</summary>
@@ -70,7 +68,7 @@ struct Quaternion {
 	float z;
 	float w;
 
-	// クォータニオン同士の掛け算 (回転の合成用)
+	// 回転を合成するハミルトン積。単位クォータニオンを回転として使う場合、右側の回転を先に適用する。
 	Quaternion operator*(const Quaternion& other) const {
 		return {
 			w * other.x + x * other.w + y * other.z - z * other.y,
@@ -83,16 +81,14 @@ struct Quaternion {
 
 /// <summary>三次元の線形変換を表す3×3行列。</summary>
 // 関連：Math（この型を使う機能の本体）
-struct Matrix3x3
-{
+struct Matrix3x3 {
 	float m[3][3];
 };
 
 
 /// <summary>三次元のアフィン変換や投影を表す4×4行列。</summary>
 // 関連：Math（この型を使う機能の本体）
-struct Matrix4x4
-{
+struct Matrix4x4 {
 	float m[4][4];
 };
 
@@ -107,9 +103,13 @@ struct Ray {
 /// <summary>レイと形状の交差結果です。</summary>
 // 関連：Math（この型を使う機能の本体）
 struct RayResult {
+	// IntersectRayAabbで交差結果を書き込んだ場合にtrue。
 	bool isHit;
+	// origin + diff × t のt。diffが単位長ならワールド距離。
 	float distance;
+	// 交点のワールド座標。
 	Vector3 point;
+	// 見つけた箱の面の向き。面付近でない交点ではゼロ。
 	Vector3 normal;
 };
 
@@ -117,15 +117,17 @@ struct RayResult {
 Vector3 operator-(const Vector3& v1, const Vector3& v2);
 Vector3 operator*(const Vector3& v, float scalar);
 Vector3 operator+(const Vector3& v1, const Vector3& v2);
+// 分母が0のときはゼロベクトルを返す。
 Vector3 operator/(const Vector3& v, float scalar);
 Vector3 operator-(const Vector3& v);
 
 
 // 行列積とベクトルの加算代入。
+// 行ベクトルに対して左側、右側の順に変換を適用する積。
 Matrix4x4 operator*(const Matrix4x4& m1, const Matrix4x4& m2);
 Vector3& operator+=(Vector3& v1, const Vector3& v2);
 
-/// <summary>法線と原点からの距離で表す平面。</summary>
+/// <summary>法線と符号付きの定数項で表す平面。</summary>
 // 関連：Math（この型を使う機能の本体）
 // normal と点の内積に distance を加えた値で面の側を判定します。distance は符号を含む平面式の定数項です。
 struct Plane {
@@ -136,13 +138,12 @@ struct Plane {
 /// <summary>左右・上下・近遠の六平面からなる視錐台。</summary>
 // 関連：Math（この型を使う機能の本体）
 struct Frustum {
-	Plane planes[6]; // 左右上下・近遠の6面
+	Plane planes[6]; // 左、右、下、上、近、遠の順。
 };
 
 // 担当：ベクトル・行列・回転・投影・交差判定の計算を提供する。
-// 関連：Transform（行列）、Camera（視点）、Collider（形状計算）
-class Math
-{
+// Transform・Camera・Colliderが使う計算規約を扱う。変換は行ベクトルを行列の左に置く。
+class Math {
 
 
 public:
@@ -153,7 +154,7 @@ public:
 	/// <summary>各軸の倍率から拡縮行列を作る。</summary>
 	static Matrix4x4 MakeScaleMatrix(const Vector3& scale);
 
-	// 指定ラジアン角で各軸を中心に回転する行列を作る。
+	// X軸回りにthetaラジアン回す行ベクトル用の回転行列を作る。
 	static Matrix4x4 MakeRotateXMatrix(float theta);
 
 	// thetaはラジアンで受け取り、Y軸回りの行ベクトル用行列を作ります。
@@ -171,7 +172,7 @@ public:
 	/// <summary>4x4 行列の逆行列を返します。逆行列がない場合はゼロ行列を返します。</summary>
 	static Matrix4x4 Inverse(const Matrix4x4& m);
 
-	/// <summary>垂直画角、アスペクト比、前後クリップ面から透視投影行列を作ります。</summary>
+	/// <summary>垂直画角をラジアン、幅/高さの比、前後クリップ距離を指定し、深度0〜1の透視投影を作る。</summary>
 	static Matrix4x4 MakePerspectiveFovMatrix(float fovY, float aspectRatio, float nearClip, float farClip);
 
 	/// <summary>左右上下と前後クリップ面から正射影行列を作ります。</summary>
@@ -180,16 +181,16 @@ public:
 	/// <summary>投影後の座標を画面座標へ写すビューポート行列を作ります。</summary>
 	static Matrix4x4 MakeViewportMatrix(float left, float top, float width, float height, float minDepth, float maxDepth);
 
-	/// <summary>拡縮・Euler角回転・移動を合成したアフィン行列を作る。</summary>
+	/// <summary>拡縮、ラジアンのX→Y→Z回転、平行移動の順のアフィン変換を作る。</summary>
 	static Matrix4x4 MakeAffineMatrix(const Vector3& scale, const Vector3& rotate, const Vector3& translate);
 
-	/// <summary>ベクトルを単位長に正規化する。</summary>
+	/// <summary>ベクトルを単位長にする。長さが0.000001未満ならゼロベクトル。</summary>
 	static Vector3 Normalize(const Vector3& v);
 
-	/// <summary>Euler角から回転行列を作る。</summary>
+	/// <summary>ラジアンのEuler角をZ→X→Yの順に適用する回転行列を作る。</summary>
 	static Matrix4x4 MakeRotateMatrix(const Vector3& rotate);
 
-	/// <summary>行列の平行移動成分を除いて法線を変換する。</summary>
+	/// <summary>行列の左上3×3で方向を変換する。平行移動成分を使わない。</summary>
 	static Vector3 TransformNormal(const Vector3& v, const Matrix4x4& m);
 
 	/// <summary>視点・注視点・上方向からビュー行列を作る。</summary>
@@ -211,33 +212,33 @@ public:
 	static float Length(const Vector3& v);
 
 	/// <summary>
-	/// 線形補間 (float)
+	/// t=0でv1、t=1でv2になる線形補間。範囲外のtは外挿する。
 	/// </summary>
 	static float Lerp(float v1, float v2, float t);
 
 	/// <summary>
-	/// 線形補間 (Vector4)
+	/// 各成分を同じ進行率tで線形補間する。
 	/// </summary>
 	static Vector4 Lerp(const Vector4& v1, const Vector4& v2, float t);
 
 	/// <summary>位置を行列で変換し、w が 0 でない場合は透視除算します。</summary>
 	static Vector3 Transform(const Vector3& v, const Matrix4x4& m);
 
-	/// <summary>レイと軸平行ボックスの最初の交点を調べます。</summary>
+	/// <summary>レイのtが0〜100000の範囲で軸平行箱への最初の交差を調べる。</summary>
 	/// <param name="ray">始点と方向ベクトル。</param>
 	/// <param name="minBox">箱の各軸の最小座標。</param>
 	/// <param name="maxBox">箱の各軸の最大座標。</param>
-	/// <param name="hit">交差時に結果を書き込む先。</param>
-	/// <returns>交差する場合は true。</returns>
+	/// <param name="hit">交差時に結果を書き込む先。結果が不要ならnullptrを渡せる。</param>
+	/// <returns>範囲内ならtrue。始点が箱内の場合のtは0。</returns>
 	static bool IntersectRayAabb(const Ray& ray, const Vector3& minBox, const Vector3& maxBox, RayResult* hit);
 
-	// Vector3 の線形補間 (座標の移動用)
+	// 3成分を同じ割合で線形補間する。tの範囲外は外挿する。
 	static Vector3 Lerp(const Vector3& v1, const Vector3& v2, float t);
 
-	/// <summary>2 つの角度を最短経路で補間します。</summary>
+	/// <summary>ラジアンの角度差を±πへ収めて短い向きに補間する。tはクランプしない。</summary>
 	static float LerpShortAngle(float a, float b, float t);
 
-	/// <summary>2 つの回転を球面線形補間します。</summary>
+	/// <summary>単位クォータニオン間を短い弧で補間する。近い姿勢では成分を線形補間する。</summary>
 	static Quaternion Slerp(const Quaternion& q0, const Quaternion& q1, float t);
 
 	/// <summary>Quaternion を回転行列へ変換します。</summary>
@@ -246,10 +247,10 @@ public:
 	/// <summary>幅と高さ、前後クリップ面から正射影行列を作る。</summary>
 	static Matrix4x4 MakeOrthographicMatrix(float width, float height, float nearZ, float farZ);
 
-	/// <summary>Euler角をクォータニオンへ変換する。</summary>
+	/// <summary>ラジアンのEuler角をZ→X→Yの順で合成したクォータニオンを作る。</summary>
 	static Quaternion EulerToQuaternion(const Vector3& rot);
 
-	/// <summary>行列の回転成分をEuler角へ変換する。</summary>
+	/// <summary>各行の拡縮を除ける範囲で除き、Z→X→Yの成分をラジアンで取り出す。</summary>
 	static Vector3 MatrixToEuler(const Matrix4x4& m);
 
 	/// <summary>行列の回転成分をクォータニオンへ変換する。</summary>
@@ -258,7 +259,7 @@ public:
 	/// <summary>ビュー投影行列から 6 面の視錐台を取り出します。</summary>
 	static Frustum ExtractFrustumPlanes(const Matrix4x4& vp);
 
-	/// <summary>視錐台と軸平行ボックスが交差するか判定します。</summary>
+	/// <summary>視錐台のどの平面に対しても、箱全体が外側に出ていなければtrueを返す。</summary>
 	static bool IntersectFrustumAabb(const Frustum& frustum, const Vector3& minBox, const Vector3& maxBox);
 
 	/// <summary>点から軸平行ボックスまでの最短距離の二乗を返します。</summary>

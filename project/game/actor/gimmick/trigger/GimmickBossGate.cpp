@@ -22,15 +22,16 @@ void GimmickBossGate::Initialize(engine::Object3DCommon* common, const std::stri
     SetName("Gimmick_BossGate");
     SetStatic(false);
     SetCastShadow(true);
-    SetCollisionAttribute(CollisionCategories::Get("ground"));
+    SetCollisionAttribute(engine::collisionCategories::Get("ground"));
     SetCollisionMask(0xffffffffu);
 
     engine::Object3D::ColliderConfig collider;
-    collider.type = ColliderType::Obb;
+    collider.type = engine::ColliderType::kObb;
     collider.center = {0.0f, 3.5f, 0.0f};
     collider.size = {6.0f, 3.5f, 0.55f};
     SetColliderConfig(collider);
 
+    // ゲート用の初期設定を登録できるよう、パラメーターがない場合は既定値を作る。
     if (!GetParameters().has_value())
         ResetParameters();
     SetParameter(&engine::EntityParameter::gimmickType, "BossGate");
@@ -39,7 +40,7 @@ void GimmickBossGate::Initialize(engine::Object3DCommon* common, const std::stri
     SetParameter(&engine::EntityParameter::startActive, false);
     SetParameter(&engine::EntityParameter::returnOnOff, true);
 
-    // 編集項目の宣言です。動作処理と旧paramの保存キーは変更しません。
+    // 配置のTransformを閉鎖位置として使う。Inspectorには開放時の退避距離と開閉時間を公開する。
     using Self = GimmickBossGate;
     engine::ObjectPropertyDefinition<Self> properties(*this, kTypeId, "ボス闘技場・格子ゲート",
         "Transformは閉鎖位置です。演出中はタイムライン制御、通常時はイベント通知で開閉します。");
@@ -55,6 +56,7 @@ void GimmickBossGate::Update(float deltaTime) {
     SceneManager* sceneManager = SceneManager::GetInstance();
     const bool isPlaying = sceneManager && sceneManager->IsPlaying();
 
+    // 編集中は演出による移動を止め、位置と縮尺を編集配置へ戻す。
     if (!isPlaying) {
         ResetForEditor();
         BaseGimmick::Update(deltaTime);
@@ -63,9 +65,11 @@ void GimmickBossGate::Update(float deltaTime) {
 
     // 演出から制御されている間は門の位置を動かさず、演出の種類に応じて接触判定だけ切り替えます。
     if (cinematicOverride_) {
+        // 登場タイムラインなら、そのタイムラインが動かした位置から閉鎖位置までの差を調べる。
         if (introTimelineControl_) {
             // 見た目の移動はTimelineが担当し、接触判定だけ閉鎖位置への到達で決めます。
             const float remaining = GetTranslate().y - authoredPosition_.y;
+            // 閉鎖要求があり、門が退避距離の18%以内まで下がったときに壁判定を有効にする。
             SetCollisionEnabled(targetClosure_ > 0.5f && remaining <= GetTravelDistance() * 0.18f);
         } else {
             // 登場用タイムライン以外の外部演出で動かす間は、門を通行の障害にしません。
@@ -89,8 +93,10 @@ void GimmickBossGate::Update(float deltaTime) {
     const float duration = GetTransitionDuration();
     const float step = duration > 0.0001f ? std::max(0.0f, deltaTime) / duration : 1.0f;
 
+    // 閉鎖率が目標より低い場合は、目標を越えない範囲で門を下ろす。
     if (closure_ < targetClosure_) {
         closure_ = std::min(targetClosure_, closure_ + step);
+    // 閉鎖率が目標より高い場合は、目標を下回らない範囲で門を上げる。
     } else if (closure_ > targetClosure_) {
         closure_ = std::max(targetClosure_, closure_ - step);
     }
@@ -108,6 +114,7 @@ void GimmickBossGate::OnSwitchEvent(bool active) {
     // シネマティック制御中は外部スイッチで門を上書きしない。
     if (cinematicOverride_)
         return;
+    // OFFで元に戻す設定が無効なら、開放通知では現在の閉鎖目標を保つ。
     if (!active && GetParameters().has_value() && !GetParameters()->returnOnOff) {
         return;
     }
@@ -120,11 +127,13 @@ void GimmickBossGate::OnSwitchEvent(bool active) {
     if (active) {
         SetIsVisible(true);
 
+        // 開放側の端点にいる門を閉じる場合だけ、閉鎖位置の少し上に予告効果を出す。
         if (closure_ <= 0.001f) {
             engine::Vector3 cue = authoredPosition_;
             cue.y += 0.1f;
             VfxSequencer::PlayOneShot("shared/high_crown_gate_close_cue", cue, {1.0f, 1.0f, 1.0f});
         }
+    // 開放通知では、門が見えている間も先に通行できるよう壁判定を解除する。
     } else {
         SetCollisionEnabled(false);
     }
@@ -139,6 +148,7 @@ std::unique_ptr<engine::Object3D> GimmickBossGate::Clone() const {
     return clone;
 }
 
+// 閉鎖位置を演出側に渡す。最初の取得で、配置時の位置を保存する。
 engine::Vector3 GimmickBossGate::GetClosedPosition() {
     // 閉鎖位置の基準は現在の編集配置から一度だけ確定する。
     CaptureAuthoredState();
@@ -151,6 +161,7 @@ void GimmickBossGate::SetIntroTimelineControl(bool enabled) {
     introTimelineControl_ = enabled;
     cinematicOverride_ = enabled;
 
+    // タイムライン制御を終えるときは、現在の閉鎖要求へ閉鎖率を揃えて通常更新へ渡す。
     if (!enabled) {
         // Timelineが初期姿勢へ復元した後も、封鎖済みの進行状態を保持します。
         closure_ = targetClosure_;
@@ -160,6 +171,7 @@ void GimmickBossGate::SetIntroTimelineControl(bool enabled) {
 
 void GimmickBossGate::CaptureAuthoredState(bool force) {
     // 実行時の移動や衝突切替で、編集時の Transform とマスクを失わないよう保存する。
+    // 保存済みで強制取得の指定がなければ、開放時の位置で閉鎖位置を上書きしない。
     if (authoredStateCaptured_ && !force) {
         return;
     }
@@ -168,8 +180,10 @@ void GimmickBossGate::CaptureAuthoredState(bool force) {
     authoredScale_ = GetScale();
     authoredCollisionAttribute_ = GetCollisionAttribute();
     authoredCollisionMask_ = GetCollisionMask();
+    // 退避した衝突属性が0なら、閉鎖時に使う地面属性を補う。
     if (authoredCollisionAttribute_ == 0)
-        authoredCollisionAttribute_ = CollisionCategories::Get("ground");
+        authoredCollisionAttribute_ = engine::collisionCategories::Get("ground");
+    // 退避したマスクが0なら、全ビットを許可する既定値を補う。
     if (authoredCollisionMask_ == 0)
         authoredCollisionMask_ = 0xffffffffu;
     authoredStateCaptured_ = true;
@@ -206,8 +220,10 @@ void GimmickBossGate::ApplyRuntimeState() {
     SetTranslate(position);
     SetScale(authoredScale_);
     SetIsVisible(closure_ > 0.001f || targetClosure_ > 0.0f);
+    // 閉鎖要求があり閉鎖率が0.82以上のとき、壁として通行を遮る。
     SetCollisionEnabled(targetClosure_ > 0.5f && closure_ >= 0.82f);
 
+    // 開放を要求され、閉鎖率が0.001以下まで下がっていれば完全に非表示にする。
     if (closure_ <= 0.001f && targetClosure_ <= 0.0f) {
         SetIsVisible(false);
     }
@@ -220,11 +236,11 @@ void GimmickBossGate::SetCollisionEnabled(bool enabled) {
 }
 
 float GimmickBossGate::GetTransitionDuration() const {
-    // JSON の移動速度欄を演出の所要秒数として安全範囲に収める。
+    // 既存のmoveSpeedを所要秒数として0.12〜2.5に収める。設定がなければ0.58秒。
     return GetParameters().has_value() ? std::clamp(GetParameters()->moveSpeed, 0.12f, 2.5f) : 0.58f;
 }
 
 float GimmickBossGate::GetTravelDistance() const {
-    // 門が完全に開く際の上昇距離に下限を設ける。
+    // 閉鎖位置から上方向への退避距離。設定値の下限は2、設定がなければ8ワールド単位。
     return GetParameters().has_value() ? std::max(2.0f, GetParameters()->moveAmount) : 8.0f;
 }

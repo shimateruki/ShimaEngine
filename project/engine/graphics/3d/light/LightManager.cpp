@@ -1,4 +1,6 @@
+#include <cstdint>
 #include "LightManager.h"
+#include "engine/graphics/3d/light/SceneLighting.h"
 #include "Easing.h"
 #include "Object3D.h" // 追従対象の座標を取得するために必要
 #include "Camera.h"
@@ -17,6 +19,11 @@ namespace engine {
 
 using json = nlohmann::json;
 
+SceneLighting SceneLighting::Capture() {
+    auto& lights = *LightManager::GetInstance();
+    return SceneLighting(lights.GetPointLightResource(), lights.GetSpotLightResource());
+}
+
 namespace {
 // 球が視錐台の全平面の外側にないことを確認し、ライトの描画対象を絞ります。
 bool IntersectsFrustumSphere(const engine::Frustum& frustum, const engine::Vector3& center, float radius) {
@@ -30,6 +37,7 @@ bool IntersectsFrustumSphere(const engine::Frustum& frustum, const engine::Vecto
             plane.normal.y * center.y +
             plane.normal.z * center.z +
             plane.distance;
+        // 球の外周も平面の外にあれば、視錐台とは交差しません。
         if (signedDistance < -safeRadius) {
             return false;
         }
@@ -41,16 +49,16 @@ bool IntersectsFrustumSphere(const engine::Frustum& frustum, const engine::Vecto
 
 LightManager* LightManager::GetInstance() {
     // ライト設定とGPU転送の状態を全シーンで一つに保ちます。
-    static LightManager instance;
-    return &instance;
+    static LightManager sInstance;
+    return &sInstance;
 }
 
 void LightManager::Initialize(DirectXCommon* dxCommon) {
     assert(dxCommon);
     dxCommon_ = dxCommon;
-    uint32_t envHandle = TextureManager::GetInstance()->Load(
+    uint32_t envHandle = engine::TextureManager::GetInstance()->Load(
         "Resources/output_skybox.dds",
-        TextureManager::TextureColorSpace::SRGB);
+        engine::TextureManager::TextureColorSpace::kSRGB);
     LightManager::GetInstance()->SetEnvironmentMapHandle(envHandle);
     skyboxTexturePath_ = "Resources/output_skybox.dds";
     skyboxTextureHandle_ = envHandle;
@@ -86,52 +94,48 @@ void LightManager::Update() {
     engine::Camera* activeCamera = CameraManager::GetInstance()->GetActiveCamera();
     const engine::Frustum* activeFrustum = activeCamera ? &activeCamera->GetFrustum() : nullptr;
 
-    // ---------------------------------------------------
-    // 1. 平行光源 (Directional Light)
-    // ---------------------------------------------------
+    // 平行光の影行列を更新してから、GPU用の定数バッファに反映します。
     GetDirectionalShadowViewProjection(CameraManager::GetInstance()->GetActiveCamera());
 
+    // 平行光の定数バッファが確保されている場合だけ書き込みを試みます。
     if (directionalLightResource_) {
         DirectionalLight* dirMap = nullptr;
 
-        // 1. Mapを実行し、かつ成功(SUCCEEDED)したか、ポインタがNULLでないかを確認
+        // Map が成功し、書き込み先を取得できた場合に転送します。
         if (SUCCEEDED(directionalLightResource_->Map(0, nullptr, reinterpret_cast<void**>(&dirMap))) && dirMap) {
 
-            // 2. Normalizeする前に、ベクトルの長さが0でないかチェック(0除算防止)
+            // 方向に十分な長さがあれば単位ベクトルにします。
             if (engine::Math::Length(directionalLightData_.direction) > 0.0001f) {
                 directionalLightData_.direction = engine::Math::Normalize(directionalLightData_.direction);
             } else {
-                // 長さが0ならデフォルトの向きをセット
+                // 方向がほぼゼロの場合は真下向きを使います。
                 directionalLightData_.direction = { 0.0f, -1.0f, 0.0f };
             }
 
-            // 3. 安全が確認できたので書き込む
+            // 保存用の色はそのままにし、GPUに渡す複製だけを描画用色空間に変換します。
             DirectionalLight gpuLight = directionalLightData_;
-            gpuLight.color = engine::ColorSpace::AuthoringToWorking(gpuLight.color);
-            gpuLight.ambientColor = engine::ColorSpace::AuthoringToWorking(gpuLight.ambientColor);
-            gpuLight.fogColor = engine::ColorSpace::AuthoringToWorking(gpuLight.fogColor);
+            gpuLight.color = engine::colorSpace::AuthoringToWorking(gpuLight.color);
+            gpuLight.ambientColor = engine::colorSpace::AuthoringToWorking(gpuLight.ambientColor);
+            gpuLight.fogColor = engine::colorSpace::AuthoringToWorking(gpuLight.fogColor);
             *dirMap = gpuLight;
 
-            // 4. アンマップ
+            // 転送を終えた定数バッファのマッピングを解除します。
             directionalLightResource_->Unmap(0, nullptr);
         }
     }
 
-    // ---------------------------------------------------
-    // 2. 点光源 (Point Lights)
-    // ---------------------------------------------------
+    // 常設の点光源を先に処理し、描画対象だけをGPUの先頭から格納します。
     pointLightConstData_->activeCount = 0;
 
     for (auto& instance : pointLights_) {
-        // 最大数チェック
+        // GPUの枠が埋まったら、後続の常設灯の追従と点滅更新も打ち切ります。
         if (pointLightConstData_->activeCount >= kMaxPointLights)
             break;
 
-        // --- ロジック更新 (CPU側) ---
 
-        // A. 追従処理
+        // 追従対象があれば GetTranslate() の座標に登録時のオフセットを足します。
         if (instance.target) {
-            engine::Vector3 targetPos = instance.target->GetTranslate(); // または GetWorldPosition()
+            engine::Vector3 targetPos = instance.target->GetTranslate();
             instance.data.position = {
                 targetPos.x + instance.offset.x,
                 targetPos.y + instance.offset.y,
@@ -139,14 +143,15 @@ void LightManager::Update() {
             };
         }
 
-        // B. アニメーション処理 (点滅・明滅)
-        if (instance.mode == LightMode::Flicker) {
+        // ランダム点滅では、更新ごとに基準強度の50〜99.5%を選びます。
+        if (instance.mode == LightMode::kFlicker) {
             instance.timer += 1.0f / 60.0f * instance.speed;
 
             // ランダムなノイズ (故障したライト風)
             float noise = (float)(rand() % 100) / 100.0f;
             instance.data.intensity = instance.baseIntensity * (0.5f + noise * 0.5f);
-        } else if (instance.mode == LightMode::SineWave) {
+        // サイン波モードは位相を進め、基準強度の50〜100%で明滅させます。
+        } else if (instance.mode == LightMode::kSineWave) {
             instance.timer += 1.0f / 60.0f * instance.speed;
 
             // サイン波 (呼吸のような明滅)
@@ -157,18 +162,20 @@ void LightManager::Update() {
             instance.data.intensity = instance.baseIntensity;
         }
 
+        // 強さか半径が閾値以下なら、描画枠を消費せず次の常設灯へ進みます。
         if (instance.data.intensity <= 0.0001f || instance.data.radius <= 0.0001f) {
             continue;
         }
 
+        // 視錐台があり、光の届く球全体がその外なら描画対象から外します。
         if (activeFrustum && !IntersectsFrustumSphere(*activeFrustum, instance.data.position, instance.data.radius)) {
             continue;
         }
 
-        // --- GPUバッファへコピー ---
-        int index = pointLightConstData_->activeCount;
+        // 描画対象を詰めて格納し、送信用の色だけを変換します。
+        std::int32_t index = pointLightConstData_->activeCount;
         MeshRenderer::PointLight gpuLight = instance.data;
-        gpuLight.color = engine::ColorSpace::AuthoringToWorking(gpuLight.color);
+        gpuLight.color = engine::colorSpace::AuthoringToWorking(gpuLight.color);
         pointLightConstData_->lights[index] = gpuLight;
         pointLightConstData_->activeCount++;
     }
@@ -182,6 +189,7 @@ void LightManager::Update() {
         const float envelope = (1.0f - progress) * (1.0f - progress);
         pulse.data.intensity = pulse.baseIntensity * envelope;
 
+        // 寿命に達した発光は、そのフレームで一覧から除きます。
         if (progress >= 1.0f) {
             // 最後の要素を空いた位置に移すため、この周回では添字を進めず、移したライトも同じ更新で確認します。
             transientPointLights_[index] = transientPointLights_.back();
@@ -189,16 +197,18 @@ void LightManager::Update() {
             continue;
         }
 
+        // 暗すぎる、半径が小さすぎる、または視錐台外の発光は寿命を管理しつつ描画だけ省きます。
         if (pulse.data.intensity <= 0.0001f || pulse.data.radius <= 0.0001f ||
             (activeFrustum && !IntersectsFrustumSphere(*activeFrustum, pulse.data.position, pulse.data.radius))) {
             ++index;
             continue;
         }
 
+        // 常設灯の後に空き枠がある場合、一時発光もGPU用の点光源として登録します。
         if (pointLightConstData_->activeCount < kMaxPointLights) {
-            int transientIndex = pointLightConstData_->activeCount;
+            std::int32_t transientIndex = pointLightConstData_->activeCount;
             MeshRenderer::PointLight gpuLight = pulse.data;
-            gpuLight.color = engine::ColorSpace::AuthoringToWorking(gpuLight.color);
+            gpuLight.color = engine::colorSpace::AuthoringToWorking(gpuLight.color);
             pointLightConstData_->lights[transientIndex] = gpuLight;
             pointLightConstData_->activeCount++;
         }
@@ -206,18 +216,16 @@ void LightManager::Update() {
         ++index;
     }
 
-    // ---------------------------------------------------
-    // 3. スポットライト (Spot Lights)
-    // ---------------------------------------------------
+    // スポットライトも追従と強度を更新し、描画対象だけを専用の領域に格納します。
     spotLightConstData_->activeCount = 0;
 
     for (auto& instance : spotLights_) {
+        // 描画枠が上限に達したら、残りのライトの更新を打ち切ります。
         if (spotLightConstData_->activeCount >= kMaxSpotLights)
             break;
 
-        // --- ロジック更新 ---
 
-        // A. 追従処理 & 向き同期 (懐中電灯)
+        // 追従対象があれば、GetTranslate() の座標にオフセットを足し、向きの候補も取得します。
         if (instance.target) {
             engine::Vector3 targetPos = instance.target->GetTranslate();
             instance.data.position = {
@@ -226,44 +234,48 @@ void LightManager::Update() {
                 targetPos.z + instance.offset.z
             };
 
-            // ターゲットの正面方向を取得してライトの向きにする
-            // 行列のZ軸ベクトル(前方)を取得するのが最も確実
+            // 対象のワールド行列の第3列を、ライト方向の候補として使います。
             engine::Matrix4x4 worldMat = instance.target->GetWorldMatrix();
             engine::Vector3 forward = { worldMat.m[0][2], worldMat.m[1][2], worldMat.m[2][2] };
 
-            // 正規化
+            // 方向候補の長さを求め、単位ベクトルへ変換できるか判定します。
             float length = std::sqrt(forward.x * forward.x + forward.y * forward.y + forward.z * forward.z);
 
+            // 方向候補がほぼゼロの場合は、これまでの向きを保持します。
             if (length > 0.0001f) {
                 instance.data.direction = { forward.x / length, forward.y / length, forward.z / length };
             }
         }
 
-        // B. アニメーション
-        if (instance.mode == LightMode::Flicker) {
+        // ランダム点滅では、更新ごとに基準強度の50〜99.5%を選びます。
+        if (instance.mode == LightMode::kFlicker) {
             instance.timer += 1.0f / 60.0f * instance.speed;
             float noise = (float)(rand() % 100) / 100.0f;
             instance.data.intensity = instance.baseIntensity * (0.5f + noise * 0.5f);
-        } else if (instance.mode == LightMode::SineWave) {
+        // サイン波モードでは、更新ごとに位相を進めて基準強度の50〜100%を使います。
+        } else if (instance.mode == LightMode::kSineWave) {
             instance.timer += 1.0f / 60.0f * instance.speed;
             float wave = (std::sin(instance.timer) + 1.0f) * 0.5f;
             instance.data.intensity = instance.baseIntensity * (0.5f + wave * 0.5f);
+        // どちらの明滅モードでもなければ基準強度へ戻します。
         } else {
             instance.data.intensity = instance.baseIntensity;
         }
 
+        // 強さか到達距離が閾値以下なら、描画枠に載せません。
         if (instance.data.intensity <= 0.0001f || instance.data.distance <= 0.0001f) {
             continue;
         }
 
+        // 視錐台があり、到達距離を半径とする球全体がその外ならGPU転送を省きます。
         if (activeFrustum && !IntersectsFrustumSphere(*activeFrustum, instance.data.position, instance.data.distance)) {
             continue;
         }
 
-        // --- GPUバッファへコピー ---
-        int index = spotLightConstData_->activeCount;
+        // 送信する色を描画用に変換し、スポットライトを詰めて格納します。
+        std::int32_t index = spotLightConstData_->activeCount;
         MeshRenderer::SpotLight gpuLight = instance.data;
-        gpuLight.color = engine::ColorSpace::AuthoringToWorking(gpuLight.color);
+        gpuLight.color = engine::colorSpace::AuthoringToWorking(gpuLight.color);
         spotLightConstData_->lights[index] = gpuLight;
         spotLightConstData_->activeCount++;
     }
@@ -274,9 +286,11 @@ const engine::Matrix4x4& LightManager::GetDirectionalShadowViewProjection(const 
     engine::Math math;
     engine::Vector3 lightDirection = directionalLightData_.direction;
 
+    // 光の方向に十分な長さがあれば、影用の視点計算に使う単位ベクトルを得ます。
     if (engine::Math::Length(lightDirection) > 0.0001f) {
         lightDirection = engine::Math::Normalize(lightDirection);
     }
+    // 方向がほぼゼロなら真下向きで影を作ります。
     else {
         lightDirection = { 0.0f, -1.0f, 0.0f };
     }
@@ -298,6 +312,7 @@ const engine::Matrix4x4& LightManager::GetDirectionalShadowViewProjection(const 
         changed(lightDirection.y, cachedShadowDirection_.y) ||
         changed(lightDirection.z, cachedShadowDirection_.z);
 
+    // 初回か、基準位置・光の向き・範囲が許容差を超えて変化した場合に再計算します。
     if (!shadowMatrixCacheValid_ || eyeChanged || directionChanged || changed(areaSize, cachedShadowAreaSize_)) {
         // 影の基準位置から光の進行方向と逆へ200ワールド単位離し、平行光用の正射影を組み立てます。
         const engine::Vector3 lightPosition = {
@@ -308,6 +323,7 @@ const engine::Matrix4x4& LightManager::GetDirectionalShadowViewProjection(const 
 
         engine::Vector3 up = { 0.0f, 1.0f, 0.0f };
 
+        // 光がほぼ垂直なときは、視線と上方向が平行に近づかないようZ軸を上方向にします。
         if (std::abs(lightDirection.x) < 0.001f && std::abs(lightDirection.z) < 0.001f) {
             up = { 0.0f, 0.0f, 1.0f };
         }
@@ -324,13 +340,14 @@ const engine::Matrix4x4& LightManager::GetDirectionalShadowViewProjection(const 
     return directionalLightData_.lightViewProj;
 }
 
-int LightManager::GetShadowMapResolution() const {
+std::int32_t LightManager::GetShadowMapResolution() const {
     // 描画基盤が未初期化の間は標準解像度で設定画面を表示します。
     return dxCommon_ ? dxCommon_->GetShadowMapResolution() : 2048;
 }
 
-void LightManager::SetShadowMapResolution(int resolution) {
+void LightManager::SetShadowMapResolution(std::int32_t resolution) {
     // 実際のShadow Mapを所有する描画基盤へ変更要求を渡します。
+    // 描画基盤が利用できる場合にだけ解像度変更を依頼します。
     if (dxCommon_) {
         dxCommon_->SetShadowMapResolution(resolution);
     }
@@ -344,6 +361,7 @@ void LightManager::SetShadowAreaSize(float size) {
 
 void LightManager::ApplySceneClearColor() {
     // Scene背景色をレンダーターゲットのクリア値へ反映します。
+    // 描画基盤が未初期化なら、クリア値の反映をここでは行いません。
     if (!dxCommon_) {
         return;
     }
@@ -357,6 +375,7 @@ void LightManager::ApplySceneClearColor() {
 
 // 既定の点光源を登録できればtrue。GPUへ転送する数の上限に達していれば、一覧は変更しない。
 bool LightManager::AddPointLight() {
+    // 常設点光源の登録枠が上限なら、新しいライトを生成できません。
     if (pointLights_.size() >= kMaxPointLights)
         return false;
 
@@ -372,7 +391,7 @@ bool LightManager::AddPointLight() {
 
     // 制御用データの初期化
     instance.baseIntensity = 1.0f;
-    instance.mode = LightMode::None;
+    instance.mode = LightMode::kNone;
     instance.target = nullptr;
 
     pointLights_.push_back(instance);
@@ -381,6 +400,7 @@ bool LightManager::AddPointLight() {
 
 // 既定のスポットライトを登録できればtrue。上限超過時は対象の一覧だけを保持する。
 bool LightManager::AddSpotLight() {
+    // 常設スポットライトの登録枠を使い切ったら、一覧を変更せず false を返します。
     if (spotLights_.size() >= kMaxSpotLights)
         return false;
 
@@ -397,7 +417,7 @@ bool LightManager::AddSpotLight() {
 
     // 制御用データ
     instance.baseIntensity = 2.0f;
-    instance.mode = LightMode::None;
+    instance.mode = LightMode::kNone;
     instance.target = nullptr;
 
     spotLights_.push_back(instance);
@@ -406,6 +426,7 @@ bool LightManager::AddSpotLight() {
 
 bool LightManager::SetPointLight(std::size_t index, const PointLightInstance& value) {
     // 半径・減衰・基準強度を非負に補正してから保存します。
+    // 指定した添字が一覧の範囲外なら差し替えません。
     if (index >= pointLights_.size())
         return false;
     pointLights_[index] = value;
@@ -417,6 +438,7 @@ bool LightManager::SetPointLight(std::size_t index, const PointLightInstance& va
 
 bool LightManager::SetSpotLight(std::size_t index, const SpotLightInstance& value) {
     // 到達距離と減衰の負値を排除し、GPUへ渡す設定を保ちます。
+    // 指定した添字が一覧の範囲外なら差し替えません。
     if (index >= spotLights_.size())
         return false;
     spotLights_[index] = value;
@@ -459,7 +481,7 @@ void LightManager::PlayPointLightPulse(
     float radius,
     float duration,
     float decay) {
-    // 一時ライトの寿命に下限を置き、次の更新で確実に減衰できるようにします。
+    // 位置と色を指定した一時発光を登録し、秒単位の寿命を最低0.001秒にします。Update() が減衰と破棄を担当します。
     TransientPointLight pulse;
     pulse.data.color = color;
     pulse.data.position = position;
@@ -472,27 +494,31 @@ void LightManager::PlayPointLightPulse(
 }
 
 bool LightManager::SetSkyboxTexturePath(const std::string& texturePath) {
-    // 存在確認とTexture読込に成功した場合だけ現在のSkybox設定を更新します。
+    // 空のパスは設定として受け付けません。
     if (texturePath.empty()) {
         return false;
     }
 
     try {
+        // ファイルが存在しなければ、現在の設定を保持します。
         if (!std::filesystem::exists(texturePath)) {
             return false;
         }
 
+        // 存在を確認できたパスを記録してから sRGB テクスチャを読み込みます。
         skyboxTexturePath_ = texturePath;
-        skyboxTextureHandle_ = TextureManager::GetInstance()->Load(
+        skyboxTextureHandle_ = engine::TextureManager::GetInstance()->Load(
             texturePath,
-            TextureManager::TextureColorSpace::SRGB);
+            engine::TextureManager::TextureColorSpace::kSRGB);
         return true;
     } catch (...) {
+        // パスの確認や読み込みで例外が出た場合は失敗を返します。パス記録後の例外では記録したパスが残ります。
         return false;
     }
 }
 
 bool LightManager::SaveState(const std::string& filename) {
+    // 背景・影と常設ライトの現在値をJSONへまとめます。一時発光や追従先の参照は保存しません。
     json root;
 
     root["clearColor"] = { sceneClearColor_.x, sceneClearColor_.y, sceneClearColor_.z, sceneClearColor_.w };
@@ -501,7 +527,7 @@ bool LightManager::SaveState(const std::string& filename) {
     root["shadow"]["resolution"] = GetShadowMapResolution();
     root["shadow"]["areaSize"] = shadowAreaSize_;
 
-    // --- 平行光源 ---
+    // 平行光の向きや強度とフォグ設定を保存します。
     root["directionalLight"]["color"] = { directionalLightData_.color.x, directionalLightData_.color.y, directionalLightData_.color.z, directionalLightData_.color.w };
     root["directionalLight"]["direction"] = { directionalLightData_.direction.x, directionalLightData_.direction.y, directionalLightData_.direction.z };
     root["directionalLight"]["intensity"] = directionalLightData_.intensity;
@@ -515,7 +541,7 @@ bool LightManager::SaveState(const std::string& filename) {
     root["directionalLight"]["volumetricSteps"] = directionalLightData_.volumetricSteps;
     root["directionalLight"]["enableFog"] = directionalLightData_.enableFog;
 
-    // --- 点光源 ---
+    // 点光源の描画値と点滅の基準値を別々に保存します。
     json pArray = json::array();
 
     for (const auto& instance : pointLights_) {
@@ -530,9 +556,9 @@ bool LightManager::SaveState(const std::string& filename) {
         j["radius"] = l.radius;
         j["decay"] = l.decay;
 
-        // 制御データ (拡張)
+        // 読み込み後も点滅と位置補正を再現できるよう制御値を保持します。
         j["baseIntensity"] = instance.baseIntensity;
-        j["mode"] = static_cast<int>(instance.mode);
+        j["mode"] = static_cast<std::int32_t>(instance.mode);
         j["speed"] = instance.speed;
         j["offset"] = { instance.offset.x, instance.offset.y, instance.offset.z };
 
@@ -541,7 +567,7 @@ bool LightManager::SaveState(const std::string& filename) {
 
     root["pointLights"] = pArray;
 
-    // --- スポットライト ---
+    // スポットライトでは向きとコーンの減衰角も保存します。
     json sArray = json::array();
 
     for (const auto& instance : spotLights_) {
@@ -559,7 +585,7 @@ bool LightManager::SaveState(const std::string& filename) {
 
         // 制御データ
         j["baseIntensity"] = instance.baseIntensity;
-        j["mode"] = static_cast<int>(instance.mode);
+        j["mode"] = static_cast<std::int32_t>(instance.mode);
         j["speed"] = instance.speed;
         j["offset"] = { instance.offset.x, instance.offset.y, instance.offset.z };
 
@@ -571,6 +597,7 @@ bool LightManager::SaveState(const std::string& filename) {
     try {
         const std::filesystem::path path(filename);
 
+        // 親フォルダーを含む保存先の場合は、書き込み前にフォルダーを作成します。
         if (!path.parent_path().empty()) {
             std::filesystem::create_directories(path.parent_path());
         }
@@ -580,6 +607,7 @@ bool LightManager::SaveState(const std::string& filename) {
 
     std::ofstream file(filename, std::ios::trunc);
 
+    // 保存先を開けない場合は、状態ファイルの記録を更新しません。
     if (!file.is_open()) {
         return false;
     }
@@ -587,6 +615,7 @@ bool LightManager::SaveState(const std::string& filename) {
     file << root.dump(4);
     const bool result = file.good();
 
+    // 出力ストリームが正常な場合に保存先と成功状態を記録します。
     if (result) {
         currentStateFile_ = filename;
         lastLoadSucceeded_ = true;
@@ -596,10 +625,12 @@ bool LightManager::SaveState(const std::string& filename) {
 }
 
 bool LightManager::LoadState(const std::string& filename) {
+    // 読み込みを試みたファイルを記録し、復元が終わるまでは失敗扱いにします。
     currentStateFile_ = filename;
     lastLoadSucceeded_ = false;
 
     std::ifstream file(filename);
+    // 設定ファイルを開けなければ、現在のライトを保持します。
     if (!file.is_open())
         return false;
 
@@ -610,11 +641,13 @@ bool LightManager::LoadState(const std::string& filename) {
     // ファイルの読み取りと解析が済んでから、前シーンの点光源・スポットライト・一時発光を取り除きます。
     ClearAllLights();
 
+    // 背景色に配列の4成分があれば、RGBAとして反映します。
     if (root.contains("clearColor") && root["clearColor"].is_array() && root["clearColor"].size() >= 4) {
         sceneClearColor_.x = root["clearColor"][0];
         sceneClearColor_.y = root["clearColor"][1];
         sceneClearColor_.z = root["clearColor"][2];
         sceneClearColor_.w = root["clearColor"][3];
+    // 背景色が無いか、配列としての成分数が足りなければ既定色を使います。
     } else {
         sceneClearColor_ = { 0.1f, 0.25f, 0.5f, 1.0f };
     }
@@ -623,27 +656,33 @@ bool LightManager::LoadState(const std::string& filename) {
 
     skyboxEnabled_ = true;
 
+    // 空の設定がJSONオブジェクトなら、指定されている項目を反映します。
     if (root.contains("skybox") && root["skybox"].is_object()) {
         const json& skybox = root["skybox"];
 
+        // 表示フラグが保存されていれば、直前に設定した既定の有効状態を上書きします。
         if (skybox.contains("enabled")) {
             skyboxEnabled_ = skybox["enabled"].get<bool>();
         }
 
+        // テクスチャパスが文字列として保存されていれば読み込みを試します。
         if (skybox.contains("texture") && skybox["texture"].is_string()) {
             const std::string texturePath = skybox["texture"].get<std::string>();
 
+            // 指定画像を設定できない場合は、標準のスカイボックス画像へフォールバックします。
             if (!SetSkyboxTexturePath(texturePath)) {
                 SetSkyboxTexturePath("Resources/output_skybox.dds");
             }
         }
+    // 空の設定が無いかオブジェクトでなければ、標準の画像を設定します。
     } else {
         SetSkyboxTexturePath("Resources/output_skybox.dds");
     }
 
-    int shadowResolution = 2048;
+    std::int32_t shadowResolution = 2048;
     float shadowAreaSize = 80.0f;
 
+    // 影設定がオブジェクトであれば、含まれる解像度と範囲を読み取ります。
     if (root.contains("shadow") && root["shadow"].is_object()) {
         const json& shadow = root["shadow"];
         shadowResolution = shadow.value("resolution", shadowResolution);
@@ -653,7 +692,7 @@ bool LightManager::LoadState(const std::string& filename) {
     SetShadowMapResolution(shadowResolution);
     SetShadowAreaSize(shadowAreaSize);
 
-    // --- 平行光源 ---
+    // 平行光の項目が保存されている場合に復元し、項目が無ければその項目の現在値を保ちます。
     if (root.contains("directionalLight")) {
         json& d = root["directionalLight"];
 
@@ -678,7 +717,7 @@ bool LightManager::LoadState(const std::string& filename) {
             directionalLightData_.ambientColor.z = d["ambientColor"][2];
         }
 
-        // フォグの設定
+        // フォグも、各項目のキーが存在する場合だけ距離・高さ・色・品質・有効状態を更新します。
         if (d.contains("fogStart"))
             directionalLightData_.fogStart = d["fogStart"];
         if (d.contains("fogEnd"))
@@ -702,7 +741,7 @@ bool LightManager::LoadState(const std::string& filename) {
             directionalLightData_.enableFog = d["enableFog"];
     }
 
-    // 名前や色、点滅制御など、光源の種類によらない保存項目を復元する。
+    // 点光源とスポットライトの共通項目は、各キーがある場合だけ新規ライトの既定値を上書きします。
     const auto readCommonLight = [](const nlohmann::json& j, auto& instance) {
         auto& l = instance.data;
         if (j.contains("name"))
@@ -726,6 +765,7 @@ bool LightManager::LoadState(const std::string& filename) {
         // 旧ファイルに基準強度がなければ、読み込んだ強さを点滅の基準にする。
         if (j.contains("baseIntensity"))
             instance.baseIntensity = j["baseIntensity"];
+        // 基準強度の無い旧形式では、今回復元した強度を明滅にも使います。
         else instance.baseIntensity = l.intensity;
 
         if (j.contains("mode"))
@@ -739,14 +779,16 @@ bool LightManager::LoadState(const std::string& filename) {
         }
     };
 
-    // --- 点光源 ---
+    // 点光源の配列が保存されていれば、既定値で登録してから各要素を反映します。
     if (root.contains("pointLights") && root["pointLights"].is_array()) {
         for (const auto& j : root["pointLights"]) {
             PointLightInstance* instance = AddPointLight() ? &pointLights_.back() : nullptr;
 
+            // 登録枠に収まった要素だけを復元し、値を補正して一覧に残します。
             if (instance) {
                 readCommonLight(j, *instance);
                 auto& l = instance->data;
+                // 半径が保存されている場合に既定の作用範囲を上書きします。
                 if (j.contains("radius"))
                     l.radius = j["radius"];
                 SetPointLight(pointLights_.size() - 1, *instance);
@@ -754,11 +796,12 @@ bool LightManager::LoadState(const std::string& filename) {
         }
     }
 
-    // --- スポットライト ---
+    // スポットライトの配列が保存されていれば、方向や照射範囲も要素ごとに復元します。
     if (root.contains("spotLights") && root["spotLights"].is_array()) {
         for (const auto& j : root["spotLights"]) {
             SpotLightInstance* instance = AddSpotLight() ? &spotLights_.back() : nullptr;
 
+            // 登録できた場合だけ共通項目とスポット固有の項目を復元します。固有項目が欠けていればそれぞれの既定値を保ちます。
             if (instance) {
                 readCommonLight(j, *instance);
                 auto& l = instance->data;
@@ -778,6 +821,7 @@ bool LightManager::LoadState(const std::string& filename) {
         }
     }
 
+    // ライトの全項目を取り込めた時点で読み込み成功を記録します。
     lastLoadSucceeded_ = true;
     return true;
 }
@@ -794,9 +838,10 @@ LightManager::EnvironmentProfileState LightManager::CaptureEnvironmentProfile() 
 
     PostEffect* postEffect = PostEffect::GetInstance();
 
+    // PostEffect のパラメーターが取得できた場合だけ、描画補正の現在値も記録します。
     if (const PostEffect::Params* params = postEffect->GetParams()) {
         profile.post.bloomEnabled = postEffect->IsBloomEnabled();
-        profile.post.bloomQuality = static_cast<int>(postEffect->GetBloomQuality());
+        profile.post.bloomQuality = static_cast<std::int32_t>(postEffect->GetBloomQuality());
         profile.post.threshold = params->threshold;
         profile.post.bloomIntensity = params->bloomIntensity;
         profile.post.spread = params->spread;
@@ -818,7 +863,7 @@ LightManager::EnvironmentProfileState LightManager::CaptureEnvironmentProfile() 
 }
 
 bool LightManager::SaveEnvironmentProfile(const std::string& filename) const {
-    // 現在の環境状態をスキーマ付きJSONへ書き出します。
+    // 現在の環境をスキーマ付きJSONで保存します。保存先が空なら書き込みを開始しません。
     if (filename.empty()) {
         return false;
     }
@@ -882,9 +927,11 @@ bool LightManager::SaveEnvironmentProfile(const std::string& filename) const {
     const std::filesystem::path path(filename);
     std::error_code error;
 
+    // 親フォルダーが指定されていれば、出力を開く前に作成を試します。
     if (!path.parent_path().empty()) {
         std::filesystem::create_directories(path.parent_path(), error);
 
+        // フォルダー作成に失敗した場合は、書き込みに進みません。
         if (error) {
             return false;
         }
@@ -892,6 +939,7 @@ bool LightManager::SaveEnvironmentProfile(const std::string& filename) const {
 
     std::ofstream file(path, std::ios::binary);
 
+    // ファイルを開けなければ保存失敗を返します。
     if (!file) {
         return false;
     }
@@ -906,6 +954,7 @@ bool LightManager::LoadEnvironmentProfile(
     // JSONにない項目は現行環境を初期値にし、古いプロファイルも読み込めるようにします。
     std::ifstream file(filename, std::ios::binary);
 
+    // 入力を開けなければ、出力プロファイルを書き換えません。
     if (!file) {
         return false;
     }
@@ -916,12 +965,14 @@ bool LightManager::LoadEnvironmentProfile(
         profile = CaptureEnvironmentProfile();
 
         const auto readVector3 = [](const json& value, engine::Vector3& destination) {
+            // 配列に3成分以上あるときだけXYZまたはRGBを読み込みます。
             if (value.is_array() && value.size() >= 3) {
                 destination = { value[0].get<float>(), value[1].get<float>(), value[2].get<float>() };
             }
         };
 
         const auto readVector4 = [](const json& value, engine::Vector4& destination) {
+            // 配列に4成分以上あるときだけRGBAを読み込みます。
             if (value.is_array() && value.size() >= 4) {
                 destination = {
                     value[0].get<float>(), value[1].get<float>(),
@@ -930,6 +981,7 @@ bool LightManager::LoadEnvironmentProfile(
             }
         };
 
+        // 平行光の設定がオブジェクトとしてあれば、存在する保存項目を既定値へ重ねます。
         if (root.contains("directionalLight") && root["directionalLight"].is_object()) {
             const json& source = root["directionalLight"];
             DirectionalLight& light = profile.directionalLight;
@@ -951,22 +1003,26 @@ bool LightManager::LoadEnvironmentProfile(
             light.enableFog = source.value("enableFog", light.enableFog);
         }
 
+        // 背景色が指定されている場合は、配列の成分数を確認してから反映します。
         if (root.contains("clearColor")) {
             readVector4(root["clearColor"], profile.clearColor);
         }
 
+        // 影設定がオブジェクトの場合に解像度と範囲を取得します。
         if (root.contains("shadow") && root["shadow"].is_object()) {
             const json& source = root["shadow"];
             profile.shadowMapResolution = source.value("resolution", profile.shadowMapResolution);
             profile.shadowAreaSize = source.value("areaSize", profile.shadowAreaSize);
         }
 
+        // 空の設定がオブジェクトの場合に表示フラグと画像パスを取得します。
         if (root.contains("skybox") && root["skybox"].is_object()) {
             const json& source = root["skybox"];
             profile.skyboxEnabled = source.value("enabled", profile.skyboxEnabled);
             profile.skyboxTexturePath = source.value("texture", profile.skyboxTexturePath);
         }
 
+        // 描画補正の設定がオブジェクトの場合に、書かれているパラメーターを採用します。
         if (root.contains("postEffect") && root["postEffect"].is_object()) {
             const json& source = root["postEffect"];
             EnvironmentPostSettings& post = profile.post;
@@ -989,6 +1045,7 @@ bool LightManager::LoadEnvironmentProfile(
             post.colorTint = source.value("colorTint", post.colorTint);
         }
 
+        // 影解像度と範囲、ブルーム品質を選択可能な範囲へ寄せて読み込みを終えます。
         profile.shadowMapResolution =
             profile.shadowMapResolution <= 1024 ? 1024 :
             (profile.shadowMapResolution <= 2048 ? 2048 : 4096);
@@ -1005,6 +1062,7 @@ bool LightManager::ApplyEnvironmentProfile(const std::string& filename, float bl
     // 読込失敗時は現在の環境を維持し、成功時だけ補間を開始します。
     EnvironmentProfileState profile;
 
+    // 指定のプロファイルを読み込めなければ、適用に進みません。
     if (!LoadEnvironmentProfile(filename, profile)) {
         return false;
     }
@@ -1026,6 +1084,7 @@ void LightManager::ApplyEnvironmentProfile(
     environmentBlendActive_ = environmentBlendDuration_ > 0.0001f;
     environmentBlendDiscreteApplied_ = false;
 
+    // 補間時間が0.0001秒以下なら、次フレームを待たず直接目標値を設定します。
     if (!environmentBlendActive_) {
         directionalLightData_ = profile.directionalLight;
         sceneClearColor_ = profile.clearColor;
@@ -1033,6 +1092,7 @@ void LightManager::ApplyEnvironmentProfile(
         SetShadowAreaSize(profile.shadowAreaSize);
         skyboxEnabled_ = profile.skyboxEnabled;
 
+        // スカイボックスのパスが空でない場合だけ、画像の差し替えを試みます。
         if (!profile.skyboxTexturePath.empty()) {
             SetSkyboxTexturePath(profile.skyboxTexturePath);
         }
@@ -1041,11 +1101,13 @@ void LightManager::ApplyEnvironmentProfile(
 
         PostEffect* postEffect = PostEffect::GetInstance();
 
+        // PostEffect のパラメーターが取れるときは描画補正も即時適用します。
         if (PostEffect::Params* params = postEffect->GetParams()) {
             const EnvironmentPostSettings& post = profile.post;
             postEffect->SetBloomEnabled(post.bloomEnabled);
             postEffect->SetBloomQuality(static_cast<PostEffect::BloomQuality>(post.bloomQuality));
 
+            // LUT画像パスが空でない場合だけ、画像を差し替えます。
             if (!post.lutTexturePath.empty()) {
                 postEffect->SetLUTTexturePath(post.lutTexturePath);
             }
@@ -1069,7 +1131,7 @@ void LightManager::ApplyEnvironmentProfile(
 }
 
 void LightManager::UpdateEnvironmentProfile(float deltaTime) {
-    // Smoothstepで照明と背景色を滑らかに移し、完了時に目標値を確定します。
+    // 補間開始からの秒数を使って照明と背景色を更新します。補間の要求が無ければ処理しません。
     if (!environmentBlendActive_) {
         return;
     }
@@ -1094,6 +1156,7 @@ void LightManager::UpdateEnvironmentProfile(float deltaTime) {
     directionalLightData_.color = lerp4(fromLight.color, toLight.color);
     directionalLightData_.direction = lerp3(fromLight.direction, toLight.direction);
 
+    // 補間結果の光の方向がほぼゼロでない場合は正規化します。
     if (engine::Math::Length(directionalLightData_.direction) > 0.0001f) {
         directionalLightData_.direction = engine::Math::Normalize(directionalLightData_.direction);
     }
@@ -1118,6 +1181,7 @@ void LightManager::UpdateEnvironmentProfile(float deltaTime) {
 
     PostEffect* postEffect = PostEffect::GetInstance();
 
+    // 描画補正のパラメーターを取得できる場合は、連続値を同じ進捗で更新します。
     if (PostEffect::Params* params = postEffect->GetParams()) {
         const EnvironmentPostSettings& from = environmentBlendFrom_.post;
         const EnvironmentPostSettings& to = environmentBlendTo_.post;
@@ -1141,12 +1205,14 @@ void LightManager::UpdateEnvironmentProfile(float deltaTime) {
         environmentBlendDiscreteApplied_ = true;
         skyboxEnabled_ = environmentBlendTo_.skyboxEnabled;
 
+        // 新しいスカイボックスのパスが空でない場合に、画像も切り替えます。
         if (!environmentBlendTo_.skyboxTexturePath.empty()) {
             SetSkyboxTexturePath(environmentBlendTo_.skyboxTexturePath);
         }
 
         SetShadowMapResolution(environmentBlendTo_.shadowMapResolution);
 
+        // 新しいLUT画像の指定がある場合に、色変換用の画像を切り替えます。
         if (!environmentBlendTo_.post.lutTexturePath.empty()) {
             postEffect->SetLUTTexturePath(environmentBlendTo_.post.lutTexturePath);
         }
@@ -1154,11 +1220,13 @@ void LightManager::UpdateEnvironmentProfile(float deltaTime) {
         postEffect->SetBloomEnabled(environmentBlendTo_.post.bloomEnabled);
         postEffect->SetBloomQuality(
             static_cast<PostEffect::BloomQuality>(environmentBlendTo_.post.bloomQuality));
+        // 描画補正のパラメーターが取れる場合、トーンマッピングの有効状態も切り替えます。
         if (PostEffect::Params* params = postEffect->GetParams()) {
             params->enableToneMapping = environmentBlendTo_.post.enableToneMapping;
         }
     }
 
+    // 経過率が100%に達したら、目標値を確定して補間を終えます。
     if (linearT >= 1.0f) {
         const std::string completedProfileFile =
             currentEnvironmentProfileFile_;

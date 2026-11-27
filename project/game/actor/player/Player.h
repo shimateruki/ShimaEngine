@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "Character.h"
 #include "game/actor/player/PlayerDefaults.h"
 #include "game/actor/player/combat/PlayerAttackInputBuffer.h"
@@ -19,7 +20,7 @@
 #include <unordered_set>
 #include <vector>
 
-class IMoveStrategy; // 前方宣言
+class IMoveStrategy;
 namespace engine { class SpriteCommon; }
 class BaseEnemy;
 
@@ -29,19 +30,17 @@ class BaseEnemy;
 class Player : public Character {
   public:
     enum class EnemyMorphType {
-        None = 0,
-        Slime = 1,
-        Bomber = 2,
+        kNone = 0,
+        kSlime = 1,
+        kBomber = 2,
         // 値3～6は廃止したコピー能力とのリプレイ互換用に予約します。
-        FireSlime = 7,
-        ThunderSlime = 8,
-        WindSlime = 9,
-        Crown = 10
+        kFireSlime = 7,
+        kThunderSlime = 8,
+        kWindSlime = 9,
+        kCrown = 10
     };
 
-    // ==================================================
     // 基本サイクル
-    // ==================================================
     /// <summary>プレイヤーが保持する状態、演出、補助オブジェクトを破棄します。</summary>
     ~Player() override;
 
@@ -63,11 +62,11 @@ class Player : public Character {
     /// <summary>指定カメラ向けにプレイヤーの表示物を描画します。</summary>
     /// <param name="previewBufferIndex">プレビュー用の描画バッファ番号。</param>
     void DrawForCamera(engine::Camera* camera, ID3D12Resource* pointLightResource, ID3D12Resource* spotLightResource,
-                       int previewBufferIndex = 0) override;
+                       std::int32_t previewBufferIndex = 0) override;
 
     /// <summary>指定カメラ向けに特殊マテリアルの描画パスを実行します。</summary>
     void DrawSpecialMaterialForCamera(engine::Camera* camera, uint32_t depthSrvHandle, uint32_t grabSrvHandle,
-                                      int previewBufferIndex = 0) override;
+                                      std::int32_t previewBufferIndex = 0) override;
 
     /// <summary>プレイヤーが追加の特殊マテリアル表示物を所有するか返します。</summary>
     bool HasOwnedSpecialMaterialVisuals() const override;
@@ -77,7 +76,7 @@ class Player : public Character {
 
     /// <summary>指定カメラ向けに所有する特殊マテリアル表示物を描画します。</summary>
     void DrawOwnedSpecialMaterialVisualsForCamera(engine::Camera* camera, uint32_t depthSrvHandle, uint32_t grabSrvHandle,
-                                                  int previewBufferIndex = 0) override;
+                                                  std::int32_t previewBufferIndex = 0) override;
 
     /// <summary>HUD はシーン側が描くため、現在この入口では描画を行いません。</summary>
     void DrawUi();
@@ -85,16 +84,12 @@ class Player : public Character {
     /// <summary>管理対象の本体スケールを変更し、現在の姿に反映します。</summary>
     void ApplyManagedScale(const engine::Vector3& scale) override;
 
-    // ==================================================
     // 衝突判定
-    // ==================================================
     /// <summary>他のオブジェクトとの接触を処理します。</summary>
     /// <returns>この接触を処理した場合は true。</returns>
     bool OnCollision(engine::Object3D* other) override;
 
-    // ==================================================
     // アニメーション・状態管理 (State Pattern)
-    // ==================================================
     /// <summary>現在の状態を終了し、新しいアニメーション状態へ移ります。</summary>
     /// <param name="newState">所有権を受け取る次の状態。</param>
     void ChangeState(std::unique_ptr<IAnimationState> newState);
@@ -142,7 +137,7 @@ class Player : public Character {
     void TriggerSlimeImpulse(const engine::Vector3& scale, float duration);
 
     /// <summary>スライム本体に能力モーションを再生します。</summary>
-    /// <param name="clipName">Animator内のクリップ名。</param>
+    /// <param name="clipName">AnimatorのState ID。状態が無い場合は本体クリップの名前として使います。</param>
     /// <param name="loop">末尾で繰り返す場合は true。</param>
     /// <param name="playbackSpeed">再生速度の倍率。</param>
     /// <param name="blendInDuration">開始時のブレンド秒数。</param>
@@ -188,22 +183,19 @@ class Player : public Character {
     /// <summary>ムービーなどによりプレイヤー操作がロックされているか返します。</summary>
     bool IsCinematicLocked() const { return isCinematicLocked_; }
 
-    // ==================================================
     // 移動制御 (Strategy Pattern)
-    // ==================================================
     /// <summary>移動戦略の所有権を受け取り、以後の移動計算に使用します。</summary>
     void SetMoveStrategy(std::unique_ptr<IMoveStrategy> strategy);
 
-    /// <summary>ダッシュパネルの速度・旋回補正を指定時間だけ適用します。</summary>
-    /// <param name="duration">効果時間（秒）。</param>
+    /// <summary>ダッシュパネルの速度・旋回補正を、解除されるまで適用します。</summary>
     /// <param name="speedMultiplier">移動速度の倍率。</param>
     /// <param name="turnMultiplier">旋回速度の倍率。</param>
-    void ApplyDashPanelBoost(float duration, float speedMultiplier, float turnMultiplier);
+    void ApplyDashPanelBoost(float speedMultiplier, float turnMultiplier);
 
     // UI がパネルの加速状態を読む入口。通常ダッシュやコピー技の状態は含まない。
     bool IsDashPanelBoostActive() const;
 
-    // 接触被弾が成立した時に、パネル加速だけを終える。
+    // 被ダメージや解除パネルで、パネル加速だけを終える。
     void CancelDashPanelBoost();
 
     /// <summary>衝撃ゲートを壊せる通常攻撃またはコピー突進の最中か返します。</summary>
@@ -213,9 +205,7 @@ class Player : public Character {
     /// <remarks>通常攻撃では反応しない能力専用ギミックの判定に使用します。</remarks>
     bool IsPinkBounceSlamImpactActive() const;
 
-    // ==================================================
     // アクセス
-    // ==================================================
     // --- 物理・姿勢 ---
     /// <summary>現在の移動速度を取得・設定します。</summary>
     using Character::SetVelocity;
@@ -237,6 +227,7 @@ class Player : public Character {
     /// <summary>隔離エディターの能力プレビューに一フレーム分の入力を渡します。</summary>
     /// <remarks>通常のプレイヤーには適用しません。</remarks>
     void SetCopyPreviewInput(const PlayerCopyAbilityInput& input) {
+        // 通常の入力を置き換えないよう、エディター内専用の個体にだけ受け付ける。
         if (IsEditorInternal()) {
             copyPreviewActive_ = true;
             copyPreviewInput_ = input;
@@ -245,12 +236,14 @@ class Player : public Character {
 
     /// <summary>隔離プレビュー中のコピー能力を解除します。</summary>
     void ReleaseCopyPreview() {
+        // 隔離された個体に限って、時間切れ以外の解除として始める。
         if (IsEditorInternal())
             BeginEnemyMorphRelease(false);
     }
 
     /// <summary>隔離プレビュー中の地面の高さを設定します。</summary>
     void SetCopyPreviewGroundHeight(float height) {
+        // 隔離された個体だけが、シーンとは別の床のY座標を持つ。
         if (IsEditorInternal())
             copyPreviewGroundHeight_ = height;
     }
@@ -258,6 +251,7 @@ class Player : public Character {
     /// <summary>隔離プレビューが所有する一時オブジェクトを追加します。</summary>
     /// <param name="object">所有権を移すオブジェクト。</param>
     void AddCopyPreviewObject(std::unique_ptr<engine::Object3D> object) {
+        // 隔離された個体の場合にだけ、このプレビューが一時物の所有権を受け取る。
         if (IsEditorInternal())
             copyPreviewObjects_.push_back(std::move(object));
     }
@@ -272,16 +266,18 @@ class Player : public Character {
 
     /// <summary>隔離プレビューで再生する攻撃IDを指定します。</summary>
     void SetCopyPreviewAttackId(const std::string& id) {
+        // 隔離された個体で実行担当を用意できていれば、確認する攻撃を変更できる。
         if (IsEditorInternal() && copyAbilityController_)
             copyAbilityController_->SetPreviewAttackId(id);
     }
 
     /// <summary>隔離Actorの能力セッションを保存前の設定で準備します。</summary>
     void SetCopyPreviewProfile(const EnemyAttackProfile& profile) {
+        // 隔離された個体と能力の実行担当が揃った場合だけ、編集中のプロファイルを試す。
         if (IsEditorInternal() && copyAbilityController_) {
             // 古い能力の一時的な表示と判定を片付け、同じ能力を編集値で作り直します。
             copyAbilityController_->Cancel(*this);
-            copyAbilityController_->Activate(static_cast<int>(enemyMorphType_), profile);
+            copyAbilityController_->Activate(static_cast<std::int32_t>(enemyMorphType_), profile);
         }
     }
 
@@ -303,6 +299,7 @@ class Player : public Character {
     // 鞭の起点・方向は発射時の姿勢とロックオン位置から求めます。
     engine::Vector3 GetWhipOrigin() const;
     engine::Vector3 GetWhipDirection() const;
+    // 鞭の姿勢・描画・当たり判定で共用する調整値への参照を返す。
     const PlayerWhipSettings& GetWhipSettings() const { return whipSettings_; }
     void LoadWhipSettings();
     bool SaveWhipSettings() const;
@@ -311,17 +308,20 @@ class Player : public Character {
     void SetWhipBodyPose(const engine::Vector3& scale, const engine::Vector3& rotation, const engine::Vector3& shear = {}) {
         slimeAnimator_.SetWhipPose(scale, rotation, shear);
     }
+    // 描画に渡す鞭の本体の拡縮・回転・せん断を返す。
     const BodyAnimationClip::Sample& GetWhipBodyPose() const { return slimeAnimator_.GetWhipPose(); }
     float GetSlimePullProgress() const { return slimeAnimator_.GetPullProgress(); }
     void ClearWhipBodyPose();
     engine::Vector3 GetWhipVisualOrigin() const;
     std::shared_ptr<class PlayerWhipDeformer> AcquireWhipDeformer();
+    // 鞭の描画物を参照する。寿命は動作側が管理する。
     void SetActiveWhipVisual(const std::weak_ptr<PlayerWhipVisual>& visual) { activeWhipVisual_ = visual; }
     void RefreshWhipVisual();
     // 操作状態から独立して、終了した鞭の描画だけを短時間保持します。
     void BeginWhipReturn(const std::shared_ptr<PlayerWhipVisual>& visual);
     void UpdateWhipReturn(float deltaTime);
     void CancelWhipReturn();
+    // 描画終了の受け渡し待ちに保持している鞭か確認する。
     bool IsWhipReturnPending(const PlayerWhipVisual* visual) const { return pendingWhipReturn_.get() == visual; }
     void SetWhipReturnPose(const BodyAnimationClip::Sample& pose) { slimeAnimator_.SetWhipReturnPose(pose); }
 
@@ -330,7 +330,7 @@ class Player : public Character {
     engine::Vector3 GetMoveInputDirection();
 
     PlayerAttackMovement GetAttackMovement() const {
-        // 死亡・コピー解除中に攻撃の減速を通常移動へ持ち越さない。
+        // 生存中で能力の実行担当がある場合は、その攻撃中の移動補正を返す。それ以外は補正なしとする。
         return !IsDead() && copyAbilityController_ ? copyAbilityController_->GetAttackMovement() : PlayerAttackMovement{};
     }
 
@@ -427,14 +427,12 @@ class Player : public Character {
     engine::ParticleSystem* GetParticleSystem() { return particleSystem_; }
 
     /// <summary>設定済みのジャンプ力を返し、パラメーター自体が未設定のときだけ既定値を使う。</summary>
-    float GetJumpPower() const { return GetParameters().has_value() ? GetParameters()->jumpPower : PlayerDefaults::kJumpPower; }
+    float GetJumpPower() const { return GetParameters().has_value() ? GetParameters()->jumpPower : playerDefaults::kJumpPower; }
 
     /// <summary>設定済みの移動速度を返し、パラメーター自体が未設定のときだけ既定値を使う。</summary>
-    float GetMoveSpeed() const { return GetParameters().has_value() ? GetParameters()->speed : PlayerDefaults::kMoveSpeed; }
+    float GetMoveSpeed() const { return GetParameters().has_value() ? GetParameters()->speed : playerDefaults::kMoveSpeed; }
 
-    // ==================================================
     // 無敵フレーム (Invincibility) 管理
-    // ==================================================
     /// <summary>被弾後・ダッシュ中の無敵状態をそれぞれ設定します。</summary>
     void SetDamageInvincible(bool inv);
 
@@ -450,8 +448,8 @@ class Player : public Character {
     void NotifyGuardedHit(const engine::Vector3& sourcePosition);
 
     /// <summary>能力回避用に攻撃判定を伴わない無敵時間を開始します。</summary>
-    enum class EvasionFeedback { BodyFlash, PortalEdge };
-    void StartEvasionInvincibility(float duration, EvasionFeedback feedback = EvasionFeedback::BodyFlash);
+    enum class EvasionFeedback { kBodyFlash, kPortalEdge };
+    void StartEvasionInvincibility(float duration, EvasionFeedback feedback = EvasionFeedback::kBodyFlash);
 
     // 有効な被弾が確定したフレームに、現在の形態の被弾顔を短時間表示します。
     void StartHurtFace();
@@ -532,13 +530,13 @@ class Player : public Character {
 
   private:
     // 移動・アクション状態・姿勢・通常攻撃・コピー能力の実行部品をPlayerが所有する。
-    std::unique_ptr<PlayerMover> mover_ = nullptr;     // 移動処理の委譲先。
+    std::unique_ptr<PlayerMover> mover_;     // 移動処理の委譲先。
     PlayerWhipSettings whipSettings_;
     std::weak_ptr<PlayerWhipVisual> activeWhipVisual_;
     std::shared_ptr<PlayerWhipVisual> returningWhipVisual_;
     std::shared_ptr<PlayerWhipVisual> pendingWhipReturn_;
     std::shared_ptr<class PlayerWhipDeformer> whipDeformer_;
-    std::unique_ptr<IAnimationState> state_ = nullptr; // 現在のアクション状態。
+    std::unique_ptr<IAnimationState> state_; // 現在のアクション状態。
     PlayerSlimeAnimator slimeAnimator_;
     PlayerGateReturnAnimation gateReturnAnimation_;
     std::unique_ptr<PlayerBaseCombatController> baseCombatController_;
@@ -553,7 +551,10 @@ class Player : public Character {
     // コピー能力中だけ表示する装飾Objectを所有する。
     std::unique_ptr<engine::Object3D> copyAdornment_;
 
-    // 攻撃接触のダメージと反応を処理する。normalはワールド座標系の接触法線。
+    /// <summary>保持中の敵をカメラの向きへ投げ、処理の最後に運搬参照を解除する。</summary>
+    void ThrowCarriedEnemy();
+
+    // 攻撃接触のダメージと反応を処理する。normalは接触時のワールド座標系の法線。
     void ApplyContactDamage(engine::Object3D& other, std::uint32_t attribute, const engine::Vector3& normal);
 
     /// <summary>現在のコピー能力に付随する表示物を更新します。</summary>
@@ -584,7 +585,7 @@ class Player : public Character {
 
     // ムービーなどから通常の移動アニメーションを一時上書きする設定。
     bool forcedSlimeAnimationModeActive_ = false;
-    PlayerSlimeAnimator::Mode forcedSlimeAnimationMode_ = PlayerSlimeAnimator::Mode::Idle;
+    PlayerSlimeAnimator::Mode forcedSlimeAnimationMode_ = PlayerSlimeAnimator::Mode::kIdle;
     engine::Vector3 forcedSlimeAnimationDirection_{0.0f, 0.0f, 1.0f};
 
     // ムービー中に操作・衝突を制限し、終了時の復元値を保存する。
@@ -607,7 +608,7 @@ class Player : public Character {
 
     // 複数の無敵理由を個別に管理し、解除時に本体・子パーツの色を戻す。
     bool isInvincible_ = false;
-    engine::Vector4 savedColor_ = engine::Colors::White; // 無敵解除時に戻す色。
+    engine::Vector4 savedColor_ = engine::colors::kWhite; // 無敵解除時に戻す色。
 
     // 子パーツの色を保存して、無敵解除時に復元する
     std::unordered_map<engine::Object3D*, engine::Vector4> childSavedColors_;
@@ -623,7 +624,7 @@ class Player : public Character {
     bool isDashInvincible_ = false;
     bool isGuarding_ = false;
     float evasionInvincibleTimer_ = 0.0f; // 回避の無敵終了までの残り秒数。
-    EvasionFeedback evasionFeedback_ = EvasionFeedback::BodyFlash;
+    EvasionFeedback evasionFeedback_ = EvasionFeedback::kBodyFlash;
     bool isEvasionInvincible_ = false;
 
     // 被弾点滅の時計と、点滅開始前に表示されていた本体・子の状態。
@@ -631,7 +632,7 @@ class Player : public Character {
     bool damageBlinkVisibilityApplied_ = false; // 被弾点滅が本体の表示状態を上書きしているか。
     bool damageBlinkBodyVisible_ = true; // 点滅開始前に戻すための本体の表示状態。
     std::vector<bool> damageBlinkChildVisible_;
-    float deathTimer_ = 0.0f; // 死亡してからの経過時間。
+    float deathTimer_ = 0.0f; // 死亡してからの経過秒数。
 
     /// <summary>被弾無敵中の本体と子パーツの点滅を更新します。</summary>
     void UpdateDamageInvincibleBlinkVisibility();
@@ -661,8 +662,8 @@ class Player : public Character {
     void UpdateColor();
 
     // 落下復帰位置と初期姿勢。最初の更新時は配置値を基準として記録する。
-    engine::Vector3 respawnPosition_ = engine::Vector3::ZERO;
-    engine::Vector3 baseRotation_ = engine::Vector3::ZERO; // 初期回転。モデル姿勢補正にも使う。
+    engine::Vector3 respawnPosition_ = engine::Vector3::kZero;
+    engine::Vector3 baseRotation_ = engine::Vector3::kZero; // 初期回転。モデル姿勢補正にも使う。
     bool isFirstUpdate_ = true;
 
     // 有効なチェックポイントのObject名と、その時点のコピー能力。
@@ -676,14 +677,14 @@ class Player : public Character {
     // 保持中の敵と照準先は非所有参照。保持前の姿勢は解放時の復元値。
     engine::Object3D* carriedEnemy_ = nullptr;
     engine::Vector3 carriedEnemyBaseScale_ = {1.0f, 1.0f, 1.0f};
-    engine::Vector3 carriedEnemyBaseRotation_ = engine::Vector3::ZERO;
+    engine::Vector3 carriedEnemyBaseRotation_ = engine::Vector3::kZero;
     engine::Quaternion carriedEnemyBaseQuaternion_ = {0.0f, 0.0f, 0.0f, 1.0f};
     bool carriedEnemyBaseQuaternionMaster_ = true; // 運搬前の敵の回転方式。手放した際の復元に使う。
     bool hasCarriedEnemyBaseScale_ = false;
     engine::Object3D* aimTargetObject_ = nullptr;
 
     // コピー元の敵は借用し、能力種別・制限時間・経過時間をPlayerが管理する。
-    EnemyMorphType enemyMorphType_ = EnemyMorphType::None;
+    EnemyMorphType enemyMorphType_ = EnemyMorphType::kNone;
     BaseEnemy* enemyMorphSource_ = nullptr;
     bool isEnemyMorphed_ = false;
     bool enemyMorphHasTimeLimit_ = true; // コピー形態に時間制限を設けるか。
@@ -705,7 +706,7 @@ class Player : public Character {
     engine::Vector3 enemyMorphReleasePlayerScale_ = {1.0f, 1.0f, 1.0f};
     engine::Vector3 enemyMorphReleaseVisualScale_ = {0.5f, 0.5f, 0.5f};
 
-    engine::Vector3 enemyMorphReleaseStartPosition_ = engine::Vector3::ZERO;
+    engine::Vector3 enemyMorphReleaseStartPosition_ = engine::Vector3::kZero;
     engine::Vector3 enemyMorphReleaseDirection_ = {0.0f, 0.0f, -1.0f};
 
     engine::Vector4 enemyMorphReleaseTint_ = {1.0f, 1.0f, 1.0f, 1.0f};
@@ -720,9 +721,9 @@ class Player : public Character {
     float electricShockPendingInvincibleDuration_ = 0.0f;
     bool electricShockControlLocked_ = false;
     bool electricShockWasControlActive_ = true;
-    engine::Vector3 electricShockLockedPosition_ = engine::Vector3::ZERO;
+    engine::Vector3 electricShockLockedPosition_ = engine::Vector3::kZero;
     engine::Vector3 electricShockBaseScale_ = {1.0f, 1.0f, 1.0f};
-    engine::Vector3 electricShockBaseRotation_ = engine::Vector3::ZERO;
+    engine::Vector3 electricShockBaseRotation_ = engine::Vector3::kZero;
 
     // 感電中にPlayerへ追従するオーラの表示Object。
     std::unique_ptr<EffectObject3D> electricShockAuraEffect_;
@@ -732,9 +733,9 @@ class Player : public Character {
     std::string savedMorphTexturePath_;
     std::string savedMorphAnimName_;
     bool savedMorphAnimLoop_ = true;
-    engine::Vector4 savedMorphColor_ = engine::Colors::White;
+    engine::Vector4 savedMorphColor_ = engine::colors::kWhite;
     engine::Vector3 savedMorphScale_ = {1.0f, 1.0f, 1.0f};
-    int savedMorphMaterialType_ = 0;
+    std::int32_t savedMorphMaterialType_ = 0;
     float savedMorphEmissive_ = 1.0f;
     engine::Vector4 enemyMorphTint_ = {1.0f, 1.0f, 1.0f, 1.0f};
     std::vector<bool> savedMorphChildVisible_;
@@ -742,11 +743,11 @@ class Player : public Character {
 
     // 吸収演出が完了するまで、コピー候補の敵と元の姿勢を借用・保存する。
     BaseEnemy* pendingAbsorbEnemy_ = nullptr;
-    EnemyMorphType pendingAbsorbType_ = EnemyMorphType::None;
+    EnemyMorphType pendingAbsorbType_ = EnemyMorphType::kNone;
     engine::Vector3 pendingAbsorbEnemyBaseScale_ = {1.0f, 1.0f, 1.0f};
-    engine::Vector3 pendingAbsorbEnemyStartPos_ = engine::Vector3::ZERO;
+    engine::Vector3 pendingAbsorbEnemyStartPos_ = engine::Vector3::kZero;
     engine::Vector4 pendingAbsorbTint_ = {1.0f, 1.0f, 1.0f, 1.0f};
-    engine::Vector4 pendingAbsorbPlayerBaseColor_ = engine::Colors::White;
+    engine::Vector4 pendingAbsorbPlayerBaseColor_ = engine::colors::kWhite;
 
     // 吸収演出の経過秒数と粒子発生間隔。
     float absorbEffectTimer_ = 0.0f;

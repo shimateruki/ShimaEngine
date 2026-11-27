@@ -1,10 +1,12 @@
+#include <cstdint>
 #include "game/actor/enemy/boss/false_king/EnemyFalseKingSlime.Internal.h"
 
 #include "game/actor/combat/CombatGroundQuery.h"
 #include "game/actor/enemy/boss/core/BossChantVisual.h"
+#include "game/crown/CrownBarrageCamera.h"
 #include <algorithm>
 
-using namespace EnemyFalseKingSlimeImplementation;
+using namespace enemyFalseKingSlimeImplementation;
 
 namespace {
 BlendMode GetOwnedVisualBlendMode(engine::Object3D* visual) {
@@ -40,9 +42,9 @@ void EnemyFalseKingSlime::Initialize(engine::Object3DCommon* common, const std::
     SetEnableEnvMap(true);
     SetEnvIntensity(0.68f);
     SetEmissive(1.0f);
-    SetCollisionAttribute(CollisionCategories::Get("enemy"));
-    SetCollisionMask(CollisionCategories::Get("player") | CollisionCategories::Get("ground") | CollisionCategories::Get("player_attack") | CollisionCategories::Get("player_bullet"));
-    SetColliderType(ColliderType::Obb);
+    SetCollisionAttribute(engine::collisionCategories::Get("enemy"));
+    SetCollisionMask(engine::collisionCategories::Get("player") | engine::collisionCategories::Get("ground") | engine::collisionCategories::Get("player_attack") | engine::collisionCategories::Get("player_bullet"));
+    SetColliderType(engine::ColliderType::kObb);
     SetDefaultColor(GetColor());
     SyncCollisionBounds();
 }
@@ -58,7 +60,7 @@ void EnemyFalseKingSlime::UpdateState(float deltaTime) {
     // 登場・幕間・最終撃破中は通常 AI より専用の進行を優先します。
     deltaTime = (std::max)(0.0f, deltaTime);
 
-    // 編集へ戻った時には通常の配置復元へ進ませます。
+    // プレイ中の最終決着は姿勢を維持する。編集へ戻ったら専用状態を解除して配置の復元へ進む。
     if (finalDefeatHeld_ && SceneManager::GetInstance()->IsPlaying())
         return;
     if (finalDefeatHeld_)
@@ -79,6 +81,7 @@ void EnemyFalseKingSlime::UpdateState(float deltaTime) {
     // 最終局面のHP消滅は通常の死亡処理へ渡す前に、専用決着演出へ引き継ぎます。
     if (finalArenaStarted_ && battlePhase_ == 3 && GetParameters() && GetParameters()->hp <= 0 && !IsDead()) {
         auto* scene=dynamic_cast<GamePlayScene*>(SceneManager::GetInstance()->GetCurrentScene());
+        // 現在のシーンが決着演出を引き受けた場合だけ、ここで更新を終える。
         if (scene && scene->StartCrownDefeat(this))
             return;
     }
@@ -99,6 +102,7 @@ void EnemyFalseKingSlime::UpdateState(float deltaTime) {
     // デバッグ要求は通常攻撃プレビューが終わってから一度だけ段階を切り替えます。
     if (pendingDebugSeals_ && debugPreviewAttackId_.empty()) {
         pendingDebugSeals_ = false;
+        // 能力値がある場合だけHPを移行値に合わせ、第二形態の開始自体は要求に従って行う。
         if (GetParameters())
             SetParameter(&engine::EntityParameter::hp, GetEncounterMaximumHp() * 0.67f);
         BeginPhaseShift(2);
@@ -108,12 +112,13 @@ void EnemyFalseKingSlime::UpdateState(float deltaTime) {
     if (pendingDebugInterlude_ && debugPreviewAttackId_.empty()) {
         pendingDebugInterlude_ = false;
 
+        // 第二形態へ入っていないときだけ結晶を初期化し、既にある結晶は作り直さない。
         if (battlePhase_ != 2) {
             battlePhase_ = 2;
             InitializeCrownSeals();
         }
 
-        for (int i = 0; i < 3; ++i)
+        for (std::int32_t i = 0; i < 3; ++i)
             TryBreakCrownSeal(crownSeals_[i].position, i, true);
     }
 
@@ -161,6 +166,7 @@ void EnemyFalseKingSlime::UpdateState(float deltaTime) {
 
     UpdateBossTargetEngagement(targetDistance);
 
+    // 鉛直速度を引き継ぎ、水平速度は個別行動の結果を使って組み直す。
     const engine::Vector3 previousVelocity = GetVelocity();
     engine::Vector3 velocity = previousVelocity;
     velocity.x = 0.0f;
@@ -168,19 +174,19 @@ void EnemyFalseKingSlime::UpdateState(float deltaTime) {
     UpdateBehavior(deltaTime, targetDirection, targetDistance, velocity);
 
     // 待機中の追跡だけを平滑化し、地面のない方向へは次の一歩を出しません。
-    if (attackState_ == AttackState::Idle && locomotionPhase_ == LocomotionPhase::None && GetTarget() && GetParameters().has_value()) {
-        velocity = CombatMath::SmoothPlanarVelocity(previousVelocity, velocity, deltaTime, 4.5f);
+    if (attackState_ == AttackState::kIdle && locomotionPhase_ == LocomotionPhase::kNone && GetTarget() && GetParameters().has_value()) {
+        velocity = combatMath::SmoothPlanarVelocity(previousVelocity, velocity, deltaTime, 4.5f);
         const engine::Vector3 candidate = GetTranslate() + engine::Vector3{velocity.x * 0.48f, 0.0f, velocity.z * 0.48f};
 
-        if (IsGrounded() && !CombatGroundQuery::CanWalkTo(GetTranslate(), candidate, this, {5.0f, 14.0f}, 1.4f)) {
+        if (IsGrounded() && !combatGroundQuery::CanWalkTo(GetTranslate(), candidate, this, {5.0f, 14.0f}, 1.4f)) {
             velocity.x = 0.0f;
             velocity.z = 0.0f;
         }
     }
 
-    // 移動時は見た目の弾みだけを使い、周期的な実座標のジャンプを止めます。
-    if (attackState_ == AttackState::Idle && locomotionPhase_ == LocomotionPhase::None && IsGrounded()) {
-        travelPhase_ += SlimeBounceAnimator::PlanarSpeed(velocity) * deltaTime * 1.7f;
+    // 専用移動をしていない接地待機中は、移動距離を見た目の弾みの位相だけに使う。
+    if (attackState_ == AttackState::kIdle && locomotionPhase_ == LocomotionPhase::kNone && IsGrounded()) {
+        travelPhase_ += slimeBounceAnimator::PlanarSpeed(velocity) * deltaTime * 1.7f;
     }
     SetVelocity(velocity);
     ApplyBossAnimation(deltaTime);
@@ -282,13 +288,14 @@ void EnemyFalseKingSlime::ForEachOwnedStandardVisual(const std::function<void(en
 }
 
 void EnemyFalseKingSlime::Draw(ID3D12Resource* pointLightResource, ID3D12Resource* spotLightResource) {
+    // 本体が描画対象の場合に、可視でブレンドなしの所有部品と本体を通常パスへ出す。
     if (!GetIsRenderVisible()) {
         return;
     }
 
     BaseEnemy::Draw(pointLightResource, spotLightResource);
     ForEachOwnedStandardVisual([&](engine::Object3D* visual) {
-        if (visual && visual->GetIsVisible() && GetOwnedVisualBlendMode(visual) == BlendMode::None) {
+        if (visual && visual->GetIsVisible() && GetOwnedVisualBlendMode(visual) == BlendMode::kNone) {
             visual->RefreshRenderCameraData();
             visual->Draw(pointLightResource, spotLightResource);
         }
@@ -297,32 +304,35 @@ void EnemyFalseKingSlime::Draw(ID3D12Resource* pointLightResource, ID3D12Resourc
 
 void EnemyFalseKingSlime::DrawOwnedTransparentVisuals(ID3D12Resource* pointLightResource,
                                                        ID3D12Resource* spotLightResource) {
+    // 本体が描画対象でない間は、このパスに所有物や詠唱を追加しない。
     if (!GetIsRenderVisible()) {
         return;
     }
 
     // 地形の描画後に、深度を書かない加算・半透明の攻撃表示を重ねる。
     ForEachOwnedStandardVisual([&](engine::Object3D* visual) {
-        if (visual && visual->GetIsVisible() && GetOwnedVisualBlendMode(visual) != BlendMode::None) {
+        if (visual && visual->GetIsVisible() && GetOwnedVisualBlendMode(visual) != BlendMode::kNone) {
             visual->RefreshRenderCameraData();
             visual->Draw(pointLightResource, spotLightResource);
         }
     });
 
+    // 詠唱が存在するときだけ、合成付き部品の後に重ねる。
     if (spellChant_) {
         spellChant_->Draw(pointLightResource, spotLightResource);
     }
 }
 
 void EnemyFalseKingSlime::DrawForCamera(engine::Camera* camera, ID3D12Resource* pointLightResource,
-                                        ID3D12Resource* spotLightResource, int previewBufferIndex) {
+                                        ID3D12Resource* spotLightResource, std::int32_t previewBufferIndex) {
+    // カメラがあり本体が描画対象なら、そのカメラで本体と可視の不透明部品を描く。
     if (!camera || !GetIsRenderVisible()) {
         return;
     }
 
     engine::Object3D::DrawForCamera(camera, pointLightResource, spotLightResource, previewBufferIndex);
     ForEachOwnedStandardVisual([&](engine::Object3D* visual) {
-        if (visual && visual->GetIsVisible() && GetOwnedVisualBlendMode(visual) == BlendMode::None) {
+        if (visual && visual->GetIsVisible() && GetOwnedVisualBlendMode(visual) == BlendMode::kNone) {
             visual->DrawForCamera(camera, pointLightResource, spotLightResource, previewBufferIndex);
         }
     });
@@ -331,13 +341,14 @@ void EnemyFalseKingSlime::DrawForCamera(engine::Camera* camera, ID3D12Resource* 
 void EnemyFalseKingSlime::DrawOwnedTransparentVisualsForCamera(engine::Camera* camera,
                                                                 ID3D12Resource* pointLightResource,
                                                                 ID3D12Resource* spotLightResource,
-                                                                int previewBufferIndex) {
+                                                                std::int32_t previewBufferIndex) {
+    // 指定カメラと本体の可視性が有効な場合に、可視のブレンド付き部品を描く。
     if (!camera || !GetIsRenderVisible()) {
         return;
     }
 
     ForEachOwnedStandardVisual([&](engine::Object3D* visual) {
-        if (visual && visual->GetIsVisible() && GetOwnedVisualBlendMode(visual) != BlendMode::None) {
+        if (visual && visual->GetIsVisible() && GetOwnedVisualBlendMode(visual) != BlendMode::kNone) {
             visual->DrawForCamera(camera, pointLightResource, spotLightResource, previewBufferIndex);
         }
     });
@@ -352,13 +363,15 @@ void EnemyFalseKingSlime::OnSwitchEvent(bool active) {
 
     activationRequested_ = active;
 
+    // プレイ用の遭遇状態をまだ作っていない場合、出現・休眠を決める前に初期化する。
     if (!initializedForPlay_) {
         InitializeEncounterState();
     }
 
-    if (active && encounterState_ == EncounterState::Dormant) {
+    // 有効要求では休眠中だけ出現を始め、無効要求では休眠中以外を休眠へ戻す。
+    if (active && encounterState_ == EncounterState::kDormant) {
         BeginAppearance();
-    } else if (!active && encounterState_ != EncounterState::Dormant) {
+    } else if (!active && encounterState_ != EncounterState::kDormant) {
         ApplyDormantState();
     }
 }
@@ -386,10 +399,12 @@ void EnemyFalseKingSlime::ApplyManagedScale(const engine::Vector3& scale) {
     SyncCollisionBounds();
 }
 
+// 特殊材質パスに渡す演出が一つでも可視なら true を返す。
 bool EnemyFalseKingSlime::HasOwnedSpecialMaterialVisuals() const {
+    // 登場の門・オーラ・衝撃は本体の可視状態にかかわらず調べる。
     for (const auto* visual : {introPortal_.get(), bossAura_.get(), introShockwave_.get()})
         if (visual && visual->GetIsVisible()) return true;
-    // 特殊材質パスが必要な所有演出物の有無を先に調べます。
+    // 残りの戦闘用演出は本体が可視の場合だけ調べる。
     if (!GetIsVisible()) {
         return false;
     }
@@ -423,7 +438,8 @@ bool EnemyFalseKingSlime::HasOwnedSpecialMaterialVisuals() const {
 }
 
 void EnemyFalseKingSlime::DrawOwnedSpecialMaterialVisuals(uint32_t depthSrvHandle, uint32_t grabSrvHandle) {
-    AlignBossAura(CameraManager::GetInstance()->GetMainCamera());
+    // 本番カメラの向きへオーラを揃え、可視の特殊材質部品を材質別の描画経路へ出す。
+    AlignBossAura(CameraManager::GetInstance()->GetActiveCamera());
     for (auto* visual : {introPortal_.get(), bossAura_.get(), introShockwave_.get()}) {
         if (visual && visual->GetIsVisible()) {
             visual->RefreshRenderCameraData();
@@ -478,22 +494,24 @@ void EnemyFalseKingSlime::SetDebugPreviewAttackId(const std::string& attackId) {
 
     debugPreviewAttackId_ = attackId;
     ResetLocomotion();
-    currentAttack_ = AttackKind::None;
-    attackState_ = AttackState::Idle;
+    currentAttack_ = AttackKind::kNone;
+    attackState_ = AttackState::kIdle;
     attackCooldown_ = 0.05f;
     attackTimer_ = 0.0f;
     HideAttackTelegraph();
     ClearTransientVisuals();
 
+    // 結晶戦プレビューは第二形態に入り、出現から詠唱、失敗後の墜槍までを進める状態を作る。
     if (attackId == kSealBarragePreviewId) {
         battlePhase_ = 2;
         InitializeCrownSeals();
 
-        // 結晶の出現、制限時間の詠唱、失敗後の墜槍を本番と同じ秒数で再生します。
     } else if (attackId == kCrownDominionAttackId || attackId == kUmbraFlameAttackId || attackId == kAstralReaverAttackId ||
         attackId == kNightfallLancesAttackId) {
+        // 最終形態用の技は第三形態へ合わせる。
         battlePhase_ = 3;
     } else if (attackId == kRoyalCrossAttackId) {
+        // 十字光線は第二形態以降の設定を使う。すでに第三形態ならそのままにする。
         battlePhase_ = (std::max)(battlePhase_, 2);
     }
 }
@@ -501,16 +519,16 @@ void EnemyFalseKingSlime::SetDebugPreviewAttackId(const std::string& attackId) {
 const char* EnemyFalseKingSlime::GetDebugAttackPhaseName() const {
     // プレビュー表示用に攻撃状態を短い日本語へ対応付ける。
     switch (attackState_) {
-    case AttackState::Windup:
+    case AttackState::kWindup:
         return "予兆";
 
-    case AttackState::Active:
+    case AttackState::kActive:
         return "攻撃";
 
-    case AttackState::Recovery:
+    case AttackState::kRecovery:
         return "硬直";
 
-    case AttackState::PhaseShift:
+    case AttackState::kPhaseShift:
         return "形態移行";
 
     default:
@@ -524,33 +542,33 @@ const char* EnemyFalseKingSlime::GetDebugAttackBodyName() const {
         return "Crown Seal Barrage";
     AttackKind kind = currentAttack_;
 
-    if (kind == AttackKind::None) {
+    if (kind == AttackKind::kNone) {
         kind = ResolveDebugAttack();
     }
 
     switch (kind) {
-    case AttackKind::CrownLanceRain:
+    case AttackKind::kCrownLanceRain:
         return "Crown Lance Mesh";
 
-    case AttackKind::RoyalShockwave:
+    case AttackKind::kRoyalShockwave:
         return "Spiked Royal Wave Mesh";
 
-    case AttackKind::KingRush:
+    case AttackKind::kKingRush:
         return "Rush Wings + Boss Body";
 
-    case AttackKind::RoyalCross:
+    case AttackKind::kRoyalCross:
         return "Sweeping Royal Blade Mesh";
 
-    case AttackKind::CrownDominion:
+    case AttackKind::kCrownDominion:
         return "Dominion Sigil + Blades + Lances";
 
-    case AttackKind::UmbraFlame:
+    case AttackKind::kUmbraFlame:
         return "Umbra Flame Sigils + Violet Flame Volumes";
 
-    case AttackKind::AstralReaver:
+    case AttackKind::kAstralReaver:
         return "Astral Reaver Ring Cutters + Orbital Impact Rings";
 
-    case AttackKind::NightfallLances:
+    case AttackKind::kNightfallLances:
         return "Nightfall Lance + Target Sigil";
 
     default:
@@ -559,7 +577,7 @@ const char* EnemyFalseKingSlime::GetDebugAttackBodyName() const {
 }
 
 size_t EnemyFalseKingSlime::GetDebugVisibleAttackVisualCount() const {
-    // 攻撃中に実際に表示されている演出部品だけを数える。
+    // プレビューの表示確認用に可視の演出を数える。波と炎ポータルは、構成部品の片方以上が見えていれば一体と数える。
     size_t visibleCount = 0;
 
     for (const CrownLance& lance : crownLances_) {
@@ -601,6 +619,7 @@ size_t EnemyFalseKingSlime::GetDebugVisibleAttackVisualCount() const {
             ++visibleCount;
     }
 
+    // 回転刃以降の重ね描きは、生成済みかつ可視の部品を個別に数える。
     for (const AstralReaverOrb& orb : astralReaverOrbs_) {
         for (EffectObject3D* effect : {orb.halo.get(), orb.blade.get(), orb.arc.get(), orb.core.get()}) {
             if (effect && effect->GetIsVisible())
@@ -683,28 +702,32 @@ void EnemyFalseKingSlime::EnsureBaseScale() {
 void EnemyFalseKingSlime::UpdateBehavior(float deltaTime, const engine::Vector3& targetDirection, float targetDistance,
                                          engine::Vector3& velocity) {
     // 形態移行、攻撃中、待機中の順に処理し、同じフレームで二つの行動を進めません。
-    if (attackState_ == AttackState::PhaseShift) {
+    if (attackState_ == AttackState::kPhaseShift) {
         UpdatePhaseShift(deltaTime, velocity);
         return;
     }
 
-    if (attackState_ != AttackState::Idle) {
+    // 形態移行以外の攻撃状態が残っていれば、待機ロジックを実行せずその攻撃を進める。
+    if (attackState_ != AttackState::kIdle) {
         UpdateAttack(deltaTime, targetDirection, targetDistance, velocity);
         return;
     }
 
-    if (locomotionPhase_ != LocomotionPhase::None) {
+    // 専用移動を始めている間は、次の技や形態移行を選ばず移動を完了する。
+    if (locomotionPhase_ != LocomotionPhase::kNone) {
         UpdateLocomotion(deltaTime, targetDirection, velocity);
         return;
     }
 
-    const int desiredPhase = ResolveDesiredBattlePhase();
+    const std::int32_t desiredPhase = ResolveDesiredBattlePhase();
 
+    // 要求形態が上がった通常戦では次の技より形態移行を優先する。固定技プレビューは選択状態を維持する。
     if (desiredPhase > battlePhase_ && debugPreviewAttackId_.empty()) {
         BeginPhaseShift(desiredPhase);
         return;
     }
 
+    // 追跡対象か能力値が無い場合は、鉛直速度を維持しながら徘徊へ切り替える。
     if (!GetTarget() || !GetParameters().has_value()) {
         const float verticalVelocity = velocity.y;
         velocity = CalculateWanderVelocity(deltaTime, 0.34f, 0.28f);
@@ -723,20 +746,22 @@ void EnemyFalseKingSlime::UpdateBehavior(float deltaTime, const engine::Vector3&
 
     const AttackKind debugAttack = ResolveDebugAttack();
     const AttackKind plannedAttack =
-        debugAttack != AttackKind::None ? debugAttack : ResolveAutomaticAttack(targetDistance);
+        debugAttack != AttackKind::kNone ? debugAttack : ResolveAutomaticAttack(targetDistance);
     const EnemyAttackDefinition& planned = GetAttackDefinition(GetAttackId(plannedAttack));
     const bool inRange = targetDistance >= planned.minRange && targetDistance <= planned.maxRange;
 
+    // 交戦済み、接地中、クールダウンなし、射程内の条件が揃ったときに技を始める。
     if (IsBossTargetEngaged() && attackCooldown_ <= 0.0f && inRange && IsGrounded()) {
         StartAttack(plannedAttack, targetDirection);
         return;
     }
 
-    // 攻撃プレビューには移動用の床がないため、本番の位置取りだけを進めます。
+    // 固定技プレビュー、空中、または移動の待ち時間中は新しい位置取りを始めない。
     if (!debugPreviewAttackId_.empty() || !IsGrounded() || locomotionCooldown_ > 0.0f) {
         return;
     }
 
+    // 推奨距離より遠ければ斜め前、近ければ斜め後ろ、適正なら横へ移動する。
     const float preferredDistance = (std::clamp)(planned.recommendedTargetDistance, 7.0f, 15.0f);
     const float side = (locomotionStepSerial_ & 1u) == 0u ? 1.0f : -1.0f;
     const engine::Vector3 lateral = {targetDirection.z * side, 0.0f, -targetDirection.x * side};
@@ -759,29 +784,31 @@ void EnemyFalseKingSlime::UpdateBehavior(float deltaTime, const engine::Vector3&
 bool EnemyFalseKingSlime::BeginLocomotion(const engine::Vector3& direction, float distance, bool leap) {
     // 着地点だけでなく経路の床も確認し、段差や穴へ直接移動しません。
     const engine::Vector3 planarDirection = NormalizePlanar(direction);
+    // 方向を決められないほど水平成分が小さい場合は移動を組まない。
     if (planarDirection.x * planarDirection.x + planarDirection.z * planarDirection.z <= 0.0001f) {
         return false;
     }
 
     // 現在位置と移動先の地面を測る。判定では自身を除いて、床の法線と高さを確認する。
     const engine::Vector3 start = GetTranslate();
-    PhysicsQueryFilter filter;
-    filter.mask = CollisionCategories::Get("ground");
+    engine::PhysicsQueryFilter filter;
+    filter.mask = engine::collisionCategories::Get("ground");
     filter.ignoredObject = this;
     const auto probeGround = [&](const engine::Vector3& position) {
-        return CollisionManager::GetInstance()->Raycast(position + engine::Vector3{0.0f, 5.0f, 0.0f},
+        return engine::CollisionManager::GetInstance()->Raycast(position + engine::Vector3{0.0f, 5.0f, 0.0f},
                                                         {0.0f, -1.0f, 0.0f}, 14.0f, filter);
     };
-    const RaycastHit startHit = probeGround(start);
+    const engine::RaycastHit startHit = probeGround(start);
+    // 現在地点に下向きの探索で床が見つからないか、法線が急なら移動を開始しない。
     if (!startHit.isHit || startHit.normal.y < 0.55f) return false;
 
     engine::Vector3 candidate = start + planarDirection * distance;
-    RaycastHit endHit;
+    engine::RaycastHit endHit;
     bool safeRoute = false;
     // 終点と中間が安全なときだけ採用し、失敗時は半分の距離でもう一度調べる。
-    for (int attempt = 0; attempt < 2; ++attempt) {
+    for (std::int32_t attempt = 0; attempt < 2; ++attempt) {
         endHit = probeGround(candidate);
-        const RaycastHit midpointHit = probeGround((start + candidate) * 0.5f);
+        const engine::RaycastHit midpointHit = probeGround((start + candidate) * 0.5f);
         safeRoute = endHit.isHit && midpointHit.isHit && endHit.normal.y >= 0.55f &&
                     midpointHit.normal.y >= 0.55f &&
                     std::abs(endHit.hitPoint.y - startHit.hitPoint.y) <= 1.4f &&
@@ -789,6 +816,7 @@ bool EnemyFalseKingSlime::BeginLocomotion(const engine::Vector3& direction, floa
         if (safeRoute) break;
         candidate = start + planarDirection * (distance * 0.5f);
     }
+    // 終点と中間の条件を満たせない場合は、既存の位置と状態を保ったまま失敗を返す。
     if (!safeRoute) return false;
 
     // 着地位置は地面の高低差を足して確定し、跳躍と横移動それぞれの速度で所要秒数を決める。
@@ -802,7 +830,7 @@ bool EnemyFalseKingSlime::BeginLocomotion(const engine::Vector3& direction, floa
         ? std::clamp(travelDistance / (std::max)(6.5f, GetParameters()->speed * 3.0f), 0.44f, 0.65f)
         : std::clamp(travelDistance / (std::max)(3.0f, GetParameters()->speed * 1.8f), 0.24f, 0.36f);
     locomotionTimer_ = 0.0f;
-    locomotionPhase_ = LocomotionPhase::Windup;
+    locomotionPhase_ = LocomotionPhase::kWindup;
     return true;
 }
 
@@ -814,10 +842,11 @@ void EnemyFalseKingSlime::UpdateLocomotion(float deltaTime, const engine::Vector
     const float turnFollow = 1.0f - std::exp(-deltaTime * (locomotionLeap_ ? 9.0f : 12.0f));
 
     // 踏み切りまでは水平速度を止めて向きだけを整え、出発フレームの現在位置を軌道の始点にする。
-    if (locomotionPhase_ == LocomotionPhase::Windup) {
+    if (locomotionPhase_ == LocomotionPhase::kWindup) {
         UpdateFacing(locomotionLeap_ ? locomotionDirection_ : targetDirection, turnFollow);
+        // 構えの時間を使い切ったフレームにだけ軌道始点を取り直し、跳躍なら接地を解除する。
         if (locomotionTimer_ >= (locomotionLeap_ ? 0.16f : 0.12f)) {
-            locomotionPhase_ = LocomotionPhase::Travel;
+            locomotionPhase_ = LocomotionPhase::kTravel;
             locomotionTimer_ = 0.0f;
             locomotionEnd_.y += GetTranslate().y - locomotionStart_.y;
             locomotionStart_ = GetTranslate();
@@ -830,7 +859,7 @@ void EnemyFalseKingSlime::UpdateLocomotion(float deltaTime, const engine::Vector
     }
 
     // 用意した経路を補間し、跳躍だけに高さを足して移動する。
-    if (locomotionPhase_ == LocomotionPhase::Travel) {
+    if (locomotionPhase_ == LocomotionPhase::kTravel) {
         const float progress = std::clamp(locomotionTimer_ / locomotionTravelDuration_, 0.0f, 1.0f);
         engine::Vector3 position = LerpVector3(locomotionStart_, locomotionEnd_, SmoothStep01(progress));
         position.y += std::sin(progress * kPi) * locomotionArcHeight_;
@@ -842,7 +871,7 @@ void EnemyFalseKingSlime::UpdateLocomotion(float deltaTime, const engine::Vector
 
         // 着地点を確定してから接地に戻し、連続で跳ばないよう次の移動まで待つ。
         if (progress >= 1.0f) {
-            locomotionPhase_ = LocomotionPhase::Landing;
+            locomotionPhase_ = LocomotionPhase::kLanding;
             locomotionTimer_ = 0.0f;
             SetTranslate(locomotionEnd_);
             SetGrounded(true);
@@ -857,14 +886,16 @@ void EnemyFalseKingSlime::UpdateLocomotion(float deltaTime, const engine::Vector
     scriptedMovementThisFrame_ = true;
     velocity = {};
     UpdateFacing(targetDirection, turnFollow);
+    // 着地姿勢を見せる時間を使い切ったら、専用移動を解除する。
     if (locomotionTimer_ >= (locomotionLeap_ ? 0.22f : 0.17f)) {
-        locomotionPhase_ = LocomotionPhase::None;
+        locomotionPhase_ = LocomotionPhase::kNone;
         locomotionTimer_ = 0.0f;
     }
 }
 
+// 休眠や技開始で専用移動を中断し、位相・時間・再開待ちを初期値へ戻す。
 void EnemyFalseKingSlime::ResetLocomotion() {
-    locomotionPhase_ = LocomotionPhase::None;
+    locomotionPhase_ = LocomotionPhase::kNone;
     locomotionTimer_ = 0.0f;
     locomotionCooldown_ = 0.0f;
     locomotionTravelDuration_ = 0.0f;
@@ -875,7 +906,7 @@ void EnemyFalseKingSlime::ResetLocomotion() {
 // 予兆開始時に照準と各演出タイマーを固定し、技ごとの配置物を準備します。
 void EnemyFalseKingSlime::StartAttack(AttackKind kind, const engine::Vector3& targetDirection) {
     // 予兆開始時に照準を固定し、技ごとの見た目を攻撃時間に先立って準備します。
-    if (kind == AttackKind::None) {
+    if (kind == AttackKind::kNone) {
         return;
     }
 
@@ -883,7 +914,7 @@ void EnemyFalseKingSlime::StartAttack(AttackKind kind, const engine::Vector3& ta
 
     // 標的の地面位置と攻撃開始位置を固定し、予兆や連射に使う時刻・番号を初期化する。
     currentAttack_ = kind;
-    attackState_ = AttackState::Windup;
+    attackState_ = AttackState::kWindup;
     lockedDirection_ = NormalizePlanar(targetDirection);
     lockedTargetPosition_ = GetTarget() ? FindGroundPoint(GetTarget()->GetWorldPosition())
                                     : FindGroundPoint(GetTranslate() + lockedDirection_ * 9.0f);
@@ -901,13 +932,13 @@ void EnemyFalseKingSlime::StartAttack(AttackKind kind, const engine::Vector3& ta
     shockwaveLanded_ = false;
 
     // 形態で槍の本数を選び、予兆中から射出口と発射の時刻を個別に決める。
-    if (kind == AttackKind::CrownLanceRain) {
+    if (kind == AttackKind::kCrownLanceRain) {
         PrepareLanceTargets(false);
-        const int count = battlePhase_ == 1 ? 10 : (battlePhase_ == 2 ? 14 : 18);
+        const std::int32_t count = battlePhase_ == 1 ? 10 : (battlePhase_ == 2 ? 14 : 18);
         const float firstGateDelay = attackStateDuration_ * 0.08f;
         const float gateSequenceDuration = attackStateDuration_ * 0.62f;
 
-        for (int index = 0; index < count; ++index) {
+        for (std::int32_t index = 0; index < count; ++index) {
             const float sequenceRate = count > 1 ? static_cast<float>(index) / static_cast<float>(count - 1) : 0.0f;
             const float gateDelay = firstGateDelay + gateSequenceDuration * sequenceRate;
             const float launchAt = attackStateDuration_ + static_cast<float>(index) * kLanceInterval;
@@ -916,33 +947,17 @@ void EnemyFalseKingSlime::StartAttack(AttackKind kind, const engine::Vector3& ta
         }
 
         actionIndex_ = count;
-    } else if (kind == AttackKind::RoyalShockwave) {
-        // 白い柔らかな輪は攻撃判定ではなく、外から中心へ力が集まる充填層に限定します。
-        shockwaveChargeVisual_ = CreateRoyalVisual("FalseKing_ShockwaveCharge", "Primitives/cylinder",
-                                                   kShockwaveMaterialType, {1.0f, 0.92f, 0.76f, 0.0f}, 1.65f);
-        if (shockwaveChargeVisual_) {
-            shockwaveChargeVisual_->SetIsVisible(false);
-
-            if (engine::MeshRenderer* renderer = shockwaveChargeVisual_->GetMeshRenderer()) {
-                if (engine::MeshRenderer::WaterParamForGpu* charge = renderer->GetWaterParamData()) {
-                    charge->waveSpeed = 0.82f;
-                    charge->waveFrequency = 3.2f;
-                    charge->effectType = 3.0f;
-                    charge->effectScale = 0.92f;
-                    charge->effectSoftness = 0.22f;
-                    charge->effectIntensity = 1.88f;
-                }
-            }
-
-            shockwaveChargeVisual_->UpdateWorldMatrix(true);
-        }
-    } else if (kind == AttackKind::CrownDominion) {
+    // 衝撃波は収束輪を、領域技は追加で落とす槍の対象地点を準備する。
+    } else if (kind == AttackKind::kRoyalShockwave) {
+        PrepareRoyalShockwave();
+    } else if (kind == AttackKind::kCrownDominion) {
         PrepareLanceTargets(true);
-    } else if (kind == AttackKind::UmbraFlame || kind == AttackKind::AstralReaver ||
-               kind == AttackKind::NightfallLances) {
-        if (kind == AttackKind::UmbraFlame) {
+    } else if (kind == AttackKind::kUmbraFlame || kind == AttackKind::kAstralReaver ||
+               kind == AttackKind::kNightfallLances) {
+        // 炎は地面の陣、回転刃は刃と着弾演出、夜墜槍は固有の標的と表示を準備する。
+        if (kind == AttackKind::kUmbraFlame) {
             PrepareUmbraFlames();
-        } else if (kind == AttackKind::AstralReaver) {
+        } else if (kind == AttackKind::kAstralReaver) {
             PrepareAstralReaver();
         } else {
             PrepareNightfallLances();
@@ -952,17 +967,18 @@ void EnemyFalseKingSlime::StartAttack(AttackKind kind, const engine::Vector3& ta
         BossChantStyle style;
         style.sigilEffectPath = kUmbraFlameSigilEffect;
         style.motePreset =
-            kind == AttackKind::NightfallLances ? kNightfallLancesChargePreset : "enemy/false_king/false_king_chant_motes";
-        style.accentColor = kind == AttackKind::NightfallLances
+            kind == AttackKind::kNightfallLances ? kNightfallLancesChargePreset : "enemy/false_king/false_king_chant_motes";
+        style.accentColor = kind == AttackKind::kNightfallLances
                                 ? engine::Vector4{0.90f, 0.08f, 0.24f, 1.0f}
-                                : (kind == AttackKind::AstralReaver ? engine::Vector4{0.82f, 0.22f, 1.0f, 1.0f}
+                                : (kind == AttackKind::kAstralReaver ? engine::Vector4{0.82f, 0.22f, 1.0f, 1.0f}
                                                                     : engine::Vector4{0.80f, 0.30f, 1.0f, 1.0f});
         style.radius = std::clamp(baseScale_.x * 1.45f, 2.4f, 4.2f);
-        style.fadeStart = kind == AttackKind::AstralReaver || kind == AttackKind::NightfallLances
+        style.fadeStart = kind == AttackKind::kAstralReaver || kind == AttackKind::kNightfallLances
                               ? 0.16f
                               : (std::max)(0.0f, attack.activeDuration - 0.24f);
         spellChant_ = std::make_unique<BossChantVisual>();
 
+        // 詠唱部品を作れなければ表示だけを断念し、技自体の開始は取り消さない。
         if (!spellChant_->Start(GetObjectCommon(), std::move(style))) {
             spellChant_.reset();
         }
@@ -976,19 +992,85 @@ void EnemyFalseKingSlime::StartAttack(AttackKind kind, const engine::Vector3& ta
     }
 }
 
+void EnemyFalseKingSlime::PrepareRoyalShockwave() {
+    // 白い柔らかな輪は攻撃判定ではなく、外から中心へ力が集まる充填層に限定します。
+    shockwaveChargeVisual_ = CreateRoyalVisual("FalseKing_ShockwaveCharge", "Primitives/cylinder",
+                                               kShockwaveMaterialType, {1.0f, 0.92f, 0.76f, 0.0f}, 1.65f);
+    // 充填層を作成できたら最初は隠す。描画データもある場合のみ収束の周期と強さを設定する。
+    if (shockwaveChargeVisual_) {
+        shockwaveChargeVisual_->SetIsVisible(false);
+
+        if (engine::MeshRenderer* renderer = shockwaveChargeVisual_->GetMeshRenderer()) {
+            if (engine::MeshRenderer::WaterParamForGpu* charge = renderer->GetWaterParamData()) {
+                charge->waveSpeed = 0.82f;
+                charge->waveFrequency = 3.2f;
+                charge->effectType = 3.0f;
+                charge->effectScale = 0.92f;
+                charge->effectSoftness = 0.22f;
+                charge->effectIntensity = 1.88f;
+            }
+        }
+
+        shockwaveChargeVisual_->UpdateWorldMatrix(true);
+    }
+}
+
+void EnemyFalseKingSlime::UpdateRoyalShockwave(bool windup, float progress, float deltaTime, engine::Vector3& velocity) {
+    // ボス直下に収束する予兆を出し、実行中は UpdateShockwaveJump() が跳躍と衝撃波を進める。
+    if (windup) {
+        // 溜めはボス直下の一層だけに絞り、着地後の攻撃リングと混同させません。
+        const engine::Vector3 chargeCenter = FindGroundPoint(GetTranslate()) + engine::Vector3{0.0f, 0.06f, 0.0f};
+        const float contraction = SmoothStep01(progress);
+        const float pulse = 1.0f + std::sin(progress * kPi * 8.0f) * 0.06f * progress;
+
+        // 収束輪が生成済みなら、予兆の進み具合で地面の半径・透明度・回転を更新する。
+        if (shockwaveChargeVisual_) {
+            const float radius = engine::Math::Lerp(5.8f, 2.75f, contraction) * pulse;
+            shockwaveChargeVisual_->SetIsVisible(progress > 0.02f);
+            shockwaveChargeVisual_->SetTranslate(chargeCenter);
+            shockwaveChargeVisual_->SetScale({radius, 0.045f + progress * 0.035f, radius});
+            shockwaveChargeVisual_->SetRotationY(-idleTimer_ * (0.45f + progress * 1.35f));
+            shockwaveChargeVisual_->SetColor(
+                {1.0f, battlePhase_ >= 3 ? 0.78f : 0.94f, battlePhase_ >= 3 ? 1.0f : 0.78f, 0.34f + progress * 0.46f});
+            shockwaveChargeVisual_->Update(deltaTime);
+            shockwaveChargeVisual_->UpdateWorldMatrix(true);
+        }
+
+        // 間隔を過ぎたときだけ輪の上から内向きに粒子を出す。特殊材質を省くプレビューにも予兆を残す。
+        if (effectTimer_ <= 0.0f) {
+            constexpr std::int32_t kChargePointCount = 12;
+            const float chargeRadius = engine::Math::Lerp(5.8f, 2.75f, contraction) * pulse;
+            const float rotationOffset = idleTimer_ * (0.55f + progress * 0.65f);
+
+            for (std::int32_t pointIndex = 0; pointIndex < kChargePointCount; ++pointIndex) {
+                const float angle =
+                    rotationOffset + static_cast<float>(pointIndex) * kTwoPi / static_cast<float>(kChargePointCount);
+                const engine::Vector3 radial{std::sin(angle), 0.0f, std::cos(angle)};
+                const engine::Vector3 particlePosition = chargeCenter + radial * chargeRadius + engine::Vector3{0.0f, 0.14f, 0.0f};
+                EmitDirectedPreset(kShockwaveChargeRingPreset, particlePosition,
+                                   {-radial.x, 0.16f + progress * 0.10f, -radial.z}, 0.46f + progress * 0.38f);
+            }
+
+            effectTimer_ += 0.13f;
+        }
+    } else {
+        UpdateShockwaveJump(deltaTime, velocity);
+    }
+}
+
 void EnemyFalseKingSlime::UpdateAttack(float deltaTime, const engine::Vector3& targetDirection, float, engine::Vector3& velocity) {
-    // 予兆、攻撃、硬直の状態で時間の減らし方と移動許可を切り替えます。
-    if (attackState_ == AttackState::Windup) {
-        UpdateAttackPattern(AttackState::Windup, deltaTime, targetDirection, velocity);
+    // 予兆と実行は段階別の技更新へ渡す。硬直は横移動を止め、タイマーが尽きたら待機へ戻す。
+    if (attackState_ == AttackState::kWindup) {
+        UpdateAttackPattern(AttackState::kWindup, deltaTime, targetDirection, velocity);
         return;
     }
 
-    if (attackState_ == AttackState::Active) {
-        UpdateAttackPattern(AttackState::Active, deltaTime, targetDirection, velocity);
+    if (attackState_ == AttackState::kActive) {
+        UpdateAttackPattern(AttackState::kActive, deltaTime, targetDirection, velocity);
         return;
     }
 
-    if (attackState_ == AttackState::Recovery) {
+    if (attackState_ == AttackState::kRecovery) {
         velocity.x = 0.0f;
         velocity.z = 0.0f;
         attackTimer_ = (std::max)(0.0f, attackTimer_ - deltaTime);
@@ -1002,7 +1084,7 @@ void EnemyFalseKingSlime::UpdateAttack(float deltaTime, const engine::Vector3& t
 
 void EnemyFalseKingSlime::UpdateAttackPattern(AttackState phase, float deltaTime, const engine::Vector3& targetDirection, engine::Vector3& velocity) {
     // このフレームの段階を引数で受け取り、技の処理が終わってから次の段階へ移る。
-    const bool windup = phase == AttackState::Windup;
+    const bool windup = phase == AttackState::kWindup;
     const EnemyAttackDefinition* attack = windup ? &GetCurrentAttackDefinition() : nullptr;
     // 現在の段階の残り時間を減らす。連続攻撃の間隔は実行中だけ進める。
     attackTimer_ = (std::max)(0.0f, attackTimer_ - deltaTime);
@@ -1020,13 +1102,14 @@ void EnemyFalseKingSlime::UpdateAttackPattern(AttackState phase, float deltaTime
 
     if (windup) {
         // 予兆が確定するまでは追尾し、確定済みの地点を使う技は上書きしない。
-        if (attackTimer_ > attack->warningLeadTime && GetTarget() && currentAttack_ != AttackKind::CrownLanceRain &&
-            currentAttack_ != AttackKind::UmbraFlame && currentAttack_ != AttackKind::AstralReaver &&
-            currentAttack_ != AttackKind::NightfallLances) {
+        if (attackTimer_ > attack->warningLeadTime && GetTarget() && currentAttack_ != AttackKind::kCrownLanceRain &&
+            currentAttack_ != AttackKind::kUmbraFlame && currentAttack_ != AttackKind::kAstralReaver &&
+            currentAttack_ != AttackKind::kNightfallLances) {
             lockedDirection_ = NormalizePlanar(targetDirection);
             lockedTargetPosition_ = FindGroundPoint(GetTarget()->GetWorldPosition());
 
-            if (currentAttack_ == AttackKind::CrownLanceRain) {
+            // 外側の追尾許可条件は CrownLanceRain を除外しているため、通常の更新ではここで着弾点を作り直さない。
+            if (currentAttack_ == AttackKind::kCrownLanceRain) {
                 PrepareLanceTargets(false);
             }
         }
@@ -1036,13 +1119,13 @@ void EnemyFalseKingSlime::UpdateAttackPattern(AttackState phase, float deltaTime
 
     // 同じ技の予兆と実行を並べ、表示した範囲と実際に発生する攻撃を照合できるようにする。
     switch (currentAttack_) {
-    case AttackKind::CrownLanceRain:
-        // 形態に応じた本数だけ着弾点を予告し、同じ並び順で槍を降らせる。
+    case AttackKind::kCrownLanceRain:
+        // 準備済みの着弾点を表示する。実行側は未処理の番号が残るときだけ経過した間隔分の発生を進める。
         if (windup) {
             const size_t count = static_cast<size_t>(battlePhase_ == 1 ? 10 : (battlePhase_ == 2 ? 14 : 18));
             ShowAttackTelegraphReadableImpactAreas(lanceTargets_.data(), count, attack->radius, progress, warningColor);
         } else {
-            const int count = battlePhase_ == 1 ? 10 : (battlePhase_ == 2 ? 14 : 18);
+            const std::int32_t count = battlePhase_ == 1 ? 10 : (battlePhase_ == 2 ? 14 : 18);
 
             while (actionIndex_ < count && actionTimer_ <= 0.0f) {
                 SpawnNextCrownLance(false);
@@ -1052,49 +1135,11 @@ void EnemyFalseKingSlime::UpdateAttackPattern(AttackState phase, float deltaTime
         }
         break;
 
-    case AttackKind::RoyalShockwave:
-        // ボス直下に収束する予兆を出し、実行中は UpdateShockwaveJump() が跳躍と衝撃波を進める。
-        if (windup) {
-            // 溜めはボス直下の一層だけに絞り、着地後の攻撃リングと混同させません。
-            const engine::Vector3 chargeCenter = FindGroundPoint(GetTranslate()) + engine::Vector3{0.0f, 0.06f, 0.0f};
-            const float contraction = SmoothStep01(progress);
-            const float pulse = 1.0f + std::sin(progress * kPi * 8.0f) * 0.06f * progress;
-
-            if (shockwaveChargeVisual_) {
-                const float radius = engine::Math::Lerp(5.8f, 2.75f, contraction) * pulse;
-                shockwaveChargeVisual_->SetIsVisible(progress > 0.02f);
-                shockwaveChargeVisual_->SetTranslate(chargeCenter);
-                shockwaveChargeVisual_->SetScale({radius, 0.045f + progress * 0.035f, radius});
-                shockwaveChargeVisual_->SetRotationY(-idleTimer_ * (0.45f + progress * 1.35f));
-                shockwaveChargeVisual_->SetColor(
-                    {1.0f, battlePhase_ >= 3 ? 0.78f : 0.94f, battlePhase_ >= 3 ? 1.0f : 0.78f, 0.34f + progress * 0.46f});
-                shockwaveChargeVisual_->Update(deltaTime);
-                shockwaveChargeVisual_->UpdateWorldMatrix(true);
-            }
-
-            // 特殊マテリアルが省略されるプレビューでも、白い収束輪を必ず読めるようにします。
-            if (effectTimer_ <= 0.0f) {
-                constexpr int kChargePointCount = 12;
-                const float chargeRadius = engine::Math::Lerp(5.8f, 2.75f, contraction) * pulse;
-                const float rotationOffset = idleTimer_ * (0.55f + progress * 0.65f);
-
-                for (int pointIndex = 0; pointIndex < kChargePointCount; ++pointIndex) {
-                    const float angle =
-                        rotationOffset + static_cast<float>(pointIndex) * kTwoPi / static_cast<float>(kChargePointCount);
-                    const engine::Vector3 radial{std::sin(angle), 0.0f, std::cos(angle)};
-                    const engine::Vector3 particlePosition = chargeCenter + radial * chargeRadius + engine::Vector3{0.0f, 0.14f, 0.0f};
-                    EmitDirectedPreset(kShockwaveChargeRingPreset, particlePosition,
-                                       {-radial.x, 0.16f + progress * 0.10f, -radial.z}, 0.46f + progress * 0.38f);
-                }
-
-                effectTimer_ += 0.13f;
-            }
-        } else {
-            UpdateShockwaveJump(deltaTime, velocity);
-        }
+    case AttackKind::kRoyalShockwave:
+        UpdateRoyalShockwave(windup, progress, deltaTime, velocity);
         break;
 
-    case AttackKind::KingRush:
+    case AttackKind::kKingRush:
         // 固定した向きに射線を予告し、発動してからの移動は UpdateRush() へ渡す。
         if (windup) {
             ShowAttackTelegraphLine(FindGroundPoint(GetTranslate()), lockedDirection_,
@@ -1105,12 +1150,12 @@ void EnemyFalseKingSlime::UpdateAttackPattern(AttackState phase, float deltaTime
         }
         break;
 
-    case AttackKind::RoyalCross:
-    case AttackKind::CrownDominion:
+    case AttackKind::kRoyalCross:
+    case AttackKind::kCrownDominion:
         // 二つの技で放射状の予兆を共有する。光線は BeginActive() で起動し、領域技だけ実行中の追加処理を行う。
         if (windup) {
-            const bool dominion = currentAttack_ == AttackKind::CrownDominion;
-            const int count = RoyalBeamCount(dominion, battlePhase_);
+            const bool dominion = currentAttack_ == AttackKind::kCrownDominion;
+            const std::int32_t count = RoyalBeamCount(dominion, battlePhase_);
             const float step = kTwoPi / static_cast<float>(count);
             const float fanCenter = std::atan2(lockedDirection_.x, lockedDirection_.z) +
                                     static_cast<float>(count - 1) * 0.5f * step;
@@ -1123,13 +1168,13 @@ void EnemyFalseKingSlime::UpdateAttackPattern(AttackState phase, float deltaTime
         } else {
             velocity.x = 0.0f;
             velocity.z = 0.0f;
-            if (currentAttack_ == AttackKind::CrownDominion) {
+            if (currentAttack_ == AttackKind::kCrownDominion) {
                 UpdateDominion(deltaTime);
             }
         }
         break;
 
-    case AttackKind::UmbraFlame:
+    case AttackKind::kUmbraFlame:
         // 魔法陣と炎は UpdateUmbraFlames() が担当する。実行中はボスの水平移動を止める。
         if (!windup) {
             velocity.x = 0.0f;
@@ -1138,7 +1183,7 @@ void EnemyFalseKingSlime::UpdateAttackPattern(AttackState phase, float deltaTime
         UpdateUmbraFlames(deltaTime, !windup);
         break;
 
-    case AttackKind::AstralReaver:
+    case AttackKind::kAstralReaver:
         // 回転刃の準備と発動を同じ関数へ渡し、実行中はボスをその位置に留める。
         if (!windup) {
             velocity.x = 0.0f;
@@ -1147,7 +1192,7 @@ void EnemyFalseKingSlime::UpdateAttackPattern(AttackState phase, float deltaTime
         UpdateAstralReaver(deltaTime, !windup);
         break;
 
-    case AttackKind::NightfallLances:
+    case AttackKind::kNightfallLances:
         // 槍の予兆と発動は UpdateNightfallLances() に任せ、実行中の水平移動を止める。
         if (!windup) {
             velocity.x = 0.0f;
@@ -1162,10 +1207,10 @@ void EnemyFalseKingSlime::UpdateAttackPattern(AttackState phase, float deltaTime
 
     if (windup) {
         // 専用の溜め演出を持つ技を除き、発動へ近づくにつれて共通の粒子を短い間隔で出す。
-        if (effectTimer_ <= 0.0f && currentAttack_ != AttackKind::RoyalShockwave &&
-            currentAttack_ != AttackKind::UmbraFlame && currentAttack_ != AttackKind::AstralReaver &&
-            currentAttack_ != AttackKind::NightfallLances) {
-            EmitDirectedPreset(currentAttack_ == AttackKind::CrownDominion ? kDominionPreset : kChargePreset,
+        if (effectTimer_ <= 0.0f && currentAttack_ != AttackKind::kRoyalShockwave &&
+            currentAttack_ != AttackKind::kUmbraFlame && currentAttack_ != AttackKind::kAstralReaver &&
+            currentAttack_ != AttackKind::kNightfallLances) {
+            EmitDirectedPreset(currentAttack_ == AttackKind::kCrownDominion ? kDominionPreset : kChargePreset,
                                GetWorldPosition() + engine::Vector3{0.0f, baseScale_.y * 1.5f, 0.0f},
                                {-lockedDirection_.x * 0.12f, 1.0f, -lockedDirection_.z * 0.12f}, 0.92f + progress * 0.78f);
             effectTimer_ += (std::max)(0.12f, 0.24f - progress * 0.08f);
@@ -1190,36 +1235,37 @@ void EnemyFalseKingSlime::UpdateAttackPattern(AttackState phase, float deltaTime
 void EnemyFalseKingSlime::BeginActive() {
     // 予兆から実攻撃へ進め、命中判定の開始時刻を揃えます。
     const EnemyAttackDefinition& attack = GetCurrentAttackDefinition();
-    attackState_ = AttackState::Active;
+    attackState_ = AttackState::kActive;
     attackStateDuration_ = (std::max)(0.20f, attack.activeDuration);
     attackTimer_ = attackStateDuration_;
     actionTimer_ = 0.0f;
     effectTimer_ = 0.0f;
     actionIndex_ =
-        currentAttack_ == AttackKind::CrownLanceRain ? (battlePhase_ == 1 ? 10 : (battlePhase_ == 2 ? 14 : 18)) : 0;
+        currentAttack_ == AttackKind::kCrownLanceRain ? (battlePhase_ == 1 ? 10 : (battlePhase_ == 2 ? 14 : 18)) : 0;
     HideAttackTelegraph();
 
     switch (currentAttack_) {
-    case AttackKind::RoyalShockwave:
+    case AttackKind::kRoyalShockwave:
         // 跳躍を始め、着地時の衝撃波は毎フレームの更新へ引き渡す。
         BeginShockwaveJump();
         break;
 
-    case AttackKind::KingRush:
+    case AttackKind::kKingRush:
         // 突進の初回の進行方向を確定し、移動を始める。
         BeginRush();
         break;
 
-    case AttackKind::RoyalCross:
+    case AttackKind::kRoyalCross:
         // この技は放射状の射線だけを開始する。
         SpawnRoyalBeams(false);
         break;
 
-    case AttackKind::CrownDominion:
+    case AttackKind::kCrownDominion:
         // 領域技は射線に加え、紋章を作って後続の槍を落とす準備をする。
         SpawnRoyalBeams(true);
         dominionSigilVisual_ =
             CreateRoyalMesh("FalseKing_DominionSigil", kDominionSigilModel, {1.0f, 1.0f, 1.0f, 1.0f}, 2.15f);
+        // 紋章の作成に成功したら、領域更新で表示するまでは非表示にしておく。
         if (dominionSigilVisual_) {
             dominionSigilVisual_->SetIsVisible(false);
             dominionSigilVisual_->UpdateWorldMatrix(true);
@@ -1229,7 +1275,7 @@ void EnemyFalseKingSlime::BeginActive() {
         VfxSequencer::PlayOneShot(kDominionSequence, FindGroundPoint(GetTranslate()), {2.4f, 2.4f, 2.4f});
         break;
 
-    case AttackKind::UmbraFlame:
+    case AttackKind::kUmbraFlame:
         // 魔法陣ごとに開始時刻をずらし、今回の扇形への命中を未判定にする。
         umbraFlameFanHit_ = false;
 
@@ -1240,14 +1286,14 @@ void EnemyFalseKingSlime::BeginActive() {
 
         break;
 
-    case AttackKind::AstralReaver:
+    case AttackKind::kAstralReaver:
         // 回転刃を発動の最初へ戻し、着弾を未発生にする。
         astralReaverElapsed_ = 0.0f;
         astralReaverImpactAge_ = -1.0f;
         astralReaverDamageApplied_ = false;
         break;
 
-    case AttackKind::NightfallLances:
+    case AttackKind::kNightfallLances:
         // 夜墜槍の落下・粒子・命中を最初から進められる状態にする。
         nightfallLances_.activeAge = 0.0f;
         nightfallLances_.particleTimer = 0.0f;
@@ -1261,7 +1307,7 @@ void EnemyFalseKingSlime::BeginActive() {
 
 void EnemyFalseKingSlime::BeginRecovery() {
     // 攻撃後の硬直では予告を消し、次の攻撃までの間を作ります。
-    attackState_ = AttackState::Recovery;
+    attackState_ = AttackState::kRecovery;
     const EnemyAttackDefinition& attack = GetCurrentAttackDefinition();
     attackStateDuration_ = (std::max)(0.18f, attack.recoveryDuration);
     attackTimer_ = attackStateDuration_;
@@ -1270,12 +1316,14 @@ void EnemyFalseKingSlime::BeginRecovery() {
     rushWingsVisual_.reset();
     dominionSigilVisual_.reset();
 
-    if (currentAttack_ == AttackKind::UmbraFlame) {
+    // 炎を使った場合は各ポータルと陣を硬直開始時に破棄する。
+    if (currentAttack_ == AttackKind::kUmbraFlame) {
         umbraFlames_.clear();
         umbraFlameNetwork_.reset();
     }
 
-    if (currentAttack_ == AttackKind::AstralReaver) {
+    // 回転刃を使った場合は軌道と着弾の表示部品を破棄する。
+    if (currentAttack_ == AttackKind::kAstralReaver) {
         for (AstralReaverOrb& orb : astralReaverOrbs_) {
             orb.halo.reset();
             orb.blade.reset();
@@ -1289,7 +1337,8 @@ void EnemyFalseKingSlime::BeginRecovery() {
         astralReaverImpactCore_.reset();
     }
 
-    if (currentAttack_ == AttackKind::NightfallLances) {
+    // 夜墜槍を使った場合は技専用の表示と経過状態を初期化する。詠唱はどの技でも終了する。
+    if (currentAttack_ == AttackKind::kNightfallLances) {
         nightfallLances_ = {};
     }
 
@@ -1297,12 +1346,12 @@ void EnemyFalseKingSlime::BeginRecovery() {
 }
 
 void EnemyFalseKingSlime::FinishAttack() {
-    // 攻撃の一時状態を戻し、地面上の位置を確定して待機へ戻ります。
+    // 形態に応じた再使用待ちを設定し、攻撃選択・時間・発生番号を待機状態へ戻す。
     const EnemyAttackDefinition& attack = GetCurrentAttackDefinition();
     attackCooldown_ =
         (std::max)(0.35f, attack.cooldown * (battlePhase_ == 1 ? 1.0f : (battlePhase_ == 2 ? 0.88f : 0.78f)));
-    currentAttack_ = AttackKind::None;
-    attackState_ = AttackState::Idle;
+    currentAttack_ = AttackKind::kNone;
+    attackState_ = AttackState::kIdle;
     attackTimer_ = 0.0f;
     actionIndex_ = 0;
     // 通常物理へ戻した後の接地はMotorに任せ、攻撃終了フレームの位置跳びを防ぐ。
@@ -1315,22 +1364,49 @@ void EnemyFalseKingSlime::UpdateSpellChant(float deltaTime) {
     BossChantFrame frame;
     frame.casterPosition = GetWorldPosition();
     frame.groundPosition = FindGroundPoint(frame.casterPosition);
-    const Aabb bounds = GetModelWorldAabb();
+    const engine::Aabb bounds = GetModelWorldAabb();
     frame.casterRadius =
         (std::max)({(bounds.max.x - bounds.min.x) * 0.5f, (bounds.max.z - bounds.min.z) * 0.5f, baseScale_.x * 0.84f});
     frame.casterHeight = (std::max)(bounds.max.y - bounds.min.y, baseScale_.y * 1.2f);
     frame.sigilCenter = frame.casterPosition + lockedDirection_ * std::clamp(frame.casterRadius * 1.55f, 2.5f, 5.4f) +
                         engine::Vector3{0.0f, frame.casterHeight * 0.48f, 0.0f};
     frame.forward = lockedDirection_;
-    frame.casting = (currentAttack_ == AttackKind::UmbraFlame || currentAttack_ == AttackKind::AstralReaver ||
-                     currentAttack_ == AttackKind::NightfallLances) &&
-                    attackState_ == AttackState::Windup;
-    frame.releasing = (currentAttack_ == AttackKind::UmbraFlame || currentAttack_ == AttackKind::AstralReaver ||
-                       currentAttack_ == AttackKind::NightfallLances) &&
-                      attackState_ == AttackState::Active;
-    frame.windupProgress =
-        frame.casting ? 1.0f - std::clamp(attackTimer_ / (std::max)(attackStateDuration_, 0.001f), 0.0f, 1.0f) : 1.0f;
-    frame.activeElapsed = frame.releasing ? (std::max)(0.0f, attackStateDuration_ - attackTimer_) : 0.0f;
+    if (battlePhase_ == 2 &&
+        (debugPreviewAttackId_.empty() || debugPreviewAttackId_ == kSealBarragePreviewId)) {
+        // 封印のムービーと実戦は別の時計を使います。紋章は最初に組み立て、操作復帰で描き直しません。
+        const auto* scene = dynamic_cast<GamePlayScene*>(SceneManager::GetInstance()->GetCurrentScene());
+        const float movieTime = scene && sealState_ == SealState::kReveal ? scene->GetSealRevealMovieTime() : 0.0f;
+        frame.casting = movieTime >= SealRevealTiming::ChantStart || sealState_ == SealState::kChant;
+        frame.windupProgress = sealState_ == SealState::kChant ? 1.0f :
+            std::clamp((movieTime - SealRevealTiming::ChantStart) /
+                           (SealRevealTiming::Launch - SealRevealTiming::ChantStart), 0.0f, 1.0f);
+
+        // ムービーのカメラは敵の更新後に切り替わるので、カットで使う視点の方向を先に渡します。
+        const auto* camera = CameraManager::GetInstance()->GetActiveCamera();
+        const engine::Vector3 offset = movieTime > 0.0f ? SealRevealTiming::CasterShotOffset :
+            (camera ? camera->GetEye() - frame.casterPosition : frame.forward);
+        const engine::Vector3 towardView{offset.x, 0.0f, offset.z};
+        // 視点への水平成分が十分ある場合だけ、正規化して紋章の向きに使う。
+        if (engine::Math::Length(towardView) > .001f)
+            frame.forward = engine::Math::Normalize(towardView);
+        const float barrierRadius = CrownFinaleTuning::Get().sealBarrierRadius;
+        frame.casterRadius = std::max(frame.casterRadius, barrierRadius * .88f);
+        // 白い身体と紋章が重ならないよう、視点側から見て少し横と上に出します。
+        const engine::Vector3 side{frame.forward.z, 0.0f, -frame.forward.x};
+        frame.sigilCenter = frame.groundPosition + frame.forward * (barrierRadius + .55f) + side * (barrierRadius * .84f) +
+                           engine::Vector3{0.0f, frame.casterHeight * .76f, 0.0f};
+    } else {
+        // 通常は三つの詠唱技だけ、予兆の進行率または実行開始からの経過秒を演出へ渡す。
+        frame.casting = (currentAttack_ == AttackKind::kUmbraFlame || currentAttack_ == AttackKind::kAstralReaver ||
+                         currentAttack_ == AttackKind::kNightfallLances) &&
+                        attackState_ == AttackState::kWindup;
+        frame.releasing = (currentAttack_ == AttackKind::kUmbraFlame || currentAttack_ == AttackKind::kAstralReaver ||
+                           currentAttack_ == AttackKind::kNightfallLances) &&
+                          attackState_ == AttackState::kActive;
+        frame.windupProgress =
+            frame.casting ? 1.0f - std::clamp(attackTimer_ / (std::max)(attackStateDuration_, 0.001f), 0.0f, 1.0f) : 1.0f;
+        frame.activeElapsed = frame.releasing ? (std::max)(0.0f, attackStateDuration_ - attackTimer_) : 0.0f;
+    }
     frame.time = idleTimer_;
     frame.deltaTime = deltaTime;
     spellChant_->Update(frame);
@@ -1338,19 +1414,27 @@ void EnemyFalseKingSlime::UpdateSpellChant(float deltaTime) {
 
 void EnemyFalseKingSlime::PrepareAttackCycle() {
     // 形態別の候補をシャッフルし、直前と同じ技が先頭に続くのを避けます。
-    static constexpr std::array<AttackKind, 3> kPhaseOne = {AttackKind::CrownLanceRain, AttackKind::RoyalShockwave,
-                                                           AttackKind::KingRush};
-    static constexpr std::array<AttackKind, 4> kPhaseTwo = {AttackKind::RoyalCross, AttackKind::CrownLanceRain,
-                                                           AttackKind::KingRush, AttackKind::RoyalShockwave};
+    static constexpr std::array<AttackKind, 3> kPhaseOne = {AttackKind::kCrownLanceRain, AttackKind::kRoyalShockwave,
+                                                           AttackKind::kKingRush};
+    static constexpr std::array<AttackKind, 4> kPhaseTwo = {AttackKind::kRoyalCross, AttackKind::kCrownLanceRain,
+                                                           AttackKind::kKingRush, AttackKind::kRoyalShockwave};
     static constexpr std::array<AttackKind, 8> kPhaseThree = {
-        AttackKind::CrownDominion,   AttackKind::KingRush,       AttackKind::UmbraFlame, AttackKind::AstralReaver,
-        AttackKind::NightfallLances, AttackKind::CrownLanceRain, AttackKind::RoyalCross, AttackKind::RoyalShockwave};
+        AttackKind::kCrownDominion,   AttackKind::kKingRush,       AttackKind::kUmbraFlame, AttackKind::kAstralReaver,
+        AttackKind::kNightfallLances, AttackKind::kCrownLanceRain, AttackKind::kRoyalCross, AttackKind::kRoyalShockwave};
 
-    attackCycleCount_ = battlePhase_ <= 1 ? kPhaseOne.size() : (battlePhase_ == 2 ? kPhaseTwo.size() : kPhaseThree.size());
-    const AttackKind* source =
-        battlePhase_ <= 1 ? kPhaseOne.data() : (battlePhase_ == 2 ? kPhaseTwo.data() : kPhaseThree.data());
-    std::copy_n(source, attackCycleCount_, attackCycle_.begin());
-    EnemyAttackSelection::Shuffle(std::span{attackCycle_}.first(attackCycleCount_), lastAutomaticAttack_, attackRandom_);
+    // 段階ごとの攻撃順と件数は同じ配列から取得する。
+    const auto setAttackCycle = [this](const auto& cycle) {
+        attackCycleCount_ = cycle.size();
+        std::copy(cycle.begin(), cycle.end(), attackCycle_.begin());
+    };
+    if (battlePhase_ <= 1) {
+        setAttackCycle(kPhaseOne);
+    } else if (battlePhase_ == 2) {
+        setAttackCycle(kPhaseTwo);
+    } else {
+        setAttackCycle(kPhaseThree);
+    }
+    enemyAttackSelection::Shuffle(std::span{attackCycle_}.first(attackCycleCount_), lastAutomaticAttack_, attackRandom_);
 
     attackCycleIndex_ = 0;
     attackCyclePhase_ = battlePhase_;
@@ -1362,7 +1446,7 @@ EnemyFalseKingSlime::AttackKind EnemyFalseKingSlime::ResolveAutomaticAttack(floa
         PrepareAttackCycle();
     }
 
-    return EnemyAttackSelection::SelectInRange(
+    return enemyAttackSelection::SelectInRange(
         std::span{attackCycle_}.first(attackCycleCount_), attackCycleIndex_, lastAutomaticAttack_,
         [&](AttackKind kind) {
             const auto& attack = GetAttackDefinition(GetAttackId(kind));
@@ -1370,29 +1454,30 @@ EnemyFalseKingSlime::AttackKind EnemyFalseKingSlime::ResolveAutomaticAttack(floa
         });
 }
 
+// 設定されたIDを技へ解決し、対応表に無ければ自動選択に任せるため技なしを返す。
 EnemyFalseKingSlime::AttackKind EnemyFalseKingSlime::ResolveDebugAttack() const {
-    return EnemyAttackSelection::FindKind(GetAttackEntries(), debugPreviewAttackId_, AttackKind::None);
+    return enemyAttackSelection::FindKind(GetAttackEntries(), debugPreviewAttackId_, AttackKind::kNone);
 }
 
-std::span<const EnemyAttackSelection::Entry<EnemyFalseKingSlime::AttackKind>>
+std::span<const enemyAttackSelection::Entry<EnemyFalseKingSlime::AttackKind>>
 EnemyFalseKingSlime::GetAttackEntries() const {
     // 本編のID参照とエディターの攻撃指定で同じ対応を使う。
-    static constexpr EnemyAttackSelection::Entry<AttackKind> kEntries[] = {
-        {AttackKind::CrownLanceRain, kCrownLanceRainAttackId},
-        {AttackKind::RoyalShockwave, kRoyalShockwaveAttackId},
-        {AttackKind::KingRush, kKingRushAttackId},
-        {AttackKind::RoyalCross, kRoyalCrossAttackId},
-        {AttackKind::CrownDominion, kCrownDominionAttackId},
-        {AttackKind::UmbraFlame, kUmbraFlameAttackId},
-        {AttackKind::AstralReaver, kAstralReaverAttackId},
-        {AttackKind::NightfallLances, kNightfallLancesAttackId},
+    static constexpr enemyAttackSelection::Entry<AttackKind> kEntries[] = {
+        {AttackKind::kCrownLanceRain, kCrownLanceRainAttackId},
+        {AttackKind::kRoyalShockwave, kRoyalShockwaveAttackId},
+        {AttackKind::kKingRush, kKingRushAttackId},
+        {AttackKind::kRoyalCross, kRoyalCrossAttackId},
+        {AttackKind::kCrownDominion, kCrownDominionAttackId},
+        {AttackKind::kUmbraFlame, kUmbraFlameAttackId},
+        {AttackKind::kAstralReaver, kAstralReaverAttackId},
+        {AttackKind::kNightfallLances, kNightfallLancesAttackId},
     };
     return kEntries;
 }
 
 const char* EnemyFalseKingSlime::GetAttackId(AttackKind kind) const {
-    // 未対応の種類に対する既定IDも敵ごとの従来値を維持する。
-    return EnemyAttackSelection::FindId(GetAttackEntries(), kind, kCrownLanceRainAttackId);
+    // 対応表に無い種類は、王冠槍雨の定義を参照する既定IDへ解決する。
+    return enemyAttackSelection::FindId(GetAttackEntries(), kind, kCrownLanceRainAttackId);
 }
 
 const EnemyAttackDefinition& EnemyFalseKingSlime::GetCurrentAttackDefinition() const {
@@ -1400,29 +1485,39 @@ const EnemyAttackDefinition& EnemyFalseKingSlime::GetCurrentAttackDefinition() c
     return GetAttackDefinition(GetAttackId(currentAttack_));
 }
 
-int EnemyFalseKingSlime::ResolveDesiredBattlePhase() const {
+std::int32_t EnemyFalseKingSlime::ResolveDesiredBattlePhase() const {
     // HP が閾値まで減った後は結晶戦へ、最終闘技場への移動後は第三形態へ進めます。
     const float maximumHp = GetEncounterMaximumHp();
     const float hpRate = maximumHp > 0.0f ? GetEncounterCurrentHp() / maximumHp : 1.0f;
+    // 最終闘技場が既に始まった場合はHPに関係なく第三形態を要求する。
     if (finalArenaStarted_)
         return 3;
+    // 移動前は残HPが約67%以下で第二形態、それより上は第一形態とする。
     if (hpRate <= 0.6701f)
         return 2;
     return 1;
 }
 
-void EnemyFalseKingSlime::BeginPhaseShift(int nextPhase) {
+void EnemyFalseKingSlime::BeginPhaseShift(std::int32_t nextPhase) {
     // 古い攻撃の予告と一時描画物を消してから形態移行演出を開始します。
     ResetLocomotion();
     pendingBattlePhase_ = (std::clamp)(nextPhase, 1, 3);
-    attackState_ = AttackState::PhaseShift;
-    currentAttack_ = AttackKind::None;
+    attackState_ = AttackState::kPhaseShift;
+    currentAttack_ = AttackKind::kNone;
     phaseTransitionTimer_ = 0.0f;
     phaseShiftStartPosition_ = GetTranslate();
     attackTimer_ = 0.0f;
     ClearTransientVisuals();
     HideAttackTelegraph();
     SetVelocity({0.0f, 0.0f, 0.0f});
+    // 本番で第二形態に入るとき、現在がゲームプレイシーンなら結晶召喚のカメラ演出を依頼する。
+    if (pendingBattlePhase_ == 2 && debugPreviewAttackId_.empty()) {
+        if (auto* scene = dynamic_cast<GamePlayScene*>(SceneManager::GetInstance()->GetCurrentScene())) {
+            const auto center = FindGroundPoint(authoredPosition_ +
+                engine::Vector3{0, 0, CrownFinaleTuning::Get().sealCenterOffsetZ});
+            scene->StartSealRevealMovie(this, center);
+        }
+    }
     VfxSequencer::PlayOneShot(kPhaseShiftSequence, FindGroundPoint(GetTranslate()) + engine::Vector3{0.0f, 0.15f, 0.0f},
                               {2.1f + static_cast<float>(pendingBattlePhase_) * 0.25f,
                                2.1f + static_cast<float>(pendingBattlePhase_) * 0.25f,
@@ -1445,6 +1540,7 @@ void EnemyFalseKingSlime::UpdatePhaseShift(float deltaTime, engine::Vector3& vel
 
     effectTimer_ -= deltaTime;
 
+    // 移行中の粒子は発生間隔を満たしたときだけ出し、形態と進行に応じて飛散量を決める。
     if (effectTimer_ <= 0.0f) {
         const float angle = idleTimer_ * (4.0f + static_cast<float>(pendingBattlePhase_));
         const engine::Vector3 direction = {std::sin(angle) * 0.45f, 1.0f, std::cos(angle) * 0.45f};
@@ -1453,11 +1549,12 @@ void EnemyFalseKingSlime::UpdatePhaseShift(float deltaTime, engine::Vector3& vel
         effectTimer_ += 0.14f;
     }
 
+    // 移行時間が過ぎたら形態を確定し、本番の第二形態では結晶を初期化してから接地待機へ戻る。
     if (phaseTransitionTimer_ >= phaseTransitionDuration_) {
         battlePhase_ = pendingBattlePhase_;
         if (battlePhase_ == 2 && debugPreviewAttackId_.empty())
             InitializeCrownSeals();
-        attackState_ = AttackState::Idle;
+        attackState_ = AttackState::kIdle;
         phaseTransitionTimer_ = phaseTransitionDuration_;
         attackCooldown_ = 0.72f;
         SetTranslate(FindGroundPoint(GetTranslate()));
@@ -1467,6 +1564,7 @@ void EnemyFalseKingSlime::UpdatePhaseShift(float deltaTime, engine::Vector3& vel
 
 void EnemyFalseKingSlime::UpdateFacing(const engine::Vector3& direction, float follow) {
     // モデル固有の前方オフセットを足し、最短角度で目標へ向けます。
+    // 水平成分が小さすぎる入力では、現在の方位を維持する。
     if (direction.x * direction.x + direction.z * direction.z <= 0.0001f) {
         return;
     }
@@ -1477,7 +1575,7 @@ void EnemyFalseKingSlime::UpdateFacing(const engine::Vector3& direction, float f
 
 void EnemyFalseKingSlime::ApplyBossAnimation(float deltaTime) {
     // 共通の跳ね姿勢を基準に、予兆・攻撃・形態移行の伸縮を重ねます。
-    SlimeBounceAnimator::Params params;
+    slimeBounceAnimator::Params params;
     params.speedForFullBounce = 2.8f;
     params.idleAmplitude = 0.050f;
     params.moveAmplitude = 0.17f;
@@ -1486,21 +1584,22 @@ void EnemyFalseKingSlime::ApplyBossAnimation(float deltaTime) {
     params.verticalStretch = 0.23f;
     params.airborneStretch = 0.33f;
 
-    engine::Vector3 targetScale = SlimeBounceAnimator::MakeScale(baseScale_, GetVelocity(), idleTimer_, IsGrounded(), params);
+    engine::Vector3 targetScale = slimeBounceAnimator::MakeScale(baseScale_, GetVelocity(), idleTimer_, IsGrounded(), params);
     engine::Vector3 targetRotation = {authoredRotation_.x, GetRotation().y, authoredRotation_.z};
 
-    if (attackState_ == AttackState::Idle && locomotionPhase_ != LocomotionPhase::None) {
+    if (attackState_ == AttackState::kIdle && locomotionPhase_ != LocomotionPhase::kNone) {
         // 移動姿勢は開始・移動・着地の進行率で作り、経過時間だけの跳ねを重ねません。
-        if (locomotionPhase_ == LocomotionPhase::Windup) {
+        if (locomotionPhase_ == LocomotionPhase::kWindup) {
             const float duration = locomotionLeap_ ? 0.16f : 0.12f;
             const float brace = SmoothStep01(locomotionTimer_ / duration);
             const float squash = brace * (locomotionLeap_ ? 0.20f : 0.07f);
             targetScale = {baseScale_.x * (1.0f + squash * 0.55f), baseScale_.y * (1.0f - squash),
                            baseScale_.z * (1.0f + squash * 0.55f)};
             targetRotation.x -= brace * (locomotionLeap_ ? 0.075f : 0.025f);
-        } else if (locomotionPhase_ == LocomotionPhase::Travel) {
+        } else if (locomotionPhase_ == LocomotionPhase::kTravel) {
             const float progress = std::clamp(locomotionTimer_ / locomotionTravelDuration_, 0.0f, 1.0f);
             const float arc = std::sin(progress * kPi);
+            // 跳躍中は縦に伸ばし、横移動中はローカルの横向きに応じて傾ける。
             if (locomotionLeap_) {
                 targetScale = {baseScale_.x * 0.96f, baseScale_.y * (1.08f + arc * 0.07f), baseScale_.z * 0.96f};
                 targetRotation.x -= arc * 0.08f;
@@ -1518,9 +1617,9 @@ void EnemyFalseKingSlime::ApplyBossAnimation(float deltaTime) {
             targetScale = {baseScale_.x * (1.0f + squash * 0.75f), baseScale_.y * (1.0f - squash),
                            baseScale_.z * (1.0f + squash * 0.75f)};
         }
-    } else if (attackState_ == AttackState::Idle && IsGrounded()) {
+    } else if (attackState_ == AttackState::kIdle && IsGrounded()) {
         // 移動距離に合わせて接地した体を伸縮させ、停止中は小さな呼吸だけを残す。
-        const float speedRate = std::clamp(SlimeBounceAnimator::PlanarSpeed(GetVelocity()) / 3.4f, 0.0f, 1.0f);
+        const float speedRate = std::clamp(slimeBounceAnimator::PlanarSpeed(GetVelocity()) / 3.4f, 0.0f, 1.0f);
         const float wave = std::sin(travelPhase_);
         const float squash = (std::max)(0.0f, -wave) * speedRate;
         const float stretch = (std::max)(0.0f, wave) * speedRate;
@@ -1534,7 +1633,7 @@ void EnemyFalseKingSlime::ApplyBossAnimation(float deltaTime) {
     }
 
     // 予兆中は体を低く広げ、攻撃が近づくほど左右の震えを大きくする。
-    if (attackState_ == AttackState::Windup) {
+    if (attackState_ == AttackState::kWindup) {
         const float progress = SmoothStep01(1.0f - attackTimer_ / (std::max)(attackStateDuration_, 0.01f));
         const float tremble = std::sin(progress * kPi * 18.0f) * progress * 0.045f;
         targetScale = {
@@ -1544,11 +1643,11 @@ void EnemyFalseKingSlime::ApplyBossAnimation(float deltaTime) {
         };
 
         targetRotation.z += tremble * 1.7f;
-    } else if (attackState_ == AttackState::Active) {
+    } else if (attackState_ == AttackState::kActive) {
         const float progress = 1.0f - attackTimer_ / (std::max)(attackStateDuration_, 0.01f);
 
         // 衝撃波は空中で体を縦に伸ばし、着地したら横に潰れてから戻す。
-        if (currentAttack_ == AttackKind::RoyalShockwave) {
+        if (currentAttack_ == AttackKind::kRoyalShockwave) {
             const float jumpProgress =
                 std::clamp(shockwaveJumpTimer_ / (std::max)(shockwaveJumpDuration_, 0.01f), 0.0f, 1.0f);
             if (!shockwaveLanded_) {
@@ -1570,7 +1669,7 @@ void EnemyFalseKingSlime::ApplyBossAnimation(float deltaTime) {
                     baseScale_.z * (1.42f - settle * 0.24f - rebound),
                 };
             }
-        } else if (currentAttack_ == AttackKind::KingRush) {
+        } else if (currentAttack_ == AttackKind::kKingRush) {
             // 突進は体を低く前後に伸ばし、小刻みに揺らして勢いを見せる。
             const float pulse = std::sin(progress * kPi * 14.0f) * 0.04f;
             targetScale = {
@@ -1591,7 +1690,7 @@ void EnemyFalseKingSlime::ApplyBossAnimation(float deltaTime) {
 
             targetRotation.z += castPulse * 0.055f;
         }
-    } else if (attackState_ == AttackState::PhaseShift) {
+    } else if (attackState_ == AttackState::kPhaseShift) {
         // 形態移行中は途中で一度大きく伸ばし、完了に向けて基準倍率へ収束させる。
         const float progress = GetPhaseTransitionProgress();
         const float surge = std::sin(progress * kPi);
@@ -1603,7 +1702,7 @@ void EnemyFalseKingSlime::ApplyBossAnimation(float deltaTime) {
         };
 
         targetRotation.z += tremble * 1.8f;
-    } else if (attackState_ == AttackState::Recovery) {
+    } else if (attackState_ == AttackState::kRecovery) {
         // 硬直中の揺れは残り時間で弱め、次の待機姿勢へつなげる。
         const float remaining = std::clamp(attackTimer_ / (std::max)(attackStateDuration_, 0.01f), 0.0f, 1.0f);
         const float bounce = std::sin((1.0f - remaining) * kPi * 2.6f) * remaining;
@@ -1614,8 +1713,9 @@ void EnemyFalseKingSlime::ApplyBossAnimation(float deltaTime) {
         };
     }
 
-    if (attackState_ == AttackState::Idle) {
-        SlimeBounceAnimator::ApplyTravelPose(targetScale, targetRotation, baseScale_, GetVelocity(),
+    // 攻撃中は動作の姿勢を優先し、待機時だけ通常移動に応じる追加姿勢を合成する。
+    if (attackState_ == AttackState::kIdle) {
+        slimeBounceAnimator::ApplyTravelPose(targetScale, targetRotation, baseScale_, GetVelocity(),
                                              GetRotation().y - kModelYawOffset, 4.2f, 0.045f, 0.060f);
     }
 
@@ -1639,11 +1739,12 @@ void EnemyFalseKingSlime::ApplyBossAnimation(float deltaTime) {
 void EnemyFalseKingSlime::UpdateRoyalGlow(float deltaTime) {
     // 形態色と装甲開放状態を発光へ反映し、攻撃中だけ周囲の粒を放出します。
     ambientSparkTimer_ -= deltaTime;
-    const bool attacking = attackState_ == AttackState::Windup || attackState_ == AttackState::Active ||
-                           attackState_ == AttackState::PhaseShift;
+    const bool attacking = attackState_ == AttackState::kWindup || attackState_ == AttackState::kActive ||
+                           attackState_ == AttackState::kPhaseShift;
     const float pulse = 0.5f + std::sin(idleTimer_ * (attacking ? 8.2f : 3.4f)) * 0.5f;
     engine::Vector4 phaseColor = authoredColor_;
 
+    // 第二形態は白紫、第三形態は装甲の開放中だけ金色、閉じている間は紫にする。
     if (battlePhase_ == 2) {
         phaseColor = {1.0f, 0.90f, 1.0f, authoredColor_.w};
     } else if (battlePhase_ >= 3) {
@@ -1655,11 +1756,13 @@ void EnemyFalseKingSlime::UpdateRoyalGlow(float deltaTime) {
     SetColor(phaseColor);
     SetEmissive(authoredEmissive_ + static_cast<float>(battlePhase_ - 1) * 0.34f + (attacking ? 0.52f : 0.0f) +
                 pulse * 0.12f);
+    // 攻撃・形態移行以外では粒子の時計をリセットし、次の開始ですぐ粒子を出せるようにする。
     if (!attacking) {
         ambientSparkTimer_ = 0.0f;
         return;
     }
 
+    // 次の粒子を出せる時刻になったら、第三形態の領域用と通常の溜め用を使い分ける。
     if (ambientSparkTimer_ <= 0.0f) {
         EmitDirectedPreset(battlePhase_ >= 3 ? kDominionPreset : kChargePreset,
                            GetWorldPosition() + engine::Vector3{0.0f, baseScale_.y * 1.28f, 0.0f}, {0.0f, 1.0f, 0.0f}, 1.12f);
@@ -1720,20 +1823,22 @@ void EnemyFalseKingSlime::ClearTransientVisuals() {
 }
 
 void EnemyFalseKingSlime::DrawOwnedSpecialMaterialVisualsForCamera(engine::Camera* camera, uint32_t depthSrvHandle,
-                                                                   uint32_t grabSrvHandle, int previewBufferIndex) {
+                                                                   uint32_t grabSrvHandle, std::int32_t previewBufferIndex) {
     // 指定カメラ用に特殊材質の所有物を描き、別視点プレビューへも対応します。
+    // カメラがあればオーラをその視点へ向けて描く。描画直後に通常カメラの向きへ戻す。
     if (camera) {
         AlignBossAura(camera);
         for (auto* visual : {introPortal_.get(), bossAura_.get(), introShockwave_.get()})
             if (visual && visual->GetIsVisible())
                 visual->DrawSpecialMaterialForCamera(camera, depthSrvHandle, grabSrvHandle, previewBufferIndex);
         // プレビューの向きを通常描画へ持ち越さないようにします。
-        AlignBossAura(CameraManager::GetInstance()->GetMainCamera());
+        AlignBossAura(CameraManager::GetInstance()->GetActiveCamera());
     }
     if (!camera) {
         return;
     }
 
+    // 戦闘演出の各部品も、生成済みで可視のものだけを指定カメラへ描く。
     if (crownShieldBarrier_ && crownShieldBarrier_->GetIsVisible()) {
         crownShieldBarrier_->DrawSpecialMaterialForCamera(camera, depthSrvHandle, grabSrvHandle, previewBufferIndex);
     }

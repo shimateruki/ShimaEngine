@@ -1,8 +1,9 @@
 #pragma once
+#include <cstdint>
 #include "BaseGimmick.h"
 
 /// <summary>接触後に沈み、一定の段階を経て戻る床を管理します。</summary>
-// 関連：BaseGimmickの配置・衝突基盤を使い、固有の状態と表示をこのクラスで更新する。調整項目はInitializeでProperty登録する。
+// 浅い沈み込みは上面接触を基準にする。水没モードでは親が段階と高さを決め、子部品と乗員が追従する。
 // 主な入口：Initialize / Update / OnCollision
 class GimmickSinkingFloor : public BaseGimmick {
   public:
@@ -25,12 +26,12 @@ class GimmickSinkingFloor : public BaseGimmick {
     std::unique_ptr<engine::Object3D> Clone() const override;
 
   private:
-    // 沈下段階ごとの位置と経過時間を進めます。
+    // 水没の待機・沈下・復帰を進め、床が動く前に確定した乗員へ変位を渡す。
     void UpdateSubmerging(float deltaTime);
 
-    int submergePhase_ = 0; // 水没モードの段階番号。浅い沈み込みでは使用しない。
+    std::int32_t submergePhase_ = 0; // 水没モードの段階番号。浅い沈み込みでは使用しない。
     float submergeTimer_ = 0.0f; // 水没床の段階切替に使う経過秒数。
-    engine::Vector3 startPos_ = engine::Vector3::ZERO; // 沈み込みと復帰の基準となる配置位置。
+    engine::Vector3 startPos_ = engine::Vector3::kZero; // 沈み込みと復帰の基準となる配置位置。
     float contactTimer_ = 0.0f; // 床やスイッチの接触保持までの残り秒数。
     float sinkDepth_ = 2.0f; // 浅い沈み込みモードで下げる距離。
     float sinkSpeed_ = 5.5f; // 浅い沈み込みの指数追従係数。移動速度そのものではない。

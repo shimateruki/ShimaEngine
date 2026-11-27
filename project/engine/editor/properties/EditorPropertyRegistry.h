@@ -22,8 +22,8 @@ struct EditorComponentPresetDescriptor {
 
 /// ComponentのProperty欄を自動生成するか、既存の専用UIへ任せるかを表します。
 enum class EditorComponentInspectorMode {
-    Automatic,
-    Custom,
+    kAutomatic,
+    kCustom,
 };
 
 /// Editorと保存処理が共有するComponent型情報です。
@@ -32,12 +32,12 @@ struct EditorComponentDescriptor {
     std::string typeId;
     std::string displayName;
     std::string description;
-    int displayOrder = 0;
+    std::int32_t displayOrder = 0;
     bool required = false;
     bool removable = false;
     std::function<bool(const engine::Object3D&)> applicable;
     std::function<bool(const engine::Object3D&)> present;
-    EditorComponentInspectorMode inspectorMode = EditorComponentInspectorMode::Automatic;
+    EditorComponentInspectorMode inspectorMode = EditorComponentInspectorMode::kAutomatic;
     std::function<bool(engine::Object3D&)> add;
     std::function<bool(engine::Object3D&)> remove;
 
@@ -56,18 +56,18 @@ struct EditorComponentDescriptor {
 
 /// Editor上で扱うObject3dプロパティの型です。
 enum class EditorPropertyType {
-    Bool,
-    Integer,
-    Number,
-    String,
-    Vector2,
-    Vector3,
-    Vector4,
+    kBool,
+    kInteger,
+    kNumber,
+    kString,
+    kVector2,
+    kVector3,
+    kVector4,
 };
 
 /// Registryから共通ImGui Drawerへ渡す表示方法です。
 /// Property固有の見た目をDrawer側のPath分岐に増やさないため、型情報と一緒に管理します。
-enum class EditorPropertyAssetEditor { None, Scenario };
+enum class EditorPropertyAssetEditor { kNone, kScenario };
 
 // Propertyの操作形式・表示単位とAsset選択先の補助設定。
 // 関連：EditorPropertyRegistry（この型を使う機能の本体）
@@ -81,19 +81,19 @@ struct EditorPropertyUiHints {
     float maxValue = 0.0f;
     std::string format;
     // 整数の表示だけに加える差。内部値や JSON の値には含めない。
-    int integerDisplayOffset = 0;
+    std::int32_t integerDisplayOffset = 0;
     std::string assetDirectory;
-    EditorPropertyAssetEditor assetEditor = EditorPropertyAssetEditor::None;
+    EditorPropertyAssetEditor assetEditor = EditorPropertyAssetEditor::kNone;
 };
 
 enum class EditorPropertyFlags : std::uint32_t {
-    None = 0,
-    MultiEdit = 1u << 0,
-    PrefabOverride = 1u << 1,
-    Animatable = 1u << 2,
-    ReadOnly = 1u << 3,
+    kNone = 0,
+    kMultiEdit = 1u << 0,
+    kPrefabOverride = 1u << 1,
+    kAnimatable = 1u << 2,
+    kReadOnly = 1u << 3,
     // クラス側で公開した専用設定をcomponentsへ保存します。既存paramは従来の保存経路を使います。
-    ClassStorage = 1u << 4,
+    kClassStorage = 1u << 4,
 };
 
 inline EditorPropertyFlags operator|(EditorPropertyFlags lhs, EditorPropertyFlags rhs) {
@@ -111,8 +111,8 @@ struct EditorPropertyDescriptor {
     std::string path;
     std::string displayName;
     std::string category;
-    EditorPropertyType type = EditorPropertyType::String;
-    EditorPropertyFlags flags = EditorPropertyFlags::None;
+    EditorPropertyType type = EditorPropertyType::kString;
+    EditorPropertyFlags flags = EditorPropertyFlags::kNone;
     std::function<nlohmann::json(const engine::Object3D&)> getter;
     std::function<bool(engine::Object3D&, const nlohmann::json&)> setter;
 

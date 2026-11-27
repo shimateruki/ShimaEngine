@@ -41,6 +41,7 @@ public:
         std::array<uint8_t, 4> mouseButtons{};
         std::array<uint8_t, 4> previousMouseButtons{};
 
+        // DirectInputが返したこのフレームのマウス相対量。位置座標の保存には使わない。
         int32_t mouseX = 0;
         int32_t mouseY = 0;
         int32_t mouseWheel = 0;
@@ -56,6 +57,7 @@ public:
         uint8_t previousLeftTrigger = 0;
         uint8_t previousRightTrigger = 0;
 
+        // XInput形式へ統合したスティックの生の軸値。正規化とデッドゾーン処理は取得時に行う。
         int16_t leftX = 0;
         int16_t leftY = 0;
         int16_t rightX = 0;
@@ -67,6 +69,7 @@ public:
 
         bool gamepadMode = false;
 
+        // SDLから得た直近のセンサー値と、復元する校正基準。
         engine::Vector3 accelerometer{};
         engine::Vector3 gyroscope{};
         engine::Vector3 baseAccelerometer{};
@@ -82,7 +85,7 @@ public:
     /// <summary>デバイスをポーリングし、前フレームとの差分を更新します。</summary>
     void Update();
 
-    /// <summary>指定キーが押され続けているか返します。</summary>
+    /// <summary>指定したDIKキーが現在押されているか返す。押下の初回フレームも含む。</summary>
     bool IsKeyPressed(BYTE keyCode) const;
 
     /// <summary>指定キーがこのフレームで押されたか返します。</summary>
@@ -91,22 +94,22 @@ public:
     /// <summary>現在押されているキーコードの一覧を返します。</summary>
     std::vector<uint8_t> GetPressedKeys() const;
 
-    /// <summary>指定マウスボタンが押され続けているか返します。</summary>
-    bool IsMouseButtonPressed(int button) const;
+    /// <summary>番号0〜3のマウスボタンが現在押されているか返す。</summary>
+    bool IsMouseButtonPressed(std::int32_t button) const;
 
     /// <summary>指定マウスボタンがこのフレームで押されたか返します。</summary>
-    bool IsMouseButtonTriggered(int button) const;
+    bool IsMouseButtonTriggered(std::int32_t button) const;
 
     /// <summary>指定マウスボタンがこのフレームで離されたか返します。</summary>
-    bool IsMouseButtonReleased(int button) const;
+    bool IsMouseButtonReleased(std::int32_t button) const;
 
-    /// <summary>前フレームからのマウス移動量を返します。</summary>
+    /// <summary>DirectInputが取得したこのフレームのマウス相対移動量を返す。</summary>
     engine::Vector2 GetMouseMoveDelta() const;
 
-    /// <summary>現在のマウス位置を返します。</summary>
+    /// <summary>現在のカーソルをクライアント座標で返す。取得や変換に失敗すると原点を返す。</summary>
     engine::Vector2 GetMousePosition() const;
 
-    /// <summary>このフレームのホイール変化量を返します。</summary>
+    /// <summary>DirectInputが返す符号付きのホイール相対量を返す。</summary>
     float GetMouseWheelDelta() const;
 
     /// <summary>物理入力を再生用に保存します。</summary>
@@ -116,31 +119,31 @@ public:
     /// <param name="state">復元する入力状態。</param>
     void ApplyReplayState(const ReplayState& state);
 
-    /// <summary>現在押されているマウスボタン番号を返します。</summary>
-    int GetPressedMouseButton() const;
+    /// <summary>現在押されている最小番号のマウスボタンを返す。未入力は-1。</summary>
+    std::int32_t GetPressedMouseButton() const;
 
-    /// <summary>ゲームパッド左スティックの入力を返します。</summary>
+    /// <summary>統合済みの左スティックを正規化し、デッドゾーンならゼロで返す。</summary>
     engine::Vector2 GetGamepadLeftStick() const;
 
-    /// <summary>ゲームパッド右スティックの入力を返します。</summary>
+    /// <summary>統合済みの右スティックを正規化し、デッドゾーンならゼロで返す。</summary>
     engine::Vector2 GetGamepadRightStick() const;
 
-    /// <summary>指定ゲームパッドボタンが押され続けているか返します。</summary>
+    /// <summary>現在のパッド入力が指定ボタンマスクと重なる場合にtrueを返す。</summary>
     bool IsGamepadButtonPressed(WORD button) const;
 
     /// <summary>指定ゲームパッドボタンがこのフレームで押されたか返します。</summary>
     bool IsGamepadButtonTriggered(WORD button) const;
 
-    /// <summary>現在押されているゲームパッドボタンを返します。</summary>
+    /// <summary>現在押されている代表ボタンを実装の優先順で一つ返す。未入力は0。</summary>
     WORD GetPressedGamepadButton() const;
 
     /// <summary>直近の操作デバイスがゲームパッドか返します。</summary>
     bool IsGamepadMode() const { return isGamepadMode_; }
 
-    /// <summary>XInput、未接続時は SDL から統合した左スティック値を返します。</summary>
+    /// <summary>統合した左スティックの正規化済み入力を返す。入力の取得ではXInputが優先される。</summary>
     engine::Vector2 GetLeftStick() const;
 
-    /// <summary>XInput、未接続時は SDL から統合した右スティック値を返します。</summary>
+    /// <summary>統合した右スティックの正規化済み入力を返す。入力の取得ではXInputが優先される。</summary>
     engine::Vector2 GetRightStick() const;
 
     /// <summary>マウス移動と右スティックを、Camera::AddRotation 用の相対移動量にまとめます。</summary>
@@ -150,10 +153,10 @@ public:
     /// <summary>メニュー用の左スティック方向入力です。初回と押し続けた後の反復で true を返します。</summary>
     bool IsMenuStickTriggered(WORD dpadDirection) const;
 
-    /// <summary>低・高周波の振動を指定時間だけ要求します。並行要求は強い方を採用します。</summary>
+    /// <summary>0〜1の強度を指定秒数だけ要求する。同時要求は低周波と高周波ごとに最大値を使う。</summary>
     void PlayRumble(float lowFrequency, float highFrequency, float duration);
 
-    /// <summary>振動要求の残り時間とデバイス出力を更新します。</summary>
+    /// <summary>ポーズや時間倍率の影響を受けない実秒数で、残り時間と振動出力を更新する。</summary>
     void UpdateRumble(float unscaledDeltaTime);
 
     /// <summary>すべての振動要求を破棄して停止します。</summary>
@@ -165,10 +168,10 @@ public:
     /// <summary>入力デバイスと SDL センサーを解放します。</summary>
     void Finalize();
 
-    /// <summary>現在の加速度センサー値を返します。</summary>
+    /// <summary>SDLから最後に受け取った加速度を返す。校正値の差し引きは呼び出し側が行う。</summary>
     engine::Vector3 GetAccelerometer() const { return accelData_; }
 
-    /// <summary>現在のジャイロセンサー値を返します。</summary>
+    /// <summary>SDLから最後に受け取った角速度をラジアン/秒で返す。</summary>
     engine::Vector3 GetGyroscope() const { return gyroData_; }
 
     /// <summary>現在の加速度を基準値として記録します。</summary>
@@ -226,21 +229,21 @@ private:
     bool xinputConnected_ = false;
 
     // センサーの直近値。baseAccel_を差し引く前の値を保持する。
-    engine::Vector3 accelData_ = engine::Vector3::ZERO;
-    engine::Vector3 gyroData_ = engine::Vector3::ZERO;
+    engine::Vector3 accelData_ = engine::Vector3::kZero;
+    engine::Vector3 gyroData_ = engine::Vector3::kZero;
 
     // 校正時の加速度と、校正済みかどうか。
-    engine::Vector3 baseAccel_ = engine::Vector3::ZERO;
+    engine::Vector3 baseAccel_ = engine::Vector3::kZero;
     bool isCalibrated_ = false;
 
     // 直近に操作したデバイス種別。操作案内の表示切替に使う。
     bool isGamepadMode_ = false;
 
-    // メニュー用スティックの各方向について、現在の押下エッジを保持する。
+    // メニュー方向ごとの初回押下とリピートの発火結果。更新のたびに作り直す。
     std::array<bool, 4> menuStickTriggered_{};
 
     // 押し続けているメニュー方向。0は方向入力なし。
-    int menuStickDirection_ = 0;
+    std::int32_t menuStickDirection_ = 0;
 
     // 長押し中に次の方向入力を発生させる時刻（ミリ秒）。
     uint64_t menuStickNextRepeatMs_ = 0;
@@ -256,6 +259,7 @@ private:
     struct RumbleRequest {
         float lowFrequency = 0.0f;
         float highFrequency = 0.0f;
+        // この振動要求が有効な残り秒数。
         float remaining = 0.0f;
     };
 

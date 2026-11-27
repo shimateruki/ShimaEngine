@@ -11,17 +11,17 @@ void GimmickSeesawFloor::Initialize(engine::Object3DCommon* common, const std::s
     SetClassName("Gimmick");
     SetGimmickType("SeesawFloor");
     SetName("Gimmick_SeesawFloor");
-    SetCollisionAttribute(CollisionCategories::Get("ground"));
-    SetCollisionMask(CollisionCategories::GetDefaultGameplayMask());
+    SetCollisionAttribute(engine::collisionCategories::Get("ground"));
+    SetCollisionMask(engine::collisionCategories::GetDefaultGameplayMask());
     SetScale({4.0f, 0.35f, 1.4f});
 
-    // 編集項目の宣言です。動作処理と旧paramの保存キーは変更しません。
+    // 実行中の傾きと接触タイマーを除き、配置用の編集項目を登録する。
     using Self = GimmickSeesawFloor;
     engine::ObjectPropertyDefinition<Self> properties(*this, kTypeId, "シーソー床",
         "接触位置に応じて傾く床です。位置と大きさはTransformで調整します。実行中の接触時計や傾きは編集設定として公開しません。");
 }
 
-// 接触が途切れると目標傾きを水平へ戻し、急な角度変化を補間します。
+// 接触の猶予が切れたら配置時の基準角へ戻し、急な角度変化を経過秒で補間します。
 void GimmickSeesawFloor::Update(float deltaTime) {
     // 編集時の姿勢を基準角として保持し、Play中の傾きから復帰できるようにする。
     if (!initializedBase_) {
@@ -29,11 +29,13 @@ void GimmickSeesawFloor::Update(float deltaTime) {
         initializedBase_ = true;
     }
 
-    // 接触通知が短時間途切れても目標角を保持し、猶予が尽きた後で中心に戻します。
+    // 上面接触からの猶予が残る間は、最後に決めた目標角を維持する。
     if (contactTimer_ > 0.0f) {
         contactTimer_ -= deltaTime;
+        // 今フレームで猶予を越えた場合は0秒で止める。
         if (contactTimer_ < 0.0f)
             contactTimer_ = 0.0f;
+    // 更新開始時に猶予が無ければ、目標を配置時の基準角へ戻す。
     } else {
         targetTilt_ = 0.0f;
     }
@@ -53,8 +55,9 @@ void GimmickSeesawFloor::Update(float deltaTime) {
 bool GimmickSeesawFloor::OnCollision(engine::Object3D* other) {
     // 上面に乗ったPlayerの位置から左右どちらへ傾けるかを決める。
     if (other && other->GetClassName() == "Player") {
-        CollisionInfo info = CheckCollision(other);
+        engine::CollisionInfo info = CheckCollision(other);
 
+        // 衝突が成立し、床側から見た法線のYが-0.5未満の接触だけ傾きに反映する。
         if (info.isColliding && info.normal.y < -0.5f) {
             // 床のヨーを打ち消してローカルXを求め、中央からの距離を最大角に対する割合へ変換します。
             engine::Vector3 diff = other->GetWorldPosition() - GetWorldPosition();

@@ -19,6 +19,7 @@ void Skybox::Initialize(engine::Object3DCommon* common, uint32_t textureHandle) 
 #endif
 }
 
+// 内側から見える立方体の頂点とインデックスを、描画用のバッファに作ります。
 void Skybox::CreateMesh() {
     auto device = common_->GetDxCommon()->GetDevice();
 
@@ -29,7 +30,7 @@ void Skybox::CreateMesh() {
         { {-1.0f, -1.0f, -1.0f, 1.0f} }, // 2:左下奥
         { { 1.0f, -1.0f, -1.0f, 1.0f} }, // 3:右下奥
         { {-1.0f,  1.0f,  1.0f, 1.0f} }, // 4:左上手前
-        { { 1.0f,  1.0f,  1.0f, 1.0f} }, // 5:右手前
+        { { 1.0f,  1.0f,  1.0f, 1.0f} },  // 5:右上手前
         { {-1.0f, -1.0f,  1.0f, 1.0f} }, // 6:左下手前
         { { 1.0f, -1.0f,  1.0f, 1.0f} }, // 7:右下手前
     };
@@ -44,7 +45,7 @@ void Skybox::CreateMesh() {
         1, 5, 3, 3, 5, 7  // 右面
     };
 
-    // 3. 頂点バッファの作成
+    // 頂点を GPU バッファへ転送し、描画で参照するアドレスと頂点間隔を控える。
     vertexResource_ = common_->GetDxCommon()->CreateBufferResource(sizeof(vertices));
     VertexData* vertexMap = nullptr;
     vertexResource_->Map(0, nullptr, reinterpret_cast<void**>(&vertexMap));
@@ -55,7 +56,7 @@ void Skybox::CreateMesh() {
     vertexBufferView_.SizeInBytes = sizeof(vertices);
     vertexBufferView_.StrideInBytes = sizeof(VertexData);
 
-    // 4. インデックスバッファの作成
+    // 面の頂点番号を転送し、32ビットインデックスとして描画へ渡す。
     indexResource_ = common_->GetDxCommon()->CreateBufferResource(sizeof(indices));
     uint32_t* indexMap = nullptr;
     indexResource_->Map(0, nullptr, reinterpret_cast<void**>(&indexMap));
@@ -71,46 +72,48 @@ void Skybox::Draw(ID3D12Resource* vpResource) {
     // 描画基盤またはビュー・射影のバッファが欠ける場合は、GPUへ無効な定数バッファアドレスを渡さないよう中止します。
     if (!common_ || !vpResource) {
 #ifdef USE_IMGUI
-        static bool loggedInvalidDraw = false;
+        static bool sLoggedInvalidDraw = false;
 
-        if (!loggedInvalidDraw) {
+        // 最初の無効な描画要求だけ、ImGuiを使う構成でログへ残す。
+        if (!sLoggedInvalidDraw) {
             DebugConsole::GetInstance()->AddLog("[WARN] Skybox draw skipped: invalid common or camera buffer.");
-            loggedInvalidDraw = true;
+            sLoggedInvalidDraw = true;
         }
 #endif
         return;
     }
 
 #ifdef USE_IMGUI
-    static bool loggedDraw = false;
+    static bool sLoggedDraw = false;
 
-    if (!loggedDraw) {
+    // 有効な描画経路へ初めて到達した場合だけ記録する。
+    if (!sLoggedDraw) {
         DebugConsole::GetInstance()->AddLog("Skybox draw reached.");
-        loggedDraw = true;
+        sLoggedDraw = true;
     }
 #endif
 
     auto commandList = common_->GetDxCommon()->GetCommandList();
 
-    // パイプラインとルートシグネチャをセット
+    // 空のパイプラインとルートシグネチャを選んでから、後続の定数と画像を接続する。
     commandList->SetPipelineState(common_->GetSkyboxPipelineState());
     commandList->SetGraphicsRootSignature(common_->GetSkyboxRootSignature());
 
-    // ：SRVヒープをコマンドリストにセットする
-    SrvManager::GetInstance()->SetDescriptorHeaps(commandList);
+    // キューブマップのSRVを参照できるヒープを接続する。
+    engine::SrvManager::GetInstance()->SetDescriptorHeaps(commandList);
 
     // RootParameter 0: ViewProjection (定数バッファ)
     commandList->SetGraphicsRootConstantBufferView(0, vpResource->GetGPUVirtualAddress());
 
     // RootParameter 1: キューブマップテクスチャ
-    SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 1, textureHandle_);
+    engine::SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 1, textureHandle_);
 
-    // 描画設定
+    // 立方体の頂点と面を組み合わせ、内側の面を描けるようにする。
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     commandList->IASetVertexBuffers(0, 1, &vertexBufferView_);
     commandList->IASetIndexBuffer(&indexBufferView_);
 
-    // 描画実行
+    // 12枚の三角形を描き、描画統計にも記録する。
     commandList->DrawIndexedInstanced(36, 1, 0, 0, 0);
     engine::RenderStats::GetInstance()->RecordIndexedDraw(36);
 }

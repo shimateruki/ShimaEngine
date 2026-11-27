@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "game/actor/player/copy/WindCopySettings.h"
 #include "game/actor/player/copy/CrownPresentationSettings.h"
 #include "game/actor/player/copy/CrownLanceSettings.h"
@@ -53,11 +54,11 @@
 #include <iterator>
 #include <unordered_set>
 
-using EnemyAttackPreviewConstants::kFixedPreviewStep;
-using EnemyAttackPreviewConstants::kMinLoopDuration;
-using EnemyAttackPreviewConstants::kMaxLoopDuration;
-using EnemyAttackPreviewConstants::kDefaultTargetDistanceLimit;
-using EnemyAttackPreviewConstants::kPi;
+using enemyAttackPreviewConstants::kFixedPreviewStep;
+using enemyAttackPreviewConstants::kMinLoopDuration;
+using enemyAttackPreviewConstants::kMaxLoopDuration;
+using enemyAttackPreviewConstants::kDefaultTargetDistanceLimit;
+using enemyAttackPreviewConstants::kPi;
 
 namespace {
 #ifdef USE_IMGUI
@@ -84,6 +85,7 @@ void ActorDebugPanel::DrawPlayerCopySettings() {
     ImGui::TextUnformatted("プレイヤー能力プレビュー");
     ImGui::TextWrapped("実モデルと実コピー能力を選択位置で再生します。下段で停止・コマ送り・先頭からの再構築ができます。");
 
+    // 現シーンと3D共通基盤がまだなければ、配置や能力プレビューの操作に進まない。
     if (!IsCurrentSceneReady()) {
         ImGui::TextUnformatted("シーンを開き、編集モードで使用してください。");
         return;
@@ -93,6 +95,7 @@ void ActorDebugPanel::DrawPlayerCopySettings() {
     bool enabled = enabled_;
 
     ImGui::BeginDisabled(sceneManager_->IsPlaying());
+    // 編集モードで有効化を切り替えた場合、開始時は役者を生成し、終了時は一時演出と役者を片付ける。
     if (ImGui::Checkbox("プレビューを有効化", &enabled)) {
         enabled_ = enabled;
         if (enabled_)
@@ -115,6 +118,7 @@ void ActorDebugPanel::DrawPlayerCopySettings() {
         }
         ImGui::EndCombo();
     }
+    // 風形態だけ風の設定を表示する。王冠形態では槍・近接技・演出の設定を開く。
     if (copyType_ == "WindSlime") WindCopySettings::Get().DrawEditor();
     if (copyType_ == "Crown") {
         CrownLanceSettings::Get().DrawEditor();
@@ -127,6 +131,7 @@ void ActorDebugPanel::DrawPlayerCopySettings() {
         return;
     }
     copy = GetCopyDescriptor();
+    // 能力の登録がなければ動作一覧を作れないため、調整を終了する。
     if (!copy) { ImGui::TextDisabled("能力プレビューが登録されていません。"); return; }
     // 動作の候補は選択中の能力から取得し、選択が変わった場合は後段の再生成を予約します。
     const auto* action = GetCopyAction();
@@ -154,29 +159,33 @@ void ActorDebugPanel::DrawPlayerCopySettings() {
     changed |= ImGui::SliderFloat("再生区間", &loopDuration_, 4.0f, 12.0f, "%.1f 秒");
     changed |= ImGui::Checkbox("命中確認ダミー", &showTarget_);
     changed |= ImGui::SliderFloat("ダミーまでの距離", &targetDistance_, 2.0f, 25.0f, "%.1f m");
+    // 標的ダミーのHPが参照できる場合だけ、初期値から減ったHPを累計ダメージとして表示する。
     if (previewEnemy_ && previewEnemy_->GetParameters())
         ImGui::Text("ダミー累計ダメージ: %.1f", 100000.0f - previewEnemy_->GetParameters()->hp);
     ImGui::SliderFloat("再生速度", &playbackSpeed_, 0.05f, 2.0f, "%.2fx");
     ImGui::Checkbox("ループ再生", &loop_);
+    // 再生中の設定を変えたか先頭から再生を押した場合は、現在の能力でプレビューを作り直す。
     if (changed && enabled_)
         RestartPreview();
     if (enabled_ && ImGui::Button("先頭から再生", ImVec2(-1,0)))
         RestartPreview();
-    // ブックマークは動作とダミー距離も含めて適用し、指定の再生時刻へ移動します。
+    // プレビューが有効でブックマークが登録済みなら選択肢を出す。選んだ動作を指定の時刻へ移す。
     if (enabled_ && !copy->bookmarks.empty()) {
         for (const auto& bookmark : copy->bookmarks) {
             if (ImGui::Button(bookmark.displayName.c_str())) {
                 copyActionId_ = bookmark.actionId;
+                // 正の距離を持つブックマークだけ、標的の距離も変更する。
                 if (bookmark.targetDistance > 0.0f) targetDistance_ = bookmark.targetDistance;
                 SeekPreview(bookmark.time);
             }
         }
         ImGui::TextWrapped("%s", copy->bookmarkHelp.c_str());
         ImGui::Text("現在の演出: メッシュ %d / 3D破片 %d",
-            static_cast<int>(MeshEffectManager::GetInstance()->GetActiveEffects().size()),
-            static_cast<int>(DebrisEffectManager::GetInstance()->GetActivePieceCount()));
+            static_cast<std::int32_t>(MeshEffectManager::GetInstance()->GetActiveEffects().size()),
+            static_cast<std::int32_t>(DebrisEffectManager::GetInstance()->GetActivePieceCount()));
     }
 
+    // プレビュー中にボタンを押すと、一時停止と再生を切り替える。
     if (enabled_ && ImGui::Button(playing_ ? "一時停止" : "再生", ImVec2(-1,0)))
         playing_ = !playing_;
     // 手動の時刻指定を既存のシーク処理に渡し、再生途中の状態を再現します。
@@ -203,19 +212,21 @@ void ActorDebugPanel::DrawImGui() {
         ImGui::SeparatorText("術者（プレビューActorへの参照）");
         ImGui::Text("種類: %s",GetSelectedEnemyType());
         ImGui::TextWrapped("このActorが攻撃を実行します。弾Objectのモデルを変更しても術者のモデルは変わりません。術者の動きは術者アニメーション部品で指定します。");
+        // 全体設定へ戻るボタンは、次回の描画で術者選択を解除する。
         if (ImGui::Button("攻撃全体・術者の種類選択へ戻る"))
             authoringActorSelected_ = false;
         return;
     }
 
-    // 部品選択中は多数の既存設定の奥へ埋めず、選んだ部品をInspectorの主対象にします。
-    // 編集中に特定の部品を選んだ場合は、その部品のInspectorを先に表示する。
+    // 編集停止中は、選択されたイベントやトラックが有効な番号ならその部品のInspectorを優先する。
     if (sceneManager_ && !sceneManager_->IsPlaying()) {
         const auto* attack = GetSelectedAttackDefinition();
+        // -2以下は生成や粒子のイベントを表し、変換後の番号が範囲内にある場合だけ個別編集を出す。
         if (attack && attack->sequence.enabled && selectedTrack_ <= -2 &&
-            -2 - selectedTrack_ < static_cast<int>(attack->sequence.events.size())) {
+            -2 - selectedTrack_ < static_cast<std::int32_t>(attack->sequence.events.size())) {
             ImGui::Text("生成Object / GPU放出 %d", -1 - selectedTrack_);
 
+            // 全体へ戻す場合は部品の選択と配置プレビューを外す。それ以外はイベントを編集する。
             if (ImGui::Button("攻撃全体の設定へ戻る")) {
                 selectedTrack_ = -1;
                 StopPlacementPreview();
@@ -223,10 +234,12 @@ void ActorDebugPanel::DrawImGui() {
             else { DrawProjectileInspector(); return; }
         }
 
+        // 非負の選択番号が範囲内なら、対応するトラックを表示する。
         if (attack && attack->sequence.enabled && selectedTrack_ >= 0 &&
-            selectedTrack_ < static_cast<int>(attack->sequence.tracks.size())) {
+            selectedTrack_ < static_cast<std::int32_t>(attack->sequence.tracks.size())) {
             ImGui::Text("攻撃部品: %s", attack->sequence.tracks[selectedTrack_].name.c_str());
 
+            // 全体へ戻す操作が無ければ、トラックの設定と検証エラーを表示して終了する。
             if (ImGui::Button("攻撃全体・プレビューの設定へ戻る")) {
                 selectedTrack_ = -1;
                 StopPlacementPreview();
@@ -242,6 +255,7 @@ void ActorDebugPanel::DrawImGui() {
         }
     }
 
+    // ムービーと個別部品の表示が不要で、コピー能力を確認する場合は専用画面へ渡す。
     if (playerCopyMode_) {
         DrawPlayerCopySettings();
         return;
@@ -276,22 +290,25 @@ void ActorDebugPanel::DrawImGui() {
     ImGui::EndDisabled();
 
     // 炎の敵は共通の技段階に加え、本体アニメーターの状態も確認できます。
+    // 炎の敵が生成済みの場合に本体の状態名を、Controllerの実行状態もあればMotionModeを表示する。
     if (std::string(GetSelectedEnemyType()) == "FireSlime" && previewEnemy_) {
         const std::string state = previewEnemy_->GetAnimatorCurrentStateName();
         ImGui::Text("炎スライム本体: %s", state.empty() ? "Controller未適用" : state.c_str());
+        // Animatorが準備済みの場合に、状態遷移の入力値も示す。
         if (const auto* runtime = previewEnemy_->GetAnimatorControllerRuntime())
             ImGui::TextDisabled("MotionMode: %d", runtime->GetInt("MotionMode"));
         ImGui::TextDisabled("攻撃ごとの状態は下の演出参照で選択できます。");
     }
 
-    // 敵種の変更はProfileと推奨距離を更新し、表示中ならプレビューを先頭から再開する。
+    // 敵種に応じた標的設定と攻撃プロフィールを表示する。
     ImGui::SeparatorText("攻撃対象");
     const auto* descriptor = GetPreviewDescriptor();
-    // 種類共通の基本値は上部の専用タブで編集します。
+    // 本編再生時は実行中の基本値調整だけを扱うため、ここでプレビュー欄を終える。
     if (sceneManager_->IsPlaying()) {
         ImGui::TextWrapped("基本値は実行中の同じ種類の敵へ反映されます。攻撃プレビューは編集モードで使用できます。");
         return;
     }
+    // この種類にプレビューの登録がなければ、シーン上で通常プレイする案内を出す。
     if (!GetPreviewDescriptor()) {
         ImGui::TextWrapped("この種類は基本ステータスの調整に対応しています。動作確認は通常のプレイで行えます。");
         return;
@@ -303,15 +320,19 @@ void ActorDebugPanel::DrawImGui() {
     const auto* currentAttack = GetSelectedAttackDefinition();
     const char* attackLabel = option ? option->displayName.c_str() :
         (currentAttack ? currentAttack->displayName.c_str() : "(攻撃なし)");
+    // 種類の一覧を開いたら、攻撃プロフィールと追加確認項目を分けて列挙する。
     if (ImGui::BeginCombo("攻撃種類", attackLabel)) {
+        // 選択が変わるたびに推奨距離と尺を計算し直し、有効なプレビューは作り直す。
         auto changed = [&] {
             ApplyRecommendedSettings();
             if (enabled_) RestartPreview();
         };
-        for (int index = 0; index < static_cast<int>(editableProfile_.attacks.size()); ++index) {
+        for (std::int32_t index = 0; index < static_cast<std::int32_t>(editableProfile_.attacks.size()); ++index) {
             const auto& attack = editableProfile_.attacks[index];
-            if (attack.sequence.enabled && attack.sequence.binding == "player_special") continue;
+            // 個別処理を含め、プレイヤー専用の技は敵の一覧から外す。
+            if (attack.sequence.binding == "player_special") continue;
             const bool selected = !option && profileAttackIndex_ == index;
+            // 通常の技を選んだ場合は、追加確認の選択を外してプロフィール側の番号を採用する。
             if (ImGui::Selectable(attack.displayName.c_str(), selected)) {
                 profileAttackIndex_ = index;
                 previewOptionId_.clear();
@@ -319,10 +340,12 @@ void ActorDebugPanel::DrawImGui() {
             }
             if (selected) ImGui::SetItemDefaultFocus();
         }
+        // 追加確認項目が登録されている種類にだけ、別枠で選択肢を出す。
         if (descriptor && !descriptor->options.empty()) {
             ImGui::Separator();
             for (const auto& entry : descriptor->options) {
                 const bool selected = previewOptionId_ == entry.id;
+                // 追加確認を選んだ場合は、そのIDに対応する動作と推奨設定へ切り替える。
                 if (ImGui::Selectable(entry.displayName.c_str(), selected)) {
                     previewOptionId_ = entry.id;
                     changed();
@@ -337,7 +360,8 @@ void ActorDebugPanel::DrawImGui() {
     if (IsSealBarragePreview()) {
         ImGui::SeparatorText("第2形態・空中槍雨の演出");
         auto& tuning = CrownFinaleTuning::Get();
-        ImGui::SliderFloat("空中魔法陣の高さ", &tuning.sealBarrageSkyHeight, 8.0f, 18.0f, "%.1f m");
+        ImGui::SliderFloat("詠唱の大魔法陣の高さ", &tuning.sealChantSkyHeight, 24.0f, 42.0f, "%.1f m");
+        ImGui::SliderFloat("槍の出現高度", &tuning.sealBarrageSkyHeight, 8.0f, 18.0f, "%.1f m");
         ImGui::SliderFloat("空中魔法陣の広さ", &tuning.sealBarrageSkyRadiusRate, 0.45f, 0.95f, "%.2f 倍");
         ImGui::SliderFloat("墜槍の大きさ", &tuning.sealBarrageSpearScale, 0.65f, 1.45f, "%.2f 倍");
         ImGui::SliderFloat("ムービーの長さ", &tuning.sealBarrageMovieDuration, 3.1f, 5.0f, "%.2f 秒");
@@ -348,27 +372,32 @@ void ActorDebugPanel::DrawImGui() {
         loopDuration_ = GetRecommendedLoopDuration();
         const float chantStart = 1.25f;
         const float attackStart = chantStart + tuning.sealCastTime;
+        // 現在時刻を結晶の出現、詠唱、失敗後の槍雨の区間に分け、各区間の開始を基準に表示する。
         if (elapsedTime_ < chantStart)
             ImGui::Text("結晶の出現 %.1f / %.1f 秒", elapsedTime_, chantStart);
         else if (elapsedTime_ < attackStart)
             ImGui::Text("封印の詠唱 %.1f / %.1f 秒", elapsedTime_ - chantStart, tuning.sealCastTime);
         else
             ImGui::Text("封印失敗から %.1f 秒", elapsedTime_ - attackStart);
+        // 保存ボタンを押した場合に共有の調整値を書き、結果を画面の通知にする。
         if (ImGui::Button("第2形態の演出設定を保存"))
             profileStatus_ = tuning.Save() ? "第2形態の演出設定を保存しました。"
                                            : "第2形態の演出設定を保存できませんでした。";
         ImGui::TextDisabled("全域放電は即死。seal専用のメッシュエフェクト・GPU粒子・3D破片プリセットで外観を調整できます。");
     }
 
+    // 巨大スライムのフック分裂を選んだ場合は、専用の標的の役割を表示する。
     if (IsGiantHookSplitPreview())
         ImGui::TextDisabled("青いダミーをフック所有者として、抵抗から分裂までを再生します。");
 
     // 詠唱の遮蔽を調べるため、エフェクト単体表示と斜め視点を用意する。
     if (auto* prismSlime = dynamic_cast<EnemyPrismSlime*>(previewEnemy_)) {
+        // 詠唱だけを表示する設定が変わった場合に、生成済みのボスの描画を切り替える。
         if (ImGui::Checkbox("詠唱エフェクトのみ表示（遮蔽確認）", &prismChantOnly_)) {
             prismSlime->SetDebugPreviewChantOnly(prismChantOnly_);
         }
 
+        // 斜め前の視点を選び主カメラがあれば、標的方向を基準に追従を外して構図を設定する。
         if (ImGui::Button("術者を斜め前から見る", ImVec2(-1.0f, 0.0f))) {
 
             if (engine::Camera* camera = CameraManager::GetInstance()->GetMainCamera()) {
@@ -390,7 +419,7 @@ void ActorDebugPanel::DrawImGui() {
                 camera->SetRotation({ std::atan2(offset.y, std::sqrt(offset.x * offset.x + offset.z * offset.z)),
                     -azimuth, 0.0f });
                 camera->Update();
-                CameraEditor::GetInstance()->SetMode(CameraEditor::Mode::Editor);
+                CameraEditor::GetInstance()->SetMode(CameraEditor::Mode::kEditor);
             }
         }
 
@@ -402,6 +431,7 @@ void ActorDebugPanel::DrawImGui() {
         // ボスの近接表示とは分け、標的周辺と上空から来る攻撃を一緒に観察する。
         const auto frameAttack = [this]() {
             engine::Camera* camera = CameraManager::GetInstance()->GetMainCamera();
+            // 確認に使う主カメラが無ければ、構図は変更しない。
             if (!camera)
                 return;
             engine::Vector3 target = GetGroundPosition();
@@ -416,9 +446,10 @@ void ActorDebugPanel::DrawImGui() {
             camera->SetTarget(target);
             camera->SetRotation({std::atan2(height, distance), -azimuth, 0.0f});
             camera->Update();
-            CameraEditor::GetInstance()->SetMode(CameraEditor::Mode::Editor);
+            CameraEditor::GetInstance()->SetMode(CameraEditor::Mode::kEditor);
         };
 
+        // 全景ボタンは攻撃と標的を一緒に収め、空中魔法陣のボタンは主カメラがある場合に側面へ移す。
         if (ImGui::Button("攻撃範囲を見渡す", ImVec2(-1.0f, 0.0f)))
             frameAttack();
         if (ImGui::Button("空中魔法陣を横から見る", ImVec2(-1.0f, 0.0f))) {
@@ -434,21 +465,23 @@ void ActorDebugPanel::DrawImGui() {
                 camera->SetRotation({std::atan2(offset.y, std::sqrt(offset.x * offset.x + offset.z * offset.z)),
                                      -std::atan2(offset.x, -offset.z), 0.0f});
                 camera->Update();
-                CameraEditor::GetInstance()->SetMode(CameraEditor::Mode::Editor);
+                CameraEditor::GetInstance()->SetMode(CameraEditor::Mode::kEditor);
             }
         }
 
+        // 攻撃本体を探す操作では、固定刻みで先頭から生成を待ち、見つかったフレームで停止する。
         if (ImGui::Button("攻撃本体が出た時点で停止", ImVec2(-1.0f, 0.0f))) {
             SeekPreview(0.0f);
             bool found = false;
 
-            // 固定刻みで実AIを進める。未生成の場合も最大12秒で必ず終了する。
-            const int frameLimit = static_cast<int>(std::ceil(std::clamp(loopDuration_, kMinLoopDuration, kMaxLoopDuration) / kFixedPreviewStep));
+            // 設定された再生尺を上下限内に収め、その秒数に対応する固定フレーム数で探索を終える。
+            const std::int32_t frameLimit = static_cast<std::int32_t>(std::ceil(std::clamp(loopDuration_, kMinLoopDuration, kMaxLoopDuration) / kFixedPreviewStep));
 
-            for (int frame = 0; frame < frameLimit && previewEnemy_; ++frame) {
+            for (std::int32_t frame = 0; frame < frameLimit && previewEnemy_; ++frame) {
                 StepSimulation(kFixedPreviewStep);
                 const auto* boss = dynamic_cast<const EnemyFalseKingSlime*>(previewEnemy_);
 
+                // 偽王の攻撃モデルが可視になったことを確認できた時点で、進行を止める。
                 if (boss && boss->GetDebugVisibleAttackVisualCount() > 0) {
                     found = true;
                     break;
@@ -463,6 +496,7 @@ void ActorDebugPanel::DrawImGui() {
                 : "1周内に攻撃モデルが生成されませんでした。攻撃状態・距離・モデル読込を確認してください。";
         }
 
+        // 時刻を移動した後にも偽王の個体があれば、実際の攻撃段階とモデル数を表示する。
         if (const auto* boss = dynamic_cast<const EnemyFalseKingSlime*>(previewEnemy_)) {
             ImGui::Text("現在: %s / 攻撃モデル: %zu 個", boss->GetDebugAttackPhaseName(), boss->GetDebugVisibleAttackVisualCount());
         }
@@ -470,16 +504,17 @@ void ActorDebugPanel::DrawImGui() {
         ImGui::TextWrapped("槍雨は標的の周辺へ落下します。攻撃フェーズの後半は槍が消えた後も続きます。");
     }
 
+    // 敵の個体を取得できたとき、体当たりが有効か確認する。威力が0以下なら本体攻撃は無効。
     if (const auto* enemy = dynamic_cast<const BaseEnemy*>(previewEnemy_)) {
         const float bodyDamage = enemy->GetActiveBodyAttackDamage();
         ImGui::Text("本体攻撃: %s / 基礎威力 %.2f", bodyDamage > 0.0f ? "有効" : "無効", bodyDamage);
         ImGui::TextDisabled("通常接触は無害。弾・衝撃波などの独立した攻撃判定は別です。");
     }
 
-    // 攻撃プロファイルの射程が既定値を超える場合も、プレビュー上で標的を配置できるようにします。
     // 対象との距離上限は攻撃の最大射程まで広げ、選択中の長距離攻撃も配置できるようにする。
     float maxTargetDistance = (std::max)(kDefaultTargetDistanceLimit, GetRecommendedTargetDistance());
 
+    // 技が選ばれている場合は、編集できる標的距離の上限にその射程も含める。
     if (const EnemyAttackDefinition* attack = GetSelectedAttackDefinition()) {
         maxTargetDistance = (std::max)(maxTargetDistance, attack->maxRange);
     }
@@ -507,6 +542,7 @@ void ActorDebugPanel::DrawImGui() {
         std::snprintf(hpLabel, sizeof(hpLabel), "HP %.1f / %.1f", hp, maxHp);
         ImGui::ProgressBar(hp / maxHp, ImVec2(-1.0f, 0.0f), hpLabel);
 
+        // 手動被弾ボタンを押した場合だけ、現在の技でプレイヤー役へ被弾通知を送る。
         if (ImGui::Button("選択中の攻撃で今すぐ被弾")) {
             TriggerPreviewPlayerDamage();
         }
@@ -529,6 +565,7 @@ void ActorDebugPanel::DrawImGui() {
         ImGui::TextDisabled("標的側から敵が攻撃された状態を重ね、敵自身の潰れ・反発を確認します。");
     }
 
+    // 推奨設定を選んだ場合は、距離と長さの変更を再開条件として扱う。
     if (ImGui::Button("推奨距離と長さへ戻す")) {
         ApplyRecommendedSettings();
         restartForDistance = true;
@@ -545,12 +582,14 @@ void ActorDebugPanel::DrawImGui() {
     ImGui::SeparatorText("再生");
     ImGui::BeginDisabled(!enabled_);
 
+    // プレビューが有効な間に押した場合だけ、再生と停止を切り替える。
     if (ImGui::Button(playing_ ? ICON_FA_PAUSE " 一時停止" : ICON_FA_PLAY " 再生")) {
         playing_ = !playing_;
     }
 
     ImGui::SameLine();
 
+    // 先頭を選んだ場合は初期状態から作り直す。
     if (ImGui::Button(ICON_FA_REDO " 先頭から")) {
         RestartPreview();
     }
@@ -589,6 +628,7 @@ void ActorDebugPanel::DrawImGui() {
     ImGui::DragFloat("1周の長さ", &loopDuration_, 0.05f, kMinLoopDuration, kMaxLoopDuration, "%.2f sec");
     float seekTime = elapsedTime_;
 
+    // スライダーで時刻を動かしたら再生を止め、その時刻の状態を再構築する。
     if (ImGui::SliderFloat("タイムライン", &seekTime, 0.0f, (std::max)(loopDuration_, kFixedPreviewStep), "%.2f sec")) {
         playing_ = false;
         SeekPreview(seekTime);
@@ -599,13 +639,15 @@ void ActorDebugPanel::DrawImGui() {
     sprintf_s(progressLabel, "%.2f / %.2f sec", elapsedTime_, loopDuration_);
     ImGui::ProgressBar(progress, ImVec2(-1.0f, 0.0f), progressLabel);
 
+    // 実体が生成済みの場合だけ、現在段階とボス固有の表示状況を確認できる。
     if (previewEnemy_) {
         // ボス固有の描画層数を示し、単なる停止状態と素材読込失敗を区別する。
         ImGui::Text("現在フェーズ: %s", GetCurrentPhaseName());
 
         if (const auto* prismSlime = dynamic_cast<const EnemyPrismSlime*>(previewEnemy_)) {
-            const int chantLayers = prismSlime->GetDebugChantVisibleLayerCount();
+            const std::int32_t chantLayers = prismSlime->GetDebugChantVisibleLayerCount();
 
+            // プリズムの戻り値は-2が詠唱待機、その他の負値は未生成、0以上は表示対象の層数。
             if (chantLayers == -2) {
                 ImGui::TextDisabled("詠唱エフェクト: 詠唱待機中");
             } else if (chantLayers < 0) {
@@ -616,6 +658,7 @@ void ActorDebugPanel::DrawImGui() {
             }
         }
 
+        // 偽王の個体では攻撃本体を描く部品の数を示す。ゼロの時点も表示する。
         if (const auto* falseKingSlime = dynamic_cast<const EnemyFalseKingSlime*>(previewEnemy_)) {
             const size_t visibleVisuals = falseKingSlime->GetDebugVisibleAttackVisualCount();
             ImGui::Text("Attack body: %s", falseKingSlime->GetDebugAttackBodyName());
@@ -641,10 +684,11 @@ void ActorDebugPanel::DrawImGui() {
 }
 
 
+// 王冠継承と最終撃破の試写を切り替え、複製の開始・停止と調整値の保存を扱う。
 void ActorDebugPanel::DrawCrownMovieSettings() {
 #ifdef USE_IMGUI
     ImGui::TextUnformatted("王冠・最終撃破ムービープレビュー");
-    int mode=crownDefeatMode_?1:0;
+    std::int32_t mode=crownDefeatMode_?1:0;
 
     // 演出の種類を変えると現在の複製と一時エフェクトを取り除き、新しい演出の長さを取得します。
     if(ImGui::Combo("演出の種類",&mode,"王冠継承・ステージ崩壊\0最終形態の撃破\0")) {
@@ -660,6 +704,7 @@ void ActorDebugPanel::DrawCrownMovieSettings() {
     ImGui::TextWrapped("ステージ3を編集モードで開いてください。専用の複製を使って本番の演出を再生します。");
     auto* game = sceneManager_ ? dynamic_cast<GamePlayScene*>(sceneManager_->GetCurrentScene()) : nullptr;
 
+    // GamePlaySceneを開き編集停止中の場合だけ複製を開始できる。
     if (!game || sceneManager_->IsPlaying()) {
         ImGui::TextDisabled("ステージ3の編集モードで使用できます。");
         return;
@@ -675,6 +720,7 @@ void ActorDebugPanel::DrawCrownMovieSettings() {
         else { enabled_ = true; playing_ = false; ClearPreviewTransientState(); CreatePreviewObjects(); }
     }
 
+    // 開始前は時刻移動ができないため、操作の入口を案内する。
     if (!enabled_)
         ImGui::TextDisabled("開始後、下段のタイムラインで各場面へ移動できます。");
     // 撃破演出を選んでいる間は、王冠継承の調整項目を表示せず撃破素材の再読込へ案内します。
@@ -685,6 +731,7 @@ void ActorDebugPanel::DrawCrownMovieSettings() {
     ImGui::SeparatorText("本番に反映する演出設定");
     auto& t = CrownFinaleTuning::Get();
     ImGui::TextWrapped("プレイヤーの飛行・着地、王冠片の移動・大きさ・翼・消失・カメラ・黒帯は、演出タイムラインの crown_finale で編集します。ゲーム処理の節目も同素材のSignalを使います。");
+    // 継承の素材再読込が押され、プレビュー中なら現在の複製を作り直す。
     if (ImGui::Button("継承の演出素材を再読込") && enabled_) RestartPreview();
     bool changed = false;
     changed |= ImGui::SliderFloat("欠片までの距離",&t.movieFragmentDistance,1.5f,5.5f,"%.2f m");
@@ -700,6 +747,7 @@ void ActorDebugPanel::DrawCrownMovieSettings() {
         SeekPreview(time);
     }
 
+    // 保存ボタンが押されたときだけ、調整値をファイルへ書き込む。
     if (ImGui::Button("ムービー設定を保存"))
         profileStatus_=t.Save()?"保存しました。本番にも反映されます。":"保存できませんでした。";
     ImGui::SameLine();
@@ -709,6 +757,7 @@ void ActorDebugPanel::DrawCrownMovieSettings() {
         t.Load();
         loopDuration_=GetCrownMovieDuration();
 
+        // 再読込後、プレビューが稼働していれば複製を開始時刻から作り直す。
         if (enabled_) {
             ClearPreviewTransientState();
             RemovePreviewObjects();
@@ -721,6 +770,7 @@ void ActorDebugPanel::DrawCrownMovieSettings() {
 #endif
 }
 
+// 最終撃破の参照素材を案内し、試写中に再読込を選んだ場合だけ複製を更新する。
 void ActorDebugPanel::DrawCrownDefeatSettings() {
 #ifdef USE_IMGUI
     ImGui::SeparatorText("最終撃破の演出素材");
@@ -738,12 +788,12 @@ void ActorDebugPanel::DrawAttackProfileEditor() {
     const std::string profilePath = EnemyAttackProfile::GetDefaultPath(GetSelectedEnemyType());
     ImGui::TextDisabled("%s", profilePath.c_str());
 
-    // プレイヤー側で編集する場合は、特殊入力に結び付いた有効なシーケンスだけを選択肢にします。
+    // 入力の再現に対応するコピー専用の攻撃だけを候補へ出す。
     if (playerCopyMode_ && !editableProfile_.attacks.empty()) {
         if (ImGui::BeginCombo("編集・観測する攻撃", editableProfile_.attacks[profileAttackIndex_].displayName.c_str())) {
-            for (int i = 0; i < static_cast<int>(editableProfile_.attacks.size()); ++i) {
+            for (std::int32_t i = 0; i < static_cast<std::int32_t>(editableProfile_.attacks.size()); ++i) {
                 const auto& attack = editableProfile_.attacks[i];
-                if (!attack.sequence.enabled || attack.sequence.binding != "player_special")
+                if (!GetCopyProfileActionId(attack))
                     continue;
                 if (ImGui::Selectable(attack.displayName.c_str(), profileAttackIndex_ == i)) {
                     profileAttackIndex_ = i;
@@ -759,16 +809,21 @@ void ActorDebugPanel::DrawAttackProfileEditor() {
 
     const auto* selectedSequenceAttack = GetSelectedAttackDefinition();
     const auto* previewDescriptor = GetPreviewDescriptor();
-    const bool canEditSequence = previewDescriptor && previewDescriptor->canEditSequence &&
+    const bool copyMovementOnly = playerCopyMode_ && selectedSequenceAttack &&
+        GetCopyProfileActionId(*selectedSequenceAttack) && !selectedSequenceAttack->sequence.enabled;
+    const bool canEditSequence = !copyMovementOnly && previewDescriptor && previewDescriptor->canEditSequence &&
         previewDescriptor->canEditSequence(selectedSequenceAttack, playerCopyMode_);
+    // 登録が共通シーケンスの編集を許可する場合にだけ、技を追加する操作を出す。
     if (canEditSequence) {
         if (ImGui::Button("共通攻撃を追加・選択攻撃から複製")) {
             // 複製元の共有シーケンス参照を外し、新しい攻撃だけを編集できるようにする。
             EnemyAttackDefinition copy;
+            // 選択中の攻撃があればその値を複製し、なければ既定の定義を使う。
             if (const auto* selected = GetSelectedAttackDefinition())
                 copy = *selected;
             copy.sequence.assetPath.clear(); // 複製後の変更で、元の共有アセットを書き換えない。
-            int suffix = 1;
+            // 他の攻撃と重ならないIDを発行し、敵の通常実行かプレイヤーの特殊入力へ割り当てる。
+            std::int32_t suffix = 1;
             std::string id;
             do { id = "custom_attack_" + std::to_string(suffix++); } while (editableProfile_.FindAttack(id));
             copy.id = id;
@@ -788,23 +843,29 @@ void ActorDebugPanel::DrawAttackProfileEditor() {
             }
 
             editableProfile_.attacks.push_back(copy);
-            profileAttackIndex_ = static_cast<int>(editableProfile_.attacks.size()) - 1;
+            profileAttackIndex_ = static_cast<std::int32_t>(editableProfile_.attacks.size()) - 1;
             profileDirty_ = true;
+            // 作った技がプレイヤー用なら、再生する確認動作もプロファイル用へそろえる。
             if (playerCopyMode_)
                 SelectCopyProfileAction();
         }
 
         ImGui::TextWrapped("共通攻撃は射程内の候補から優先度順に選択されます。保存して再生成すると本編と同じデータで実行されます。");
+        // 対象の敵に専用の説明が登録されている場合だけ、共通の説明に続けて表示する。
         if (!previewDescriptor->sequenceHelp.empty())
             ImGui::TextWrapped("%s", previewDescriptor->sequenceHelp.c_str());
     }
 
     EnemyAttackDefinition* editedAttack = GetSelectedAttackDefinition();
 
+    // 取得できた攻撃がある場合だけ個別項目の編集を出す。
     if (editedAttack) {
         ImGui::Text("攻撃ID: %s", editedAttack->id.c_str());
         bool changed = false;
         changed |= DrawProfileString("表示名", editedAttack->displayName);
+        if (copyMovementOnly)
+            ImGui::TextWrapped("コピー能力の個別処理で実行します。「攻撃中のプレイヤー移動」で減速と硬直を調整できます。");
+        // 生成イベントを選択中なら、対応する共通シーケンスの欄を開く。
         if (selectedTrack_ <= -2)
             ImGui::SetNextItemOpen(true);
         if (canEditSequence && ImGui::TreeNodeEx("共通実行シーケンス", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -812,12 +873,14 @@ void ActorDebugPanel::DrawAttackProfileEditor() {
             auto& sequence = editedAttack->sequence;
             changed |= ImGui::Checkbox("共通ランタイムで実行", &sequence.enabled);
 
+            // 共通実行を有効にした定義だけ実行先と部品を表示する。イベントを単独選択中はトラック欄を省く。
             if (sequence.enabled) {
                 if (selectedTrack_ >= -1)
                     DrawTrackInspector();
                 const char* bindings[] = {"敵AI", "プレイヤーE入力"};
-                int binding = sequence.binding == "player_special" ? 1 : 0;
+                std::int32_t binding = sequence.binding == "player_special" ? 1 : 0;
 
+                // プレイヤー入力対応の登録がある場合だけ実行先の二択を出し、変更時は保存用IDへ変換する。
                 if (ImGui::Combo("実行先", &binding, bindings, previewDescriptor->supportsPlayerBinding ? 2 : 1)) {
                     sequence.binding = binding ? "player_special" : "enemy";
                     changed = true;
@@ -830,6 +893,7 @@ void ActorDebugPanel::DrawAttackProfileEditor() {
                     auto& c = sequence.actorControl;
                     changed |= ImGui::Checkbox("術者も共通アクションで動かす", &c.enabled);
 
+                    // 術者制御を有効にした場合だけ、移動制限・照準固定・予告などの詳細を調整する。
                     if (c.enabled) {
                         changed |= ImGui::Checkbox("攻撃中の水平移動を止める", &c.stopMovement);
                         changed |= ImGui::Checkbox("照準方向に本体を向ける", &c.faceTarget);
@@ -849,19 +913,22 @@ void ActorDebugPanel::DrawAttackProfileEditor() {
                 }
 
                 ImGui::TextWrapped("弾ごとの見た目・半径・速度・寿命は左の弾を選択して編集します。以下の外観設定は部品設定のない旧データと新規追加時の初期値です。");
-                int style = sequence.projectileStyle == "plain" ? 1 : 0;
+                std::int32_t style = sequence.projectileStyle == "plain" ? 1 : 0;
                 const char* styles[] = {"炎", "通常"};
 
+                // 外観の選択が変わったら、通常弾か炎弾の保存用の名前を設定する。
                 if (ImGui::Combo("弾の外観", &style, styles, 2)) {
                     sequence.projectileStyle = style ? "plain" : "fire";
                     changed = true;
                 }
                 changed |= ImGui::DragFloat("弾の大きさ (判定も拡縮)", &sequence.visualScale, 0.01f, 0.01f, 20);
 
+                // 炎弾を選んで専用の欄を開いた場合に、発光と軌跡などのパラメーターを出す。
                 if (style == 0 && ImGui::TreeNode("炎弾の見た目")) {
                     auto& a = sequence.fireAppearance;
                     float color[] = {a.red, a.green, a.blue, a.alpha};
 
+                    // 色が変わったフレームにRGBAの各成分を定義へ戻す。
                     if (ImGui::ColorEdit4("色・透明度", color)) {
                         a.red = color[0];
                         a.green = color[1];
@@ -880,7 +947,7 @@ void ActorDebugPanel::DrawAttackProfileEditor() {
 
                 ImGui::TextWrapped("部品設定がある弾は個別の値を優先します。イベントは時刻順に各1回実行し、条件はその時点で評価します。");
 
-                for (int i = 0; i < static_cast<int>(sequence.events.size()); ++i) {
+                for (std::int32_t i = 0; i < static_cast<std::int32_t>(sequence.events.size()); ++i) {
                     // イベントが個別に選択されている場合は、そのイベントだけ開いて時刻と発火条件を編集します。
                     if (selectedTrack_ <= -2 && i != -2 - selectedTrack_)
                         continue;
@@ -890,20 +957,22 @@ void ActorDebugPanel::DrawAttackProfileEditor() {
                     ImGui::Text("イベント %d", i + 1);
                     changed |= ImGui::DragFloat("実行時刻", &event.time, 0.01f, 0, sequence.duration, "%.3f 秒");
                     const char* operations[] = {"弾を発射", "GPUパーティクル"};
-                    int operation = event.operation == "gpu_vfx" ? 1 : 0;
+                    std::int32_t operation = event.operation == "gpu_vfx" ? 1 : 0;
 
+                    // 命令の選択が変わったら弾発射・GPU粒子の保存IDに置き換える。
                     if (ImGui::Combo("命令", &operation, operations, 2)) {
                         event.operation = operation ? "gpu_vfx" : "projectile";
                         changed = true;
                     }
                     const char* conditions[] = {"常時", "接地中", "空中", "標的が射程内"};
                     const char* conditionIds[] = {"always", "grounded", "airborne", "target_in_range"};
-                    int condition = 0;
+                    std::int32_t condition = 0;
 
-                    for (int c = 0; c < 4; ++c)
+                    for (std::int32_t c = 0; c < 4; ++c)
                         if (event.condition == conditionIds[c])
                             condition = c;
 
+                    // 条件を選んだ場合だけ、表示上の番号をシーケンスの条件IDへ変換する。
                     if (ImGui::Combo("実行条件", &condition, conditions, 4)) {
                         event.condition = conditionIds[condition];
                         changed = true;
@@ -911,6 +980,7 @@ void ActorDebugPanel::DrawAttackProfileEditor() {
                     changed |= ImGui::Checkbox("条件不成立なら後続命令も中止", &event.stopOnFalse);
                     float offset[] = {event.right, event.up, event.forward};
 
+                    // 入力された位置を術者の右・上・前に沿うワールド単位の距離として記録する。
                     if (ImGui::DragFloat3("位置 (右・上・前)", offset, 0.05f, -50, 50)) {
                         event.right = offset[0];
                         event.up = offset[1];
@@ -919,6 +989,7 @@ void ActorDebugPanel::DrawAttackProfileEditor() {
                     }
                     float sizeOffset[] = {event.sizeRight, event.sizeUp, event.sizeForward};
 
+                    // 基準サイズによる追加のオフセットは距離指定と別に記録する。
                     if (ImGui::DragFloat3("基準サイズに比例する位置", sizeOffset, 0.01f, -50, 50)) {
                         event.sizeRight = sizeOffset[0];
                         event.sizeUp = sizeOffset[1];
@@ -954,13 +1025,16 @@ void ActorDebugPanel::DrawAttackProfileEditor() {
                     ImGui::PopID();
                 }
 
+                // イベントが128個に達していない場合にだけ、ボタンで既定のイベントを追加できる。
                 if (sequence.events.size() < 128 && ImGui::Button("イベントを追加")) {
                     sequence.events.emplace_back();
                     changed = true;
                 }
                 std::string error;
+                // 現在の定義が検証に通らなければ、保存前に理由を表示する。
                 if (!sequence.Validate(&error))
                     ImGui::TextColored(ImVec4(1, 0.4f, 0.3f, 1), "%s", error.c_str());
+                // プレイヤー用の操作を編集する場合は、敵専用の条件と発射方向を案内する。
                 if (playerCopyMode_)
                     ImGui::TextDisabled("プレイヤーは前方へ発射します。標的が射程内条件は敵用です。");
             }
@@ -975,12 +1049,14 @@ void ActorDebugPanel::DrawAttackProfileEditor() {
             changed |= ImGui::DragFloat("最大発動距離", &editedAttack->maxRange, 0.05f, 0.0f, 50.0f, "%.2f m");
             changed |= ImGui::DragFloat("攻撃半径・幅", &editedAttack->radius, 0.05f, 0.01f, 50.0f, "%.2f m");
             const char* hitShapes[] = { "Sphere", "Capsule", "Box", "Cone" };
-            int hitShapeIndex = 0;
+            std::int32_t hitShapeIndex = 0;
+            // 保存されている小文字の形状IDを選択番号へ戻す。対応外は既定のSphereを表示する。
             if (editedAttack->hitShape == "capsule")
                 hitShapeIndex = 1;
             else if (editedAttack->hitShape == "box") hitShapeIndex = 2;
             else if (editedAttack->hitShape == "cone") hitShapeIndex = 3;
 
+            // 選択が変わった場合だけ判定形状のIDを更新する。
             if (ImGui::Combo("判定形状", &hitShapeIndex, hitShapes, IM_ARRAYSIZE(hitShapes))) {
                 constexpr const char* kHitShapeIds[] = { "sphere", "capsule", "box", "cone" };
                 editedAttack->hitShape = kHitShapeIds[hitShapeIndex];
@@ -1013,16 +1089,29 @@ void ActorDebugPanel::DrawAttackProfileEditor() {
             ImGui::TreePop();
         }
 
-        if (playerCopyMode_ && previewDescriptor && previewDescriptor->supportsPlayerBinding && ImGui::TreeNodeEx("攻撃中のプレイヤー移動", ImGuiTreeNodeFlags_DefaultOpen)) {
+        // プレイヤー用の実行を扱える登録で、専用欄を開いた場合にだけ移動制限を表示する。
+        if (playerCopyMode_ && GetCopyProfileActionId(*editedAttack) && ImGui::TreeNodeEx("攻撃中のプレイヤー移動", ImGuiTreeNodeFlags_DefaultOpen)) {
             // 弾速の欄と分け、通常移動へ掛かる制限だけを編集する。
             auto& movement = editedAttack->playerMovement;
             changed |= ImGui::Checkbox("移動制限を使う", &movement.enabled);
             ImGui::BeginDisabled(!movement.enabled);
-            changed |= ImGui::DragFloat("制限時間", &movement.duration, 0.01f, 0.0f, 30.0f, "%.2f sec");
-            changed |= ImGui::SliderFloat("地上の移動倍率", &movement.groundSpeedScale, 0.0f, 1.0f, "%.2f");
-            changed |= ImGui::SliderFloat("空中の移動倍率", &movement.airSpeedScale, 0.0f, 1.0f, "%.2f");
-            changed |= ImGui::DragFloat("空中の操作応答", &movement.airResponse, 0.1f, 0.1f, 60.0f, "%.1f / sec");
-            ImGui::TextWrapped("制限時間は攻撃開始からの秒数。空中では慣性を保って入力へ近づきます。発射時刻・本体モーションはタイムラインで編集できます。");
+            const auto& id = editedAttack->id;
+            const bool duringHold = id == "player_fire_breath" || id == "player_thunder_charge" ||
+                id == "player_wind_tornado" || id == "player_crown_lance_charge";
+            const bool landing = id == "player_pink_bounce_recovery";
+            if (!duringHold)
+                changed |= ImGui::DragFloat("制限時間", &movement.duration, 0.01f, 0.0f, 30.0f, "%.2f sec");
+            if (!landing) {
+                changed |= ImGui::SliderFloat("地上の移動倍率", &movement.groundSpeedScale, 0.0f, 1.0f, "%.2f");
+                changed |= ImGui::SliderFloat("空中の移動倍率", &movement.airSpeedScale, 0.0f, 1.0f, "%.2f");
+                changed |= ImGui::DragFloat("空中の操作応答", &movement.airResponse, 0.1f, 0.1f, 60.0f, "%.1f / sec");
+            }
+            if (duringHold)
+                ImGui::TextWrapped("技の構え・持続中に適用します。");
+            else if (landing)
+                ImGui::TextWrapped("突進を地上で終えたときの操作復帰までの秒数。");
+            else
+                ImGui::TextWrapped("この技の発動・反動・踏み切りから制限を掛ける秒数。空中では慣性を保って入力へ近づきます。");
             ImGui::EndDisabled();
             ImGui::TreePop();
         }
@@ -1040,9 +1129,9 @@ void ActorDebugPanel::DrawAttackProfileEditor() {
         }
 
         if (ImGui::TreeNodeEx("状態異常", ImGuiTreeNodeFlags_DefaultOpen)) {
-            // 炎上を初めて選ぶときだけ有効な既定値を補い、既存の調整値は保持する。
+            // 炎上へ切り替え、持続時間がまだ正値でない場合にだけ既定の時間・周期・演出を補う。
             const char* statusTypes[] = { "なし", "炎上" };
-            int statusIndex = editedAttack->statusEffectType == "burning" ? 1 : 0;
+            std::int32_t statusIndex = editedAttack->statusEffectType == "burning" ? 1 : 0;
 
             if (ImGui::Combo("種類", &statusIndex, statusTypes, IM_ARRAYSIZE(statusTypes))) {
                 editedAttack->statusEffectType = statusIndex == 1 ? "burning" : "";
@@ -1067,6 +1156,7 @@ void ActorDebugPanel::DrawAttackProfileEditor() {
             ImGui::TreePop();
         }
 
+        // プレビュー欄を開いた場合は、確認に使う標的距離と再生時間を設定できる。
         if (ImGui::TreeNodeEx("プレビュー設定", ImGuiTreeNodeFlags_DefaultOpen)) {
             changed |= ImGui::DragFloat("推奨標的距離", &editedAttack->recommendedTargetDistance, 0.1f, 0.0f, 50.0f, "%.1f m");
             changed |= ImGui::DragFloat("推奨再生時間", &editedAttack->previewDuration, 0.05f, 0.1f, 30.0f, "%.2f sec");
@@ -1076,15 +1166,17 @@ void ActorDebugPanel::DrawAttackProfileEditor() {
         if (ImGui::TreeNode("演出参照")) {
             // 炎スライムはControllerの状態名を選び、他の敵は従来の文字列参照を使う。
             if (std::string(GetSelectedEnemyType()) == "FireSlime") {
-                static AnimatorControllerAsset fireSlimeController;
-                static bool loaded = fireSlimeController.Load("Resources/json/animator/enemy_fire_slime.json");
+                static AnimatorControllerAsset sFireSlimeController;
+                static bool sLoaded = sFireSlimeController.Load("Resources/json/animator/enemy_fire_slime.json");
+                // 再読込が押された場合だけControllerを再取得する。失敗時は状態を選べないことを表示する。
                 if (ImGui::SmallButton("炎スライムControllerを再読込"))
-                    loaded = fireSlimeController.Load("Resources/json/animator/enemy_fire_slime.json");
-                if (loaded) {
+                    sLoaded = sFireSlimeController.Load("Resources/json/animator/enemy_fire_slime.json");
+                if (sLoaded) {
                     const char* label = editedAttack->animation.empty() ? "(未指定)" : editedAttack->animation.c_str();
 
+                    // 一覧を開いたときは、本体クリップが割り当て済みの状態だけを候補にする。
                     if (ImGui::BeginCombo("本体アニメーション状態", label)) {
-                        for (const auto& state : fireSlimeController.states) {
+                        for (const auto& state : sFireSlimeController.states) {
                             if (state.bodyClipName.empty())
                                 continue;
                             if (ImGui::Selectable(state.name.c_str(), state.name == editedAttack->animation)) {
@@ -1112,10 +1204,12 @@ void ActorDebugPanel::DrawAttackProfileEditor() {
         // UI変更は下書きプレビューへ反映し、保存操作までは元のJSONへ書き込まない。
         if (changed)
             RequestDraftRefresh();
+        // 保存していない変更があれば、保存操作を行うまで注意表示を残す。
         if (profileDirty_) {
             ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.22f, 1.0f), "未保存の変更があります");
         }
 
+        // 保存ボタンが押された場合にだけ、検証と正式な保存を開始する。
         if (ImGui::Button(ICON_FA_SAVE " 保存してプレビューへ反映")) {
             SaveSelectedProfile();
         }
@@ -1132,6 +1226,7 @@ void ActorDebugPanel::DrawAttackProfileEditor() {
 
         ImGui::SameLine();
 
+        // 既定値を選んだ場合は、保存を行う前の編集値だけを作り直す。
         if (ImGui::Button("既定値へ戻す")) {
             ResetSelectedProfile();
         }
@@ -1139,6 +1234,7 @@ void ActorDebugPanel::DrawAttackProfileEditor() {
         ImGui::TextDisabled("この敵は、今回のスライム攻撃プロファイル対象外です。");
     }
 
+    // 保存・読込・動作確認で通知が設定された場合だけ画面に出す。
     if (!profileStatus_.empty()) {
         ImGui::TextWrapped("%s", profileStatus_.c_str());
     }
@@ -1146,16 +1242,19 @@ void ActorDebugPanel::DrawAttackProfileEditor() {
 #endif
 }
 
+// 基本値を表示するタブを扱い、基本値を表示していればtrueを返す。
 bool ActorDebugPanel::DrawStatusSettings() {
 #ifdef USE_IMGUI
     // 再生に対応していない種類は基本値だけ表示し、攻撃・動作確認への切り替えを無効にします。
     const bool supportsPreview = playerCopyMode_ || GetPreviewDescriptor();
     if (!supportsPreview) statusTab_ = true;
+    // 選択したタブで基本値と動作確認を切り替える。動作未登録の種類は基本値だけを許可する。
     if (ImGui::RadioButton("基本ステータス", statusTab_)) statusTab_ = true;
     ImGui::SameLine();
     ImGui::BeginDisabled(!supportsPreview);
     if (ImGui::RadioButton("攻撃・動作確認", !statusTab_)) statusTab_ = false;
     ImGui::EndDisabled();
+    // 動作確認を選んだ場合は、基本値エディターを描かず呼び出し側へ返す。
     if (!statusTab_) return false;
     if (!supportsPreview) ImGui::TextWrapped("この種類の動作確認は通常プレイで行えます。ここでは基本値を調整します。");
     // 登録済みの基本値エディターに選択中のシーンと種類を渡します。プレイヤー共通値の種類指定は空です。
@@ -1174,6 +1273,7 @@ void ActorDebugPanel::DrawSelectedInspector(ProjectWindow* assets) {
     const auto* source = session_ ? session_->GetTarget() : nullptr;
     if (!source || (source->GetClassName() != "Player" && source->GetEnemyType().empty())) return;
     authoringAssets_ = assets;
+    // 対象が有効でも、設定の見出しを開くまでは操作欄を表示しない。
     if (!ImGui::CollapsingHeader("動作・データ調整", ImGuiTreeNodeFlags_DefaultOpen)) return;
 
     // 種類は選択物から決まり、別のモデルや専用ステージへ選択を移しません。
@@ -1182,15 +1282,18 @@ void ActorDebugPanel::DrawSelectedInspector(ProjectWindow* assets) {
     const bool supported = playerCopyMode_ || GetPreviewDescriptor();
     // 実行中や未登録の種類は、既存のゲーム状態を守るためにプレビュー操作を無効にします。
     ImGui::BeginDisabled(!supported || !sceneManager_ || sceneManager_->IsPlaying());
+    // 対応する対象で再生を押した場合、開始済みなら先頭へ戻り、未開始なら複製を生成する。
     if (ImGui::Button(enabled_ ? "最初から" : "再生")) {
         if (enabled_) RestartPreview(); else CreatePreviewObjects();
         playing_ = true;
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(!enabled_);
+    // 稼働中だけ一時停止・続きから再生を切り替えられる。
     if (ImGui::Button(playing_ ? "一時停止" : "再開")) playing_ = !playing_;
     ImGui::EndDisabled();
     ImGui::SameLine();
+    // コマ送りでは固定フレームを1つ進め、終了ではプレビューを解除する。
     if (ImGui::Button("+1F")) session_->StepFrame();
     ImGui::SameLine();
     if (ImGui::Button("終了")) StopPreview();
@@ -1206,6 +1309,7 @@ void ActorDebugPanel::DrawSelectedInspector(ProjectWindow* assets) {
     // 動作一覧は登録情報と既存Profileから生成する。新しい敵名の分岐は不要。
     if (playerCopyMode_) {
         const auto* copy = GetCopyDescriptor();
+        // コピー形態の欄を開いたら、登録から選択した形態でプロフィールを読み直す。
         if (ImGui::BeginCombo("コピー形態", copy ? copy->displayName.c_str() : "未登録")) {
             for (const auto& entry : CopyAbilityPreviewRegistry::GetEntries())
                 if (ImGui::Selectable(entry.displayName.c_str(), copyType_ == entry.type)) {
@@ -1215,6 +1319,7 @@ void ActorDebugPanel::DrawSelectedInspector(ProjectWindow* assets) {
         }
         copy = GetCopyDescriptor();
         const auto* action = GetCopyAction();
+        // 能力と操作の一覧を取得できる場合、選んだ動作をプレビューへ渡す。
         if (copy && ImGui::BeginCombo("動作", action ? action->displayName.c_str() : "未選択")) {
             for (const auto& entry : copy->actions)
                 if (ImGui::Selectable(entry.displayName.c_str(), copyActionId_ == entry.id)) {
@@ -1223,18 +1328,20 @@ void ActorDebugPanel::DrawSelectedInspector(ProjectWindow* assets) {
             ImGui::EndCombo();
         }
     } else {
+        // 敵の場合はプロフィールと追加確認から動作を選び、現在の選択ラベルを出す。
         const auto* option = GetPreviewOption();
         const auto* attack = GetSelectedAttackDefinition();
         const char* label = option ? option->displayName.c_str() : attack ? attack->displayName.c_str() : "通常AI";
         if (ImGui::BeginCombo("動作", label)) {
-            for (int index=0; index<static_cast<int>(editableProfile_.attacks.size()); ++index) {
+            for (std::int32_t index=0; index<static_cast<std::int32_t>(editableProfile_.attacks.size()); ++index) {
                 const auto& entry = editableProfile_.attacks[index];
                 // プレイヤー専用の攻撃を敵の確認一覧に混ぜず、敵プロファイルと登録済みの確認モードを表示します。
-                if (entry.sequence.enabled && entry.sequence.binding == "player_special") continue;
+                if (entry.sequence.binding == "player_special") continue;
                 if (ImGui::Selectable(entry.displayName.c_str(), !option && profileAttackIndex_ == index)) {
                     profileAttackIndex_ = index; previewOptionId_.clear(); refresh();
                 }
             }
+            // 敵の動作登録がある場合だけ、追加確認項目も選べる。
             if (const auto* descriptor = GetPreviewDescriptor())
                 for (const auto& entry : descriptor->options)
                     if (ImGui::Selectable(entry.displayName.c_str(), previewOptionId_ == entry.id)) {
@@ -1252,14 +1359,17 @@ void ActorDebugPanel::DrawSelectedInspector(ProjectWindow* assets) {
         if (ImGui::BeginTabItem("動作確認")) {
             ImGui::SetNextItemWidth(100);
             ImGui::SliderFloat("速度", &playbackSpeed_, .05f, 2.0f, "%.2fx");
+            // 偽王を編集中だけ王冠ムービーへの入口を出す。戻る場合はプレビューも止める。
             if (source->GetEnemyType() == "FalseKingSlime") {
                 if (ImGui::Button(crownMovieMode_ ? "攻撃の確認へ戻る" : "王冠・撃破演出")) {
                     if (crownMovieMode_) { StopPreview(); crownMovieMode_ = false; }
                     else SetCrownMovieMode();
                 }
             }
+            // 王冠を選んだ場合は専用設定を表示する。展開した時間軸では再生位置やコマを操作できる。
             if (crownMovieMode_) DrawCrownMovieSettings();
             if (ImGui::CollapsingHeader("時間軸・コマ送り")) DrawTimelineWindow();
+            // 通常の技確認で詳細を展開した場合は、個別の観測設定も表示する。
             if (!crownMovieMode_ && ImGui::CollapsingHeader("追加の確認項目・詳細")) {
                 ImGui::PushID("AdvancedActorOptions");
                 DrawImGui();
@@ -1267,6 +1377,7 @@ void ActorDebugPanel::DrawSelectedInspector(ProjectWindow* assets) {
             }
             ImGui::EndTabItem();
         }
+        // 基本値を開いた場合、登録済みエディターが変更を返したらプレビューの再構築を予約する。
         if (ImGui::BeginTabItem("基本値")) {
             ImGui::TextWrapped("同じ種類の共通設定です。個別の配置位置とは分けて保存します。");
             const auto& draw = EnemyAttackPreviewRegistry::GetStatusEditor().draw;
@@ -1274,6 +1385,7 @@ void ActorDebugPanel::DrawSelectedInspector(ProjectWindow* assets) {
                 statusRefreshPending_ = true;
             ImGui::EndTabItem();
         }
+        // 攻撃データを開いた場合に定義を編集し、選択されたイベントかトラックのInspectorを描く。
         if (ImGui::BeginTabItem("攻撃データ")) {
             DrawAttackProfileEditor();
             if (ImGui::CollapsingHeader("部品の構成と保存")) DrawAttackAuthoringHierarchy();

@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "9e0ca808271d89345e8b04debbc23b2e",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/sprite/ui/result/clear/japanese/rewards_champagne_frame.png",
+  "version": 1
+}

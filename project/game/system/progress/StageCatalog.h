@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include <string>
 #include <vector>
@@ -12,7 +13,7 @@ struct StageData {
     std::string spritePath;
     std::string bgmPath;
     std::string description;
-    int unlockStageIndex = -1;
+    std::int32_t unlockStageIndex = -1;
     bool defaultUnlocked = false;
     std::string lightPath;
     std::string skyboxPath;

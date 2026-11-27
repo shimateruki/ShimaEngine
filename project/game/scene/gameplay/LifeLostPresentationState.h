@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "json.hpp"
 
@@ -8,7 +9,7 @@
 class LifeLostPresentationState {
   public:
     // 残機減少前後の表示値を 0～99 に収め、暗転保持から演出を開始します。
-    void Start(int beforeLives, int afterLives) {
+    void Start(std::int32_t beforeLives, std::int32_t afterLives) {
         active_ = true;
         finished_ = false;
         blackHold_ = true;
@@ -56,9 +57,9 @@ class LifeLostPresentationState {
 
     float Timer() const { return timer_; }
 
-    int BeforeLives() const { return beforeLives_; }
+    std::int32_t BeforeLives() const { return beforeLives_; }
 
-    int AfterLives() const { return afterLives_; }
+    std::int32_t AfterLives() const { return afterLives_; }
 
     // 残機減少演出の進行状態を Replay 用 JSON として取得します。
     nlohmann::json CaptureReplay() const {
@@ -69,6 +70,7 @@ class LifeLostPresentationState {
 
     // JSON に存在する項目だけを復元します。オブジェクト以外は無視します。
     void RestoreReplay(const nlohmann::json& state) {
+        // 記録がJSONオブジェクトでなければ、残機演出の時刻や状態を変更せずに返す。
         if (!state.is_object())
             return;
         active_ = state.value("active", active_);
@@ -87,7 +89,7 @@ class LifeLostPresentationState {
     bool blackHold_ = false;
     bool numberDropped_ = false;
     float timer_ = 0.0f;
-    int beforeLives_ = 0;
-    int afterLives_ = 0;
+    std::int32_t beforeLives_ = 0;
+    std::int32_t afterLives_ = 0;
     bool revive_ = false;
 };

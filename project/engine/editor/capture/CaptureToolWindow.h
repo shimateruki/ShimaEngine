@@ -26,14 +26,14 @@ class CaptureToolWindow : public IEditable {
 #endif
 public:
     enum class CaptureArea {
-        GameView,
-        Window,
-        Desktop
+        kGameView,
+        kWindow,
+        kDesktop
     };
 
     enum class ScreenshotTag {
-        Slides,
-        Debug
+        kSlides,
+        kDebug
     };
 
     ~CaptureToolWindow() override;
@@ -98,8 +98,8 @@ private:
 
     DebugEditor* editor_ = nullptr;
 
-    CaptureArea captureArea_ = CaptureArea::GameView;
-    ScreenshotTag screenshotTag_ = ScreenshotTag::Slides;
+    CaptureArea captureArea_ = CaptureArea::kGameView;
+    ScreenshotTag screenshotTag_ = ScreenshotTag::kSlides;
 
     bool recording_ = false;
     bool forceGameViewClientCapture_ = false;
@@ -113,8 +113,8 @@ private:
     IMFSinkWriter* sinkWriter_ = nullptr;
     DWORD videoStreamIndex_ = 0;
 
-    int recordingWidth_ = 0;
-    int recordingHeight_ = 0;
+    std::int32_t recordingWidth_ = 0;
+    std::int32_t recordingHeight_ = 0;
     RECT recordingRect_{};
 
     LONGLONG recordingFrameDuration100ns_ = 0; // 録画一フレームの長さ（100ナノ秒単位）。

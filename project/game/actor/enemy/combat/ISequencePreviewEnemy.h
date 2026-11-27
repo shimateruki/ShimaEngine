@@ -9,7 +9,9 @@ class ISequencePreviewEnemy {
   public:
     virtual ~ISequencePreviewEnemy() = default;
 
+    // 次のプレビューで選択する技を、攻撃シーケンスのIDで指定する。
     virtual void SetSequencePreviewAttackId(const std::string& attackId) = 0;
 
+    // 現在の段階を示す表示名を返す。表示できる段階がなければnullptrを返せる。
     virtual const char* GetSequenceStateLabel() const = 0;
 };

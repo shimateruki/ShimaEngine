@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "134ccd76fe805fdc9b2e4b8dd818ec99",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/3DModel/Stages/high_crown/high_crown_turf.dds",
+  "version": 1
+}

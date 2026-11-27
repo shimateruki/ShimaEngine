@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "SceneWorkspace.h"
 
 #ifdef USE_IMGUI
@@ -68,6 +69,7 @@ void SceneWorkspace::Update() {
 
     const std::uint64_t generation = sceneManager_->GetSceneGeneration();
 
+    // シーンの世代番号が変わったときだけ、隔離やレイヤーの作業状態を初期化する。
     if (generation != observedSceneGeneration_) {
         observedSceneGeneration_ = generation;
         ResetSceneRuntimeState();
@@ -82,18 +84,22 @@ void SceneWorkspace::HandleHotkeys() {
 
     const ImGuiIO& io = ImGui::GetIO();
 
+    // テキスト入力中、Ctrl を押していないとき、Alt との併用時には数字を消費しない。
     if (io.WantTextInput || !io.KeyCtrl || io.KeyAlt) {
         return;
     }
 
     for (std::size_t index = 0; index < kBookmarkCount; ++index) {
+        // リピートを除いた押下を検出できなければ、次の番号を調べる。
         if (!ImGui::IsKeyPressed(kBookmarkKeys[index], false)) {
             continue;
         }
 
+        // Ctrl と Shift を同時に押した場合は、指定番号へ現在の視点を記録する。
         if (io.KeyShift) {
             CaptureBookmark(index);
         }
+        // Shift なしの Ctrl と数字では、指定番号の視点へ戻る。
         else {
             RecallBookmark(index);
         }
@@ -113,12 +119,14 @@ void SceneWorkspace::DrawHierarchyPanel() {
     const bool hasSelection = !editor_->GetSelectedObjects().empty();
     ImGui::BeginDisabled(!hasSelection || sceneManager_->IsPlaying());
 
+    // 隔離ボタンでは選択の階層だけを一時表示の対象にする。
     if (ImGui::Button(ICON_FA_LOW_VISION " 選択のみ表示")) {
         IsolateSelection();
     }
 
     ImGui::SameLine();
 
+    // 非表示ボタンでは選択だけに手動非表示の理由を追加する。
     if (ImGui::Button(ICON_FA_EYE_SLASH " 選択を隠す")) {
         HideSelectionTemporarily();
     }
@@ -129,6 +137,7 @@ void SceneWorkspace::DrawHierarchyPanel() {
     // 復元操作は選択の有無とは独立し、一時非表示の対象があるときに使える。
     ImGui::BeginDisabled(GetTemporaryHiddenCount() == 0);
 
+    // 全復元ボタンでは階層やレイヤーを含む作業用の非表示を解除する。
     if (ImGui::Button(ICON_FA_EYE " 全表示を復元")) {
         RestoreAllTemporaryVisibility();
     }
@@ -137,6 +146,7 @@ void SceneWorkspace::DrawHierarchyPanel() {
 
     const std::size_t hiddenCount = GetTemporaryHiddenCount();
 
+    // 一時非表示が1件以上のときに、件数と隔離中かどうかを表示する。
     if (hiddenCount > 0) {
         ImGui::TextColored(
             ImVec4(0.35f, 0.82f, 1.0f, 1.0f),
@@ -152,6 +162,7 @@ void SceneWorkspace::DrawHierarchyPanel() {
             bool visible = hiddenLayers_.find(layer) == hiddenLayers_.end();
             const std::string label = layer + "##SceneWorkspaceLayer";
 
+            // チェック状態を変更したレイヤーだけ、一時表示の設定を反映する。
             if (ImGui::Checkbox(label.c_str(), &visible)) {
                 SetLayerVisible(layer, visible);
             }
@@ -160,10 +171,12 @@ void SceneWorkspace::DrawHierarchyPanel() {
         ImGui::TreePop();
     }
 
+    // ブックマーク欄を開いた場合、現在のシーンに対応する番号と保存操作を表示する。
     if (ImGui::TreeNodeEx("カメラブックマーク", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::TextDisabled("Ctrl+Shift+1～9: 保存 / Ctrl+1～9: 復帰");
         // 現在のSceneキーに属する記録だけを操作し、他Sceneの地点をこの一覧へ混ぜない。
         auto& bookmarks = GetCurrentBookmarks();
+        // 表を開始できた場合だけ列を設定し、番号順に各地点を並べる。
         if (ImGui::BeginTable(
             "SceneCameraBookmarks",
             4,
@@ -175,12 +188,13 @@ void SceneWorkspace::DrawHierarchyPanel() {
 
             for (std::size_t index = 0; index < kBookmarkCount; ++index) {
                 CameraBookmark& bookmark = bookmarks[index];
-                ImGui::PushID(static_cast<int>(index));
+                ImGui::PushID(static_cast<std::int32_t>(index));
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
                 ImGui::BeginDisabled(!bookmark.valid);
                 const std::string numberLabel = std::to_string(index + 1);
 
+                // 登録済みの番号を押した場合、その地点と選択 Object の復帰を試す。
                 if (ImGui::SmallButton(numberLabel.c_str())) {
                     RecallBookmark(index);
                 }
@@ -188,15 +202,18 @@ void SceneWorkspace::DrawHierarchyPanel() {
                 ImGui::EndDisabled();
                 ImGui::TableSetColumnIndex(1);
 
+                // 登録済みの枠には選択 Object の名前を表示し、名前が無ければカメラ地点と表示する。
                 if (bookmark.valid) {
                     ImGui::TextUnformatted(bookmark.objectName.empty() ? "カメラ地点" : bookmark.objectName.c_str());
                 }
+                // 未登録の枠には、復帰できる地点がまだ無いことを表示する。
                 else {
                     ImGui::TextDisabled("未登録");
                 }
 
                 ImGui::TableSetColumnIndex(2);
 
+                // 保存操作では、現在の視点と選択 Object を指定番号へ上書きする。
                 if (ImGui::SmallButton(ICON_FA_SAVE)) {
                     CaptureBookmark(index);
                 }
@@ -204,6 +221,7 @@ void SceneWorkspace::DrawHierarchyPanel() {
                 ImGui::TableSetColumnIndex(3);
                 ImGui::BeginDisabled(!bookmark.valid);
 
+                // 地点が登録されている枠で削除が押された場合、その番号だけ空にする。
                 if (ImGui::SmallButton(ICON_FA_TIMES)) {
                     ClearBookmark(index);
                 }
@@ -232,11 +250,13 @@ void SceneWorkspace::IsolateSelection() {
         CollectHierarchy(object, visibleObjects);
     }
 
+    // 有効な選択階層が空なら、シーン全体を誤って隠さないよう中止する。
     if (visibleObjects.empty()) {
         return;
     }
 
     for (const auto& object : sceneManager_->GetCurrentScene()->GetObjects()) {
+        // 存在しないオブジェクトとエディター内部の補助物は隔離判定の対象外にする。
         if (!object || object->IsEditorInternal()) {
             continue;
         }
@@ -261,6 +281,7 @@ void SceneWorkspace::HideSelectionTemporarily() {
     }
 
     for (engine::Object3D* object : editor_->GetSelectedObjects()) {
+        // 選択一覧で有効な参照だけ、手動の非表示理由を設定する。
         if (object) {
             object->SetEditorHiddenReason(kManualReason, true);
         }
@@ -274,6 +295,7 @@ void SceneWorkspace::ShowSelectionTemporarily() {
     }
 
     for (engine::Object3D* object : editor_->GetSelectedObjects()) {
+        // 選択一覧で有効な参照だけ、作業用の三つの非表示理由を解除する。
         if (object) {
             object->SetEditorHiddenReason(kIsolationReason | kLayerReason | kManualReason, false);
         }
@@ -284,6 +306,7 @@ void SceneWorkspace::RestoreAllTemporaryVisibility() {
     // エディターの非表示理由を全解除し、隔離・レイヤー状態を初期化します。
     if (sceneManager_ && sceneManager_->GetCurrentScene()) {
         for (const auto& object : sceneManager_->GetCurrentScene()->GetObjects()) {
+            // 存在するオブジェクトだけ、非表示理由をすべて消す。
             if (object) {
                 object->ClearEditorHiddenReasons();
             }
@@ -299,22 +322,26 @@ void SceneWorkspace::SetLayerVisible(const std::string& layer, bool visible) {
     if (visible) {
         hiddenLayers_.erase(layer);
     }
+    // 非表示へ切り替えたレイヤー名は、現在の除外一覧に登録する。
     else {
         hiddenLayers_.insert(layer);
     }
 
+    // シーンが無い場合は、設定を記録するところまでで終える。
     if (!sceneManager_ || !sceneManager_->GetCurrentScene()) {
         return;
     }
 
     // 変更するのはレイヤー由来の理由だけで、隔離や手動非表示の指定は残す。
     for (const auto& object : sceneManager_->GetCurrentScene()->GetObjects()) {
+        // 欠けているオブジェクトはレイヤーを判定できないため飛ばす。
         if (!object) {
             continue;
         }
 
         const std::string objectLayer = object->GetLayer().empty() ? "Default" : object->GetLayer();
 
+        // 未入力を Default として扱い、対象レイヤーと一致する物だけレイヤー非表示を更新する。
         if (objectLayer == layer) {
             object->SetEditorHiddenReason(kLayerReason, !visible);
         }
@@ -343,6 +370,7 @@ std::string SceneWorkspace::GetCurrentSceneKey() const {
 
     const SceneLoadContext& context = sceneManager_->GetActiveSceneLoadContext();
 
+    // アセットとして開いたシーンでは、ランタイム名の代わりに Asset ID で記録を分ける。
     if (context.IsSceneAsset()) {
         return "asset:" + context.sceneAssetId;
     }
@@ -369,6 +397,7 @@ void SceneWorkspace::CaptureBookmark(std::size_t index) {
 
     engine::Camera* camera = CameraManager::GetInstance()->GetMainCamera();
 
+    // メインカメラが無い場合は、保存枠の内容を変更しない。
     if (!camera) {
         return;
     }
@@ -382,6 +411,7 @@ void SceneWorkspace::CaptureBookmark(std::size_t index) {
 
     // 視点と一緒に選択物のGUIDも記録し、復帰時は名前に依存せず再選択できるようにする。
     if (editor_) {
+        // 選択オブジェクトがある場合にだけ、視点と一緒に選択の識別子を保存する。
         if (engine::Object3D* selected = editor_->GetSelectedObject()) {
             bookmark.objectGuid = selected->GetPersistentGuid();
             bookmark.objectName = selected->GetName();
@@ -393,8 +423,10 @@ void SceneWorkspace::CaptureBookmark(std::size_t index) {
         "Scene Workspace: カメラ地点 " + std::to_string(index + 1) + " を保存しました。");
 }
 
+// 登録済みの編集用視点を復元し、可能なら保存時の Object を選び直す。
 void SceneWorkspace::RecallBookmark(std::size_t index) {
     const auto* bookmarks = FindCurrentBookmarks();
+    // 枠が無い、番号が範囲外、未登録、またはプレイ中の場合は移動しない。
     if (!bookmarks || index >= kBookmarkCount || !(*bookmarks)[index].valid ||
         !sceneManager_ || sceneManager_->IsPlaying()) {
         return;
@@ -403,9 +435,10 @@ void SceneWorkspace::RecallBookmark(std::size_t index) {
     const CameraBookmark& bookmark = (*bookmarks)[index];
     CameraEditor* cameraEditor = CameraEditor::GetInstance();
     // 保存地点を編集カメラへ設定し、直後に行列も更新して次の描画へ反映する。
-    cameraEditor->SetMode(CameraEditor::Mode::Editor);
+    cameraEditor->SetMode(CameraEditor::Mode::kEditor);
     cameraEditor->SetEditorCameraTransform(bookmark.position, bookmark.rotation);
 
+    // メインカメラがあれば、エディターカメラ設定後にその行列を更新する。
     if (engine::Camera* camera = CameraManager::GetInstance()->GetMainCamera()) {
         camera->Update();
     }
@@ -414,6 +447,7 @@ void SceneWorkspace::RecallBookmark(std::size_t index) {
     // 選択対象が見つからなくても、保存したカメラ地点への移動はすでに反映済み。
     if (editor_ && sceneManager_->GetCurrentScene() &&
         engine::Object3D::IsPersistentGuidValid(bookmark.objectGuid)) {
+        // 保存した GUID が現在のシーンで解決できた場合だけ、Inspector の選択を同期する。
         if (engine::Object3D* object = sceneManager_->GetCurrentScene()->FindObjectByPersistentGuid(bookmark.objectGuid)) {
             editor_->SetSelectedObject(object);
             editor_->SyncObjectSelectionToInspector();
@@ -439,6 +473,7 @@ void SceneWorkspace::LoadBookmarks() {
     bookmarksByScene_.clear();
     std::ifstream file(bookmarkStatePath_);
 
+    // 保存ファイルを開けない場合は、初期化した空の記録を使う。
     if (!file.is_open()) {
         return;
     }
@@ -448,11 +483,13 @@ void SceneWorkspace::LoadBookmarks() {
         file >> root;
         const json& scenes = root.value("scenes", json::object());
 
+        // シーンごとのキーを読めない形式なら、記録の復元を中止する。
         if (!scenes.is_object()) {
             return;
         }
 
         for (auto sceneIt = scenes.begin(); sceneIt != scenes.end(); ++sceneIt) {
+            // 地点の配列になっていないシーンだけを飛ばす。
             if (!sceneIt.value().is_array()) {
                 continue;
             }
@@ -464,6 +501,7 @@ void SceneWorkspace::LoadBookmarks() {
             for (std::size_t index = 0; index < count; ++index) {
                 const json& source = sceneIt.value()[index];
 
+                // オブジェクト形式で有効フラグがある枠だけを復元する。
                 if (!source.is_object() || !source.value("valid", false)) {
                     continue;
                 }
@@ -491,6 +529,7 @@ void SceneWorkspace::SaveBookmarks() const {
     const fs::path statePath(bookmarkStatePath_);
     fs::create_directories(statePath.parent_path(), error);
 
+    // 保存先ディレクトリの作成に失敗した場合は、書込を試みない。
     if (error) {
         return;
     }
@@ -518,6 +557,7 @@ void SceneWorkspace::SaveBookmarks() const {
 
     std::ofstream file(statePath);
 
+    // 保存ファイルを開けたときだけ、全シーンの地点を書き出す。
     if (file.is_open()) {
         file << root.dump(2);
     }
@@ -527,8 +567,10 @@ std::vector<std::string> SceneWorkspace::CollectSceneLayers() const {
     // 内部補助Objectを除外し、空レイヤーはDefaultとして一覧化します。
     std::set<std::string> layers;
 
+    // 登録オブジェクトを調べられるシーンがある場合だけ候補を集める。
     if (sceneManager_ && sceneManager_->GetCurrentScene()) {
         for (const auto& object : sceneManager_->GetCurrentScene()->GetObjects()) {
+            // 実シーンのオブジェクトだけを候補とし、空のレイヤー名は Default として扱う。
             if (object && !object->IsEditorInternal()) {
                 layers.insert(object->GetLayer().empty() ? "Default" : object->GetLayer());
             }
@@ -554,11 +596,13 @@ void SceneWorkspace::ResetSceneRuntimeState() {
     isolationActive_ = false;
     hiddenLayers_.clear();
 
+    // シーンが無ければ、隔離・レイヤーの記録を消すところまでで終える。
     if (!sceneManager_ || !sceneManager_->GetCurrentScene()) {
         return;
     }
 
     for (const auto& object : sceneManager_->GetCurrentScene()->GetObjects()) {
+        // 新しいシーンの有効なオブジェクトから、一時非表示の理由を消す。
         if (object) {
             object->ClearEditorHiddenReasons();
         }

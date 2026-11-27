@@ -13,12 +13,12 @@ namespace engine {
 /// <summary>衝突形状と所有Transformからの相対位置・大きさ。</summary>
 // 関連：Collider（この型を使う機能の本体）
 struct ColliderConfig {
-    ColliderType type = ColliderType::Aabb;
-    engine::Vector3 center = engine::Vector3::ZERO; // 所有Transform基準のローカル中心。
+    engine::ColliderType type = engine::ColliderType::kAabb;
+    engine::Vector3 center = engine::Vector3::kZero; // 所有Transform基準のローカル中心。
     // sizeの解釈は形状別。箱は半幅、球はxを半径として使い、ObjectのScaleは別に適用する。
     engine::Vector3 size = { 1.0f, 1.0f, 1.0f };
     // 衝突形状のローカル回転をラジアンで指定する。Objectの回転とは別の設定。
-    engine::Vector3 rotation = engine::Vector3::ZERO;
+    engine::Vector3 rotation = engine::Vector3::kZero;
 
     // ローカルXZ平面の凸な上面輪郭。空なら従来の箱判定を使う。
     std::vector<engine::Vector2> footprint;
@@ -42,7 +42,7 @@ struct ModelSurfaceTriangle {
 // 関連：Collider（この型を使う機能の本体）
 struct TerrainCollisionData {
     bool enabled = false;
-    int resolution = 0; // 高さマップ一辺のサンプル数。
+    std::int32_t resolution = 0; // 高さマップ一辺のサンプル数。
     float sizeX = 1.0f; // 高さマップのX方向の広さ。
     float sizeZ = 1.0f; // 高さマップのZ方向の広さ。
     float minHeight = 0.0f; // 高さ値の下限。
@@ -107,7 +107,7 @@ public:
     const engine::Vector3& GetScaleOverride() const { return scaleOverride_; }
 
     // タイプやサイズのショートカット
-    ColliderType GetType() const { return config_.type; }
+    engine::ColliderType GetType() const { return config_.type; }
 
     // ここで返すsizeとcenterは設定値のまま。ワールド形状が必要ならGetAABB/GetOBB等を使う。
     engine::Vector3 GetSize() const { return config_.size; }
@@ -118,13 +118,13 @@ public:
     float GetRadius() const;
 
     // 所有Transformを反映したワールド空間の衝突形状。
-    Aabb GetAabb() const;
+    engine::Aabb GetAabb() const;
 
-    Obb GetObb() const;
+    engine::Obb GetObb() const;
 
-    Ring GetRing() const;
+    engine::Ring GetRing() const;
 
-    Cylinder GetCylinder() const;
+    engine::Cylinder GetCylinder() const;
 
     /// <summary>上面輪郭をワールド座標に変換する。デバッグ表示と判定で共用する。</summary>
     std::vector<engine::Vector3> GetFootprintWorldVertices(float localY) const;
@@ -144,7 +144,7 @@ public:
 
     /// <summary>指定Colliderとの接触情報を返す。</summary>
     /// <param name="other">判定相手のCollider。</param>
-    CollisionInfo CheckCollision(const Collider* other) const;
+    engine::CollisionInfo CheckCollision(const Collider* other) const;
 
 private:
     // 判定用の上書きスケールを優先して、衝突形状のワールド変換を組み立てる。
@@ -153,7 +153,7 @@ private:
     engine::Matrix4x4 GetCollisionWorldMatrix() const;
 
     // モデル凸包を使い、相手の形状との接触情報を求める。
-    CollisionInfo CheckModelVolume(const Collider* other) const;
+    engine::CollisionInfo CheckModelVolume(const Collider* other) const;
     // 姿勢が変わった場合にワールド凸包と判定用の方向を更新する。
     void UpdateWorldHullCache() const;
 
@@ -164,10 +164,10 @@ private:
     engine::Vector3 GetSphereCenter() const;
 
     // 球と高さマップ地形の接触・押し戻しを計算する。
-    CollisionInfo CheckSphereTerrainCollision(const engine::Vector3& spherePos, float radius, const Collider* terrain) const;
+    engine::CollisionInfo CheckSphereTerrainCollision(const engine::Vector3& spherePos, float radius, const Collider* terrain) const;
 
     // 軸に沿う箱と高さマップ地形の接触情報を求める。
-    CollisionInfo CheckAabbTerrainCollision(const Aabb& aabb, const Collider* terrain) const;
+    engine::CollisionInfo CheckAabbTerrainCollision(const engine::Aabb& aabb, const Collider* terrain) const;
 
     // このコライダーの持ち主（座標計算に使う）
     Transform* transform_ = nullptr;

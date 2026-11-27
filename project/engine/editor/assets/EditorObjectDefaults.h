@@ -6,7 +6,7 @@
 
 namespace engine { class Object3D; }
 
-namespace EditorObjectDefaults {
+namespace editorObjectDefaults {
 // 通常作成・プリセット作成で共通の地形初期値。明示済みの設定は変更しない。
 void ApplyGroundCollision(engine::Object3D* object);
 }

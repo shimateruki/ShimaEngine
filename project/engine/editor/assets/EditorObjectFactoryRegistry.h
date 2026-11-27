@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "Object3D.h"
 
@@ -16,18 +17,18 @@
 // 主な入口：Register / RegisterTypes / GetTypes / Create
 class EditorObjectFactoryRegistry {
   public:
-    enum class Kind { Enemy, Gimmick, Item };
+    enum class Kind { kEnemy, kGimmick, kItem };
 
     using Factory = std::function<std::unique_ptr<engine::Object3D>(const std::string&, engine::Object3DCommon*)>;
 
     /// <summary>同じ種類台帳を使う、作成メニューとSpawnerの候補一覧。</summary>
-    enum class TypeList { Creation, Spawner };
+    enum class TypeList { kCreation, kSpawner };
 
     // 生成・Spawner候補の表示可否と並び順。
     // 関連：EditorObjectFactoryRegistry（この型を使う機能の本体）
     struct TypeListOptions {
         bool visible = true;
-        int order = 1000; // 個別指定のない追加種類は、既存の優先候補より後ろへ並ぶ。
+        std::int32_t order = 1000; // 個別指定のない追加種類は、既存の優先候補より後ろへ並ぶ。
     };
 
     // 種類ID・表示名・型判定と用途別の一覧表示条件。
@@ -40,7 +41,7 @@ class EditorObjectFactoryRegistry {
         TypeListOptions spawner;
     };
 
-    /// 具体的なクラスを知らずに、ゲーム側で登録された種類を列挙します。
+    /// 作成メニューとスポナー選択で使う型一覧を、カテゴリごとに置き換えます。
     static void RegisterTypes(Kind kind, std::vector<TypeInfo> types) {
         Types()[static_cast<size_t>(kind)] = std::move(types);
     }
@@ -50,10 +51,11 @@ class EditorObjectFactoryRegistry {
     /// <summary>ゲーム側の用途別設定で候補を絞り、指定順に返す。登録更新をまたいで参照を保持しない。</summary>
     static std::vector<const TypeInfo*> GetTypes(Kind kind, TypeList list) {
         const auto options = [list](const TypeInfo& type) -> const TypeListOptions& {
-            return list == TypeList::Creation ? type.creation : type.spawner;
+            return list == TypeList::kCreation ? type.creation : type.spawner;
         };
         std::vector<const TypeInfo*> result;
         for (const auto& type : GetTypes(kind)) {
+            // 指定した用途で表示を許可された型だけを候補に含める。
             if (options(type).visible) result.push_back(&type);
         }
         // 同順位では元の登録順を維持し、候補追加だけで既存の順序を崩さない。
@@ -77,11 +79,11 @@ class EditorObjectFactoryRegistry {
 
   private:
     static std::array<std::vector<TypeInfo>, 3>& Types() {
-        static std::array<std::vector<TypeInfo>, 3> types;
-        return types;
+        static std::array<std::vector<TypeInfo>, 3> sTypes;
+        return sTypes;
     }
     static std::array<Factory, 3>& Factories() {
-        static std::array<Factory, 3> factories;
-        return factories;
+        static std::array<Factory, 3> sFactories;
+        return sFactories;
     }
 };

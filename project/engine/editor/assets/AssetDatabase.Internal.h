@@ -15,7 +15,7 @@
 #include <string>
 #include <system_error>
 
-namespace AssetDatabaseInternal {
+namespace assetDatabaseInternal {
 namespace fs = std::filesystem;
 
 // EditorとJSONではUTF-8、Windowsのファイル操作ではネイティブパスを使う。
@@ -30,8 +30,8 @@ inline std::string PathToUtf8(const fs::path& path) {
 }
 
 // .meta と永続索引の形式を区別し、古い形式は安全に再構築します。
-constexpr int kAssetMetaVersion = 1;
-constexpr int kPersistentIndexCacheVersion = 1;
+constexpr std::int32_t kAssetMetaVersion = 1;
+constexpr std::int32_t kPersistentIndexCacheVersion = 1;
 constexpr char kPersistentIndexCachePath[] = ".cache/asset_database_index.json";
 
 // 監視通知をまとめ、初回索引作成で一フレームに使う時間と件数を制限します。
@@ -58,6 +58,7 @@ inline std::string TrimTrailingSlash(std::string path) {
 
 /// ディレクトリ名が前方一致するだけの別パスを除外して包含を判定します。
 inline bool StartsWithPath(const std::string& path, const std::string& directory) {
+    // ディレクトリ自体と完全一致するパスも、その範囲に含める。
     if (path == directory) {
         return true;
     }
@@ -85,22 +86,26 @@ inline bool ReadFileStamp(
     const fs::path& path,
     std::uintmax_t* fileSize,
     fs::file_time_type* writeTime) {
+    // サイズと更新時刻の両方の出力先が必要。片方が空ならファイルを調べない。
     if (!fileSize || !writeTime) {
         return false;
     }
 
     std::error_code error;
+    // ファイルが存在しない、通常ファイルでない、または確認時のI/Oが失敗した場合は索引の比較に使えない。
     if (!fs::exists(path, error) || error ||
         !fs::is_regular_file(path, error) || error) {
         return false;
     }
 
     *fileSize = fs::file_size(path, error);
+    // サイズを取得できなければ、古いキャッシュとの判定を続けず失敗を返す。
     if (error) {
         return false;
     }
+    // 更新時刻も取得できた場合だけ、サイズと時刻の組を有効な結果として返す。
     *writeTime = fs::last_write_time(path, error);
     return !error;
 }
 
-} // namespace AssetDatabaseInternal
+} // namespace assetDatabaseInternal

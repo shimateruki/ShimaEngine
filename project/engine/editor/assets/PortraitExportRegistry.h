@@ -32,8 +32,8 @@ public:
 private:
     // 撮影条件の登録一覧を返す。更新は初期化側で行う。
     static std::vector<PortraitExportDefinition>& Definitions() {
-        static std::vector<PortraitExportDefinition> definitions;
-        return definitions;
+        static std::vector<PortraitExportDefinition> sDefinitions;
+        return sDefinitions;
     }
 };
 } // namespace engine

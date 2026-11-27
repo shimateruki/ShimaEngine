@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "67f18451ab8833e4842c2d02b4b1c385",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/3DModel/Gimmicks/guide_sign/guide_sign_timber.dds",
+  "version": 1
+}

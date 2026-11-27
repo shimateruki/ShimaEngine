@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "DirectXTex.h"
 #include <chrono>
@@ -147,9 +148,9 @@ public:
 
     uint32_t GetShadowMapSrvHandle() const { return shadowMapSrvHandle_; }
 
-    int GetShadowMapResolution() const { return shadowMapResolution_; }
+    std::int32_t GetShadowMapResolution() const { return shadowMapResolution_; }
 
-    void SetShadowMapResolution(int resolution);
+    void SetShadowMapResolution(std::int32_t resolution);
 
     // シャドウマップへ深度を書き込むため、描画先とビューポートを影用に切り替える。
     void PreDrawShadow();
@@ -295,7 +296,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> shadowMapResource_ = nullptr;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> shadowDsvHeap_ = nullptr;
     uint32_t shadowMapSrvHandle_ = 0; // 影マップのSRV番号。
-    int shadowMapResolution_ = 2048; // 影マップ一辺の解像度（ピクセル）。
+    std::int32_t shadowMapResolution_ = 2048; // 影マップ一辺の解像度（ピクセル）。
 
     // GPU計測。
     static const uint32_t kMaxGpuQueries = 128;

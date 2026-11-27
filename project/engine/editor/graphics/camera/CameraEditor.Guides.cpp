@@ -1,19 +1,25 @@
+#include <cstdint>
 #include "engine/editor/graphics/camera/CameraEditor.Internal.h"
 #include "engine/editor/core/DebugEditor.h"
 
-using namespace CameraEditorImplementation;
+using namespace cameraEditorImplementation;
 
-// カメラの軌道・フラスタムの可視化。
+// 編集カメラを通して、周回の中心または開始視点をワールド軸で移動する。
 void CameraEditor::DrawOrbitCenterGizmo(const engine::Vector2& gameViewOffset, const engine::Vector2& gameViewSize, bool snapEnabled, float snapValue) {
 #ifdef USE_IMGUI
+    // ツール一覧でギズモを非表示にしている間は入力を受けない。
     if (!EditorToolSettings::Get().IsVisible("orbitGizmo"))
         return;
-    if (settings_.currentMode != Mode::Editor)
+    // エディター視点のときだけ周回設定を操作できる。
+    if (settings_.currentMode != Mode::kEditor)
         return;
-    if (settings_.gameFollowMode != engine::Camera::FollowMode::Orbit)
+    // 本編の追従方式が周回でない場合は、このギズモを出さない。
+    if (settings_.gameFollowMode != engine::Camera::FollowMode::kOrbit)
         return;
+    // 軌道ガイドと中心ギズモの両方が有効であることを要求する。
     if (!settings_.orbitGuideVisible || !settings_.orbitCenterGizmoVisible)
         return;
+    // 描画領域が未確定または小さすぎる場合は、投影と入力座標を作らない。
     if (gameViewSize.x <= 1.0f || gameViewSize.y <= 1.0f)
         return;
     // 新しい操作は画像の中から始める。ドラッグ中はポインターが画像の外へ出ても終了まで操作を見届ける。
@@ -21,6 +27,7 @@ void CameraEditor::DrawOrbitCenterGizmo(const engine::Vector2& gameViewOffset, c
         return;
 
     engine::Camera* camera = CameraManager::GetInstance()->GetActiveCamera();
+    // 操作用ビューのカメラがなければ行列を取得できない。
     if (!camera)
         return;
 
@@ -53,8 +60,10 @@ void CameraEditor::DrawOrbitCenterGizmo(const engine::Vector2& gameViewOffset, c
         // ギズモが編集した行列の平行移動成分を取り出し、開始視点または軌道中心の設定へ変換する。
         engine::Vector3 editedCenter = { world.m[3][0], world.m[3][1], world.m[3][2] };
 
+        // 開始視点を編集中の場合は、新しい視点から周回半径と高さなどを再計算する。
         if (editStartEye) {
             SetOrbitStartFromWorld(editedCenter);
+        // 中心を編集中の場合は、開始視点ではなく周回の基準点を更新する。
         } else {
             SetOrbitCenterFromWorld(editedCenter);
         }
@@ -63,6 +72,7 @@ void CameraEditor::DrawOrbitCenterGizmo(const engine::Vector2& gameViewOffset, c
         camera->SetOrbitCenterHeight(settings_.orbitCenterHeight);
         camera->SetOrbitParams(settings_.orbitRadius, settings_.orbitHeight, settings_.orbitSpeed);
     }
+    // 前のフレームまでドラッグしていた場合は、解放時に一度だけ設定を保存する。
     else if (isDraggingOrbitCenterGizmo_) {
         isDraggingOrbitCenterGizmo_ = false;
         SaveSettings();
@@ -76,16 +86,21 @@ void CameraEditor::DrawOrbitCenterGizmo(const engine::Vector2& gameViewOffset, c
 #endif
 }
 
-void CameraEditor::DrawCameraGuide(PrimitiveDrawer& primitiveDrawer, ID3D12GraphicsCommandList* commandList, int& instanceCount, int maxDrawLimit) {
+// 本編・配置カメラの視点、視錐台、領域を、残りプリミティブ枠の範囲でワールドに描く。
+void CameraEditor::DrawCameraGuide(PrimitiveDrawer& primitiveDrawer, ID3D12GraphicsCommandList* commandList, std::int32_t& instanceCount, std::int32_t maxDrawLimit) {
 #ifdef USE_IMGUI
+    // ツール一覧でカメラガイドを非表示にしている場合は描かない。
     if (!EditorToolSettings::Get().IsVisible("cameraGuide"))
         return;
+    // カメラ設定側でガイドを無効にした場合も表示しない。
     if (!settings_.cameraGuideVisible)
         return;
     const bool isCameraEditorSelected =
         EditorManager::GetInstance()->GetSelectedObject() == this;
+    // カメラエディターか配置カメラを選んでいる場合だけ、編集用ガイドを出す。
     if (!isCameraEditorSelected && GetSelectedCameraObject() == nullptr)
         return;
+    // 他ガイドで描画枠を使い切っている場合は、追加の頂点を準備しない。
     if (instanceCount >= maxDrawLimit)
         return;
 
@@ -95,6 +110,7 @@ void CameraEditor::DrawCameraGuide(PrimitiveDrawer& primitiveDrawer, ID3D12Graph
 
     // 各描画ヘルパーで共通の上限を確認し、Editorガイドがプリミティブ枠を超えないようにする。
     auto drawSphere = [&](const engine::Vector3& pos, float size, const engine::Vector4& color) {
+        // 球の描画に使うインスタンスが上限に達した場合は省く。
         if (instanceCount >= maxDrawLimit)
             return;
         engine::Matrix4x4 world = math.Multiply(math.MakeScaleMatrix({ size, size, size }), math.MakeTranslateMatrix(pos));
@@ -102,6 +118,7 @@ void CameraEditor::DrawCameraGuide(PrimitiveDrawer& primitiveDrawer, ID3D12Graph
     };
 
     auto drawCubeLine = [&](const engine::Vector3& start, const engine::Vector3& end, float thickness, const engine::Vector4& color) {
+        // 線用の箱にも同じ上限を適用し、使用枠を一つずつ増やす。
         if (instanceCount >= maxDrawLimit)
             return;
         primitiveDrawer.DrawWireCube(commandList, MakeLineBoxMatrix(start, end, thickness), color, instanceCount++);
@@ -109,6 +126,7 @@ void CameraEditor::DrawCameraGuide(PrimitiveDrawer& primitiveDrawer, ID3D12Graph
 
     auto drawWireBox = [&](const engine::Vector3& center, const engine::Vector3& right, const engine::Vector3& up, const engine::Vector3& forward,
         float halfRight, float halfUp, float halfForward, float thickness, const engine::Vector4& color) {
+        // 辺を構成するための枠が残っていなければ、箱全体の準備を省く。
         if (instanceCount >= maxDrawLimit)
             return;
 
@@ -143,6 +161,7 @@ void CameraEditor::DrawCameraGuide(PrimitiveDrawer& primitiveDrawer, ID3D12Graph
     };
 
     auto drawCameraBody = [&](const engine::Vector3& eye, const engine::Vector3& forward, float sizeScale, const engine::Vector4& bodyColor, const engine::Vector4& accentColor) {
+        // 本体表示が無効な場合かプリミティブの枠が残っていない場合は、筐体を描かない。
         if (!settings_.cameraBodyVisible || instanceCount >= maxDrawLimit)
             return;
         // 実モデルを描ける場合は別経路がカメラ本体を描く。ワイヤーの筐体は共通描画設定がないときだけ使う。
@@ -155,7 +174,7 @@ void CameraEditor::DrawCameraGuide(PrimitiveDrawer& primitiveDrawer, ID3D12Graph
         const float size = markerSize * sizeScale;
         const float line = (std::max)(0.018f, size * 0.045f);
 
-        // UnityのScene Viewに近い「カメラ筐体 + レンズ + 取っ手」を、Editor専用ワイヤーモデルとして生成します。
+        // 筐体・レンズ・取っ手・三脚を、カメラのローカル基底に沿ったワイヤー形状で描く。
         const engine::Vector3 bodyCenter = eye - safeForward * (size * 0.16f);
         drawWireBox(bodyCenter, right, up, safeForward, size * 0.82f, size * 0.48f, size * 0.42f, line, bodyColor);
 
@@ -176,7 +195,8 @@ void CameraEditor::DrawCameraGuide(PrimitiveDrawer& primitiveDrawer, ID3D12Graph
         drawCubeLine(tripodCenter, tripodCenter - safeForward * (size * 0.50f) - up * (size * 0.18f), line * 0.65f, bodyColor);
     };
 
-    auto drawCameraBadge = [&](const engine::Vector3& eye, const engine::Vector3& forward, int badgeNumber, float sizeScale, const engine::Vector4& color, bool selected) {
+    auto drawCameraBadge = [&](const engine::Vector3& eye, const engine::Vector3& forward, std::int32_t badgeNumber, float sizeScale, const engine::Vector4& color, bool selected) {
+        // 描画枠を使い切っている場合は番号タグを省く。
         if (instanceCount >= maxDrawLimit)
             return;
 
@@ -190,27 +210,30 @@ void CameraEditor::DrawCameraGuide(PrimitiveDrawer& primitiveDrawer, ID3D12Graph
         // リスト上の番号とScene上のカメラ位置を対応させるため、小さなタグを描きます。
         drawWireBox(tagCenter, right, up, safeForward, size * 0.44f, size * 0.20f, size * 0.06f, line, color);
 
+        // 番号を持たない本編ビューは、点の列の代わりに線の記号を出す。
         if (badgeNumber <= 0) {
             drawCubeLine(tagCenter - right * (size * 0.22f), tagCenter + right * (size * 0.22f), line * 1.2f, color);
             drawCubeLine(tagCenter, tagCenter + up * (size * 0.28f), line * 0.9f, color);
             return;
         }
 
-        const int dotCount = (std::min)(badgeNumber, 5);
+        const std::int32_t dotCount = (std::min)(badgeNumber, 5);
         const float start = -0.24f;
         const float step = dotCount > 1 ? 0.12f : 0.0f;
 
-        for (int i = 0; i < dotCount; ++i) {
+        for (std::int32_t i = 0; i < dotCount; ++i) {
             const engine::Vector3 dotPos = tagCenter + right * (size * (start + step * i));
             drawSphere(dotPos, size * (selected ? 0.075f : 0.060f), color);
         }
 
+        // 5を超える番号は点を5個までに抑え、上限を超えたことを短い斜線で示す。
         if (badgeNumber > 5) {
             drawCubeLine(tagCenter + right * (size * 0.28f) - up * (size * 0.08f), tagCenter + right * (size * 0.34f) + up * (size * 0.08f), line * 0.75f, color);
         }
     };
 
     auto drawFrustum = [&](const engine::Vector3& eye, const engine::Vector3& forward, float fovY, float sizeScale, const engine::Vector4& eyeColor, const engine::Vector4& rayColor, const engine::Vector4& frameColor) {
+        // 視錐台に割り当てられる描画枠が無い場合は、四隅の計算を省く。
         if (instanceCount >= maxDrawLimit)
             return;
 
@@ -244,6 +267,7 @@ void CameraEditor::DrawCameraGuide(PrimitiveDrawer& primitiveDrawer, ID3D12Graph
         drawCubeLine(bottomLeft, topLeft, 0.03f * sizeScale, frameColor);
     };
 
+    // プレイ中の表示ルールで本編ガイドが隠されていない場合、設定から固定のガイドを描く。
     if (!ShouldHideGameCameraGuideDuringPlay()) {
         // ゲーム/3人称カメラの位置をScene上に表示します。
         const engine::Vector3 gameEye = GetConfiguredCameraEye();
@@ -254,6 +278,7 @@ void CameraEditor::DrawCameraGuide(PrimitiveDrawer& primitiveDrawer, ID3D12Graph
         drawFrustum(gameEye, gameForward, 0.45f, 0.85f, gameEyeColor, gameRayColor, gameFrameColor);
         drawCameraBadge(gameEye, gameForward, 0, 0.85f, gameFrameColor, true);
 
+        // 追従対象のプレイヤーがいる場合は、高さ補正後の注視点と視線も示す。
         if (targetPlayer_) {
             engine::Vector3 lookTarget = targetPlayer_->GetWorldPosition();
             lookTarget.y += settings_.height;
@@ -264,19 +289,24 @@ void CameraEditor::DrawCameraGuide(PrimitiveDrawer& primitiveDrawer, ID3D12Graph
 
     // 選択中の範囲を先に描き、プリミティブ上限に達しても編集中の範囲を優先する。
     auto* selectedCamera = GetSelectedCameraObject();
+    // 本編の再生中は編集用のカメラ範囲を重ねない。
     if (!SceneManager::GetInstance()->IsPlaying()) {
         auto drawRegion = [&](const engine::Object3D* object, bool selected) {
+            // カメラが存在し、配置カメラ型で、表示中の場合だけ範囲を評価する。
             if (!object || !object->IsCameraObject() || !object->GetIsVisible()) return;
             const auto& region = object->GetSceneCameraSettings().region;
+            // 範囲が無効なら境界箱や経路を描かない。
             if (!region.enabled) return;
 
             engine::Vector4 color = region.color;
             const bool dim = selectedCamera && !selected;
+            // 別のカメラを編集中の場合は、非選択の範囲の不透明度を落とす。
             if (dim) color.w *= 0.35f;
             drawWireBox(region.center, {1,0,0}, {0,1,0}, {0,0,1},
                 region.size.x * 0.5f, region.size.y * 0.5f, region.size.z * 0.5f,
                 selected ? 0.075f : (dim ? 0.02f : 0.035f), color);
 
+            // 選択した範囲のみ、箱の上辺中央とカメラの位置を線で結ぶ。
             if (selected) {
                 const auto labelAnchor = region.center + engine::Vector3{0, region.size.y * 0.5f, 0};
                 drawCubeLine(labelAnchor, object->GetWorldPosition(), 0.045f, color);
@@ -289,8 +319,10 @@ void CameraEditor::DrawCameraGuide(PrimitiveDrawer& primitiveDrawer, ID3D12Graph
             }
         };
         drawRegion(selectedCamera, true);
+        // 編集対象のシーンを取得できれば、選択外の範囲も薄く表示する。
         if (const auto* scene = GetCurrentScene()) {
             for (const auto& object : scene->GetObjects()) {
+                // 選択中の範囲は先に描画済みなので、同じ個体を二度描かない。
                 if (object.get() != selectedCamera) drawRegion(object.get(), false);
             }
         }
@@ -302,6 +334,7 @@ void CameraEditor::DrawCameraGuide(PrimitiveDrawer& primitiveDrawer, ID3D12Graph
         engine::Vector3 eye{};
         engine::Vector3 target{};
 
+        // 視点と注視点を解決できる場合に、選択カメラの構図を専用色で描く。
         if (ResolveSceneCameraPose(cameraObject, eye, target)) {
             const SceneCameraSettings& cameraSettings = cameraObject->GetSceneCameraSettings();
             const engine::Vector3 forward = NormalizeSafe(target - eye, GetObjectWorldForward(cameraObject));
@@ -324,17 +357,23 @@ void CameraEditor::DrawCameraGuide(PrimitiveDrawer& primitiveDrawer, ID3D12Graph
 #endif
 }
 
-void CameraEditor::DrawOrbitGuide(PrimitiveDrawer& primitiveDrawer, ID3D12GraphicsCommandList* commandList, int& instanceCount, int maxDrawLimit) {
+// 通常のカメラガイドに、周回軌道・中心・開始視点・現在位置を追加する。
+void CameraEditor::DrawOrbitGuide(PrimitiveDrawer& primitiveDrawer, ID3D12GraphicsCommandList* commandList, std::int32_t& instanceCount, std::int32_t maxDrawLimit) {
 #ifdef USE_IMGUI
     DrawCameraGuide(primitiveDrawer, commandList, instanceCount, maxDrawLimit);
+    // 周回ガイドのツールが非表示なら、通常ガイドの描画だけで終える。
     if (!EditorToolSettings::Get().IsVisible("orbitGuide"))
         return;
-    if (settings_.currentMode != Mode::Editor)
+    // ワールドを編集しているカメラモードの場合だけ軌道を追加する。
+    if (settings_.currentMode != Mode::kEditor)
         return;
+    // 周回側の可視設定が無効なら軌道を描かない。
     if (!settings_.orbitGuideVisible)
         return;
-    if (settings_.gameFollowMode != engine::Camera::FollowMode::Orbit)
+    // 本編の追従方式が周回の場合に限り、周回半径を可視化する。
+    if (settings_.gameFollowMode != engine::Camera::FollowMode::kOrbit)
         return;
+    // 通常ガイドで共通の描画枠を使い切った場合は追加描画を省く。
     if (instanceCount >= maxDrawLimit)
         return;
 
@@ -346,6 +385,7 @@ void CameraEditor::DrawOrbitGuide(PrimitiveDrawer& primitiveDrawer, ID3D12Graphi
     const float startAngle = DegToRad(settings_.orbitStartAngleDeg);
 
     auto drawSphere = [&](const engine::Vector3& pos, float size, const engine::Vector4& color) {
+        // マーカー用のプリミティブ枠が残っている場合だけ球を描く。
         if (instanceCount >= maxDrawLimit)
             return;
         engine::Matrix4x4 world = math.Multiply(math.MakeScaleMatrix({ size, size, size }), math.MakeTranslateMatrix(pos));
@@ -353,11 +393,13 @@ void CameraEditor::DrawOrbitGuide(PrimitiveDrawer& primitiveDrawer, ID3D12Graphi
         };
 
     auto drawCubeLine = [&](const engine::Vector3& start, const engine::Vector3& end, float thickness, const engine::Vector4& color) {
+        // 線の描画でも、通常ガイドと共有するインスタンス上限を守る。
         if (instanceCount >= maxDrawLimit)
             return;
         primitiveDrawer.DrawWireCube(commandList, MakeLineBoxMatrix(start, end, thickness), color, instanceCount++);
         };
 
+    // 半径が0.01を超え、描画枠が残っている場合に水平リングを作る。
     if (radius > 0.01f && instanceCount < maxDrawLimit) {
         // Orbit中心と半径を水平リングにし、開始位置は別の線と点で示す。
         engine::Matrix4x4 ringWorld = math.Multiply(
@@ -383,6 +425,7 @@ void CameraEditor::DrawOrbitGuide(PrimitiveDrawer& primitiveDrawer, ID3D12Graphi
 
     engine::Camera* camera = CameraManager::GetInstance()->GetMainCamera();
 
+    // メインカメラが存在すれば、設定上の開始点と区別して現在位置も表示する。
     if (camera) {
         drawSphere(camera->GetEye(), markerSize * 0.75f, { 0.75f, 0.35f, 1.0f, 1.0f });
     }
@@ -395,10 +438,12 @@ void CameraEditor::DrawOrbitGuide(PrimitiveDrawer& primitiveDrawer, ID3D12Graphi
 }
 
 
+// 選択中の適用範囲を移動・拡縮する。通常ギズモやクリック選択を抑えるフレームでは true。
 bool CameraEditor::DrawRegionGizmo(const engine::Vector2& offset, const engine::Vector2& size,
     bool snapEnabled, float snap, DebugEditor* editor) {
 #ifdef USE_IMGUI
     auto* object = GetSelectedCameraObject();
+    // 停止した編集画面で、範囲が有効な未ロックの選択物と描画領域が揃う場合だけ操作できる。
     if (!editRegionGizmo_ || !object || !editor || editor->GetSelectedObject() != object ||
         !object->GetSceneCameraSettings().region.enabled || object->GetIsLocked() ||
         SceneManager::GetInstance()->IsPlaying() || !IsEditorMode() || size.x <= 1.0f || size.y <= 1.0f) {
@@ -410,6 +455,7 @@ bool CameraEditor::DrawRegionGizmo(const engine::Vector2& offset, const engine::
         regionGizmoBefore_ = nullptr; regionGizmoObjectId_ = object->GetPersistentGuid();
     }
     auto* camera = CameraManager::GetInstance()->GetActiveCamera();
+    // 変換用のカメラを取得できなければ、入力を占有しない。
     if (!camera) return false;
     auto& region = object->GetSceneCameraSettings().region;
     engine::Math math;
@@ -427,6 +473,7 @@ bool CameraEditor::DrawRegionGizmo(const engine::Vector2& offset, const engine::
     ImGuizmo::PopID();
     // 離したフレームでもManipulateが最終値を返すため、IsUsingだけで変更を捨てない。
     if (usingGizmo || modified) {
+        // ドラッグの開始時だけ、変更前の状態を後の Undo 用に退避する。
         if (!regionGizmoBefore_.is_object()) regionGizmoBefore_ = before;
         region.center = {world.m[3][0], world.m[3][1], world.m[3][2]};
         // 対角成分の絶対値を辺の長さにし、反転やゼロ幅でも範囲の各軸を0.1以上に保つ。

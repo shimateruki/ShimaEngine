@@ -16,8 +16,8 @@ constexpr const char* kCategoryBGM = "BGM";
 
 GameAudioSettings* GameAudioSettings::GetInstance() {
     // 音声 ID とロード済みハンドルを全シーンで共有する。
-    static GameAudioSettings instance;
-    return &instance;
+    static GameAudioSettings sInstance;
+    return &sInstance;
 }
 
 void GameAudioSettings::Initialize() {
@@ -40,7 +40,7 @@ void GameAudioSettings::Initialize() {
 }
 
 void GameAudioSettings::Load() {
-    // 壊れた項目は飛ばし、Editor で登録した項目だけを読み込みます。
+    // 登録表を読み直し、有効で一意な音声IDから再生先と設定値を組み立てる。
     entries_.clear();
     // 旧登録の音声ハンドルは持ち越さず、読み込み後の項目から再び取得させる。
     handles_.clear();
@@ -48,15 +48,17 @@ void GameAudioSettings::Load() {
     nlohmann::json data;
     std::ifstream file(filePath_);
 
-    // 読めない登録表は空扱いにし、不完全な音声情報を再生器へ渡しません。
+    // 登録表を開けた場合だけ解析する。開けなければ登録表は空のままにする。
     if (file.is_open()) {
         try {
             file >> data;
+        // JSONを解析できなかった場合は空のオブジェクトとして処理し、壊れた設定を引き継がない。
         } catch (...) {
             data = nlohmann::json::object();
         }
     }
 
+    // ルートがオブジェクトで、entriesが配列の場合だけ、登録候補を読む。
     if (data.is_object() && data.contains("entries") && data["entries"].is_array()) {
         const auto readString = [](const nlohmann::json& item, const char* key, const std::string& fallback) {
             return item.contains(key) && item[key].is_string() ? item[key].get<std::string>() : fallback;
@@ -66,6 +68,7 @@ void GameAudioSettings::Load() {
         std::unordered_set<std::string> usedIds;
 
         for (const auto& item : data["entries"]) {
+            // 配列に混在する文字列や数値などは、音声設定の項目として読めないため飛ばす。
             if (!item.is_object()) {
                 continue;
             }
@@ -88,11 +91,10 @@ void GameAudioSettings::Load() {
         }
     }
 
-    // 既定の仮SE・BGMは補充しない。Editor から登録した項目だけを使う。
 }
 
 void GameAudioSettings::Save() const {
-    // エディターに登録された音だけを書き出し、仮の既定 SE を再生成しない。
+    // 登録表を整形してJSONに書き出し、音量を保存時にも0〜1の範囲へ揃える。
     nlohmann::json data;
     data["entries"] = nlohmann::json::array();
 
@@ -109,6 +111,7 @@ void GameAudioSettings::Save() const {
     std::filesystem::create_directories(std::filesystem::path(filePath_).parent_path());
     std::ofstream output(filePath_);
 
+    // 保存先を開けた場合だけ、現在の登録表を書き込む。
     if (output.is_open()) {
         output << data.dump(4);
     }
@@ -140,6 +143,7 @@ bool GameAudioSettings::RemoveEntry(const std::string& id) {
     // 削除前に再生を停止し、古いロードハンドルを表から外す。
     auto it = std::find_if(entries_.begin(), entries_.end(), [&](const SoundEntry& entry) { return entry.id == id; });
 
+    // 該当IDが未登録なら停止も削除も行わず、falseを返す。
     if (it == entries_.end()) {
         return false;
     }
@@ -157,9 +161,10 @@ float GameAudioSettings::GetVolume(const std::string& id, float fallback) const 
 }
 
 void GameAudioSettings::SetVolume(const std::string& id, float volume) {
-    // エディター上の設定だけを変更し、保存は明示操作に委ねる。
+    // 設定のメモリ上の値を更新する。ファイルへ書くときはSave()を別に呼ぶ。
     SoundEntry* entry = FindEntry(id);
 
+    // 登録済みのIDに限り、次回の再生で使用する設定音量を差し替える。
     if (entry) {
         entry->volume = ClampVolume(volume);
     }
@@ -169,6 +174,7 @@ AudioPlayer::AudioHandle GameAudioSettings::LoadHandle(const SoundEntry& entry) 
     // 同じ音声ファイルを繰り返し読み込まないよう、読み込み済みハンドルを共有します。
     auto cached = handles_.find(entry.id);
 
+    // 同じIDのハンドルを取得済みなら、ファイルを開き直さずその値を返す。
     if (cached != handles_.end()) {
         return cached->second;
     }
@@ -178,23 +184,26 @@ AudioPlayer::AudioHandle GameAudioSettings::LoadHandle(const SoundEntry& entry) 
         return AudioPlayer::kInvalidAudioHandle;
     }
 
+    // ファイルが存在する場合はロードを試し、返された値を ID ごとに保持する。無効値も登録表の再読込までは保持する。
     AudioPlayer::AudioHandle handle = AudioPlayer::GetInstance()->LoadSoundFile(entry.path);
     handles_[entry.id] = handle;
     return handle;
 }
 
 void GameAudioSettings::PlaySE(const std::string& id, float volumeScale, bool loopOverride) {
-    // ID で登録された音だけを、設定音量と呼び出し倍率の積で再生する。
+    // 登録音量と呼び出し側の倍率を掛けてSEを再生する。どちらかがループを要求すれば繰り返す。
     Initialize();
 
     SoundEntry* entry = FindEntry(id);
 
+    // IDが登録表に存在しなければ、ロード先を特定できないため再生を見送る。
     if (!entry) {
         return;
     }
 
     AudioPlayer::AudioHandle handle = LoadHandle(*entry);
 
+    // SEのロード結果が無効なら、AudioPlayerへ再生を要求しない。
     if (handle == AudioPlayer::kInvalidAudioHandle) {
         return;
     }
@@ -203,17 +212,19 @@ void GameAudioSettings::PlaySE(const std::string& id, float volumeScale, bool lo
 }
 
 void GameAudioSettings::PlayBGM(const std::string& id, float volumeScale, bool loopOverride) {
-    // 未登録・ファイル欠落時は再生を省略し、現在シーンを止めない。
+    // 登録音量と呼び出し側の倍率を掛けてBGMを再生する。どちらかがループを要求すれば繰り返す。
     Initialize();
 
     SoundEntry* entry = FindEntry(id);
 
+    // IDが登録表に存在しなければ、新しいBGMへの切り替えを要求しない。
     if (!entry) {
         return;
     }
 
     AudioPlayer::AudioHandle handle = LoadHandle(*entry);
 
+    // BGMのロード結果が無効なら、AudioPlayerへ再生を要求しない。
     if (handle == AudioPlayer::kInvalidAudioHandle) {
         return;
     }
@@ -225,25 +236,28 @@ void GameAudioSettings::Stop(const std::string& id) {
     // カテゴリに応じて BGM 全体停止か、該当 SE ハンドル停止を選ぶ。
     SoundEntry* entry = FindEntry(id);
 
+    // IDが未登録なら、停止する音のカテゴリとハンドルを特定できない。
     if (!entry) {
         return;
     }
 
-    // 再生用のハンドルがまだ作られていない音には停止要求を送りません。
     auto cached = handles_.find(entry->id);
 
+    // このIDで取得済みの再生用ハンドルがなければ、停止を要求しない。
     if (cached == handles_.end()) {
         return;
     }
 
+    // 登録カテゴリがBGMの場合は、AudioPlayerで現在再生中のBGMを停止する。
     if (entry->category == kCategoryBGM) {
         AudioPlayer::GetInstance()->StopBGM();
+    // それ以外のカテゴリは、このIDのハンドルを使ってSEの停止を要求する。
     } else {
         AudioPlayer::GetInstance()->StopSe(cached->second);
     }
 }
 
 float GameAudioSettings::ClampVolume(float value) {
-    // 不正な浮動小数が音声 API に届かないようにする。
+    // 有限値は0〜1に制限する。NaNや無限大の場合は等倍の1.0を使う。
     return std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 1.0f;
 }

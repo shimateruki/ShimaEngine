@@ -52,15 +52,15 @@ public:
     // デバッグリプレイ専用の実行状態です。Scene保存用データとは分離します。
     // 関連：Sprite（この型を使う機能の本体）
     struct ReplayState {
-        engine::Vector2 position = engine::Vector2::ZERO;
+        engine::Vector2 position = engine::Vector2::kZero;
         float rotation = 0.0f;
         engine::Vector2 size = { 100.0f, 100.0f };
-        engine::Vector4 color = engine::Colors::White;
+        engine::Vector4 color = engine::colors::kWhite;
         engine::Vector2 anchorPoint = { 0.5f, 0.5f };
         bool flipX = false;
         bool flipY = false;
 
-        engine::Vector2 textureLeftTop = engine::Vector2::ZERO;
+        engine::Vector2 textureLeftTop = engine::Vector2::kZero;
         engine::Vector2 textureSize = { 100.0f, 100.0f };
         uint32_t textureHandle = 0;
 
@@ -72,10 +72,10 @@ public:
         bool animationLooping = false;
         float frameDuration = 1.0f;
         float animationTimer = 0.0f;
-        int totalFrames = 1;
-        int currentFrame = 0;
-        int frameWidth = 0;
-        int frameHeight = 0;
+        std::int32_t totalFrames = 1;
+        std::int32_t currentFrame = 0;
+        std::int32_t frameWidth = 0;
+        std::int32_t frameHeight = 0;
 
         uint64_t parentReplayId = 0; // 復元先の親ID。0は親なし。
         bool replayRemoved = false;
@@ -169,7 +169,7 @@ public:
     /// <param name="frameCount">横方向に並ぶフレーム数。</param>
     /// <param name="duration">1フレームの表示時間（秒）。</param>
     /// <param name="loop">最終フレームの後に先頭へ戻す場合はtrue。</param>
-    void SetAnimation(int frameCount, float duration, bool loop);
+    void SetAnimation(std::int32_t frameCount, float duration, bool loop);
 
     /// <summary>エディターで表示するSprite名を設定・取得する。</summary>
     void SetName(const std::string& name) { name_ = name; }
@@ -246,7 +246,7 @@ private:
 
     // 画面上の基本変換。
     // 親Spriteのローカル座標で保持するアンカーの位置。親がなければ画面のピクセル座標です。
-    engine::Vector2 position_ = engine::Vector2::ZERO;
+    engine::Vector2 position_ = engine::Vector2::kZero;
     float rotation_ = 0.0f; // 画面内の回転角（ラジアン）。
     engine::Vector2 size_ = { 100.0f, 100.0f }; // 画面上の大きさ（ピクセル）。
     Transform transform_ = { {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f} };
@@ -256,7 +256,7 @@ private:
     engine::Vector2 anchorPoint_ = { 0.5f, 0.5f }; // 画像内の基準位置。0が左上、1が右下。
     bool isFlipX_ = false;
     bool isFlipY_ = false;
-    engine::Vector2 textureLeftTop_ = engine::Vector2::ZERO; // 切り出す画像領域の左上（ピクセル）。
+    engine::Vector2 textureLeftTop_ = engine::Vector2::kZero; // 切り出す画像領域の左上（ピクセル）。
     engine::Vector2 textureSize_ = { 100.0f, 100.0f }; // 切り出す画像領域の大きさ（ピクセル）。
 
     // スプライトシートの簡易アニメーション状態。
@@ -264,10 +264,10 @@ private:
     bool isLooping_ = false;
     float frameDuration_ = 1.0f; // アニメーション一コマの秒数。
     float animationTimer_ = 0.0f; // 次コマまでの蓄積秒数。
-    int totalFrames_ = 1;
-    int currentFrame_ = 0; // 現在表示するコマ番号。
-    int frameWidth_ = 0; // 一コマの幅（ピクセル）。
-    int frameHeight_ = 0; // 一コマの高さ（ピクセル）。
+    std::int32_t totalFrames_ = 1;
+    std::int32_t currentFrame_ = 0; // 現在表示するコマ番号。
+    std::int32_t frameWidth_ = 0; // 一コマの幅（ピクセル）。
+    std::int32_t frameHeight_ = 0; // 一コマの高さ（ピクセル）。
 
     // テクスチャのピクセルサイズに合わせて描画サイズとUVを更新する。
     void AdjustTextureSize();
@@ -284,7 +284,7 @@ private:
 
     Microsoft::WRL::ComPtr<ID3D12Resource> materialResource_ = nullptr;
     Material* materialData_ = nullptr; // マップ済み定数バッファへの参照。
-    engine::Vector4 color_ = engine::Colors::White;
+    engine::Vector4 color_ = engine::colors::kWhite;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> wvpResource_ = nullptr;
     TransformationMatrix* wvpData_ = nullptr; // マップ済み変換バッファへの参照。

@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "engine/editor/assets/JsonAssetBrowser.h"
 #include "IEditable.h"
 #include <string>
@@ -27,8 +28,8 @@ private:
     SceneManager* sceneManager_ = nullptr; // 現在シーンの取得元。借用参照。
     engine::ParticleSystem* targetSystem_ = nullptr;
     float previewTime_ = 0.0f;
-    int lastStagePlayRequestSerial_ = 0; // 前回処理したプレビュー再生要求の番号。
-    int lastStageStopRequestSerial_ = 0; // 前回処理したプレビュー停止要求の番号。
-    int lastStageSeekRequestSerial_ = 0; // 前回処理したプレビューシーク要求の番号。
+    std::int32_t lastStagePlayRequestSerial_ = 0; // 前回処理したプレビュー再生要求の番号。
+    std::int32_t lastStageStopRequestSerial_ = 0; // 前回処理したプレビュー停止要求の番号。
+    std::int32_t lastStageSeekRequestSerial_ = 0; // 前回処理したプレビューシーク要求の番号。
     char textureSearch_[128] = {};
 };

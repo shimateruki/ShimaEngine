@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "imgui.h"
 #include <cstdio>
 #include <cstdlib>
@@ -5,8 +6,8 @@
 #include <string>
 
 namespace {
-int invalidParameters = 0;
-void InvalidParameter(const wchar_t*, const wchar_t*, const wchar_t*, unsigned int, uintptr_t) {
+std::int32_t invalidParameters = 0;
+void InvalidParameter(const wchar_t*, const wchar_t*, const wchar_t*, std::uint32_t, uintptr_t) {
     ++invalidParameters;
 }
 }
@@ -16,7 +17,7 @@ int main() {
     const std::string phase = "炎の扇状連射 / 実行中 / 発火 5 / 条件不成立 0 / 部品実行 0 / 部品省略 0 / 接触 0";
     const auto previous = _set_thread_local_invalid_parameter_handler(InvalidParameter);
     char oldBuffer[64]{};
-    const int result = sprintf_s(oldBuffer, "%s", phase.c_str());
+    const std::int32_t result = sprintf_s(oldBuffer, "%s", phase.c_str());
     const bool reproduced = phase.size() >= sizeof(oldBuffer) && result < 0 && invalidParameters == 1;
 
     if (!reproduced) {
@@ -31,7 +32,7 @@ int main() {
     io.DisplaySize = ImVec2(800, 600);
     io.DeltaTime = 1.0f / 60;
     unsigned char* pixels;
-    int width, height;
+    std::int32_t width, height;
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
     ImGui::NewFrame();
     ImGui::Begin("Attack phase regression");

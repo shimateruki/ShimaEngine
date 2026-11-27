@@ -28,28 +28,28 @@ class PlayerStatePullEnemy : public IAnimationState {
   private:
     bool alreadyHit_ = false;
     std::shared_ptr<PlayerWhipVisual> whipVisual_;
-    enum class Phase { ShootHook, PullEnemy };
+    enum class Phase { kShootHook, kPullEnemy };
 
     // 対象の生存期間は呼び出し元が管理します。終了時には元の変形情報を復元します。
     engine::Object3D* targetEnemy_ = nullptr;
     engine::Vector3 targetPos_;
     engine::Vector3 hookTipPos_;
 
-    Phase phase_ = Phase::ShootHook;
+    Phase phase_ = Phase::kShootHook;
 
     engine::Vector3 enemyStartPos_;
     engine::Vector3 enemyPullStartScale_ = {1.0f, 1.0f, 1.0f};
     engine::Vector3 enemyBaseScale_ = {1.0f, 1.0f, 1.0f};
-    engine::Vector3 enemyBaseRotation_ = engine::Vector3::ZERO;
+    engine::Vector3 enemyBaseRotation_ = engine::Vector3::kZero;
     engine::Quaternion enemyBaseQuaternion_ = {0.0f, 0.0f, 0.0f, 1.0f};
     bool enemyBaseQuaternionMaster_ = true;
 
     float pullTimer_ = 0.0f; // 引き寄せに使う経過秒数。
 
     bool isHeavyPullTarget_ = false;
-    engine::Vector3 heavyPullBasePlayerPos_ = engine::Vector3::ZERO;
+    engine::Vector3 heavyPullBasePlayerPos_ = engine::Vector3::kZero;
     bool hasHeavyPullBasePlayerPos_ = false;
 
-    engine::Vector3 normalPullBasePlayerPos_ = engine::Vector3::ZERO;
+    engine::Vector3 normalPullBasePlayerPos_ = engine::Vector3::kZero;
     bool hasNormalPullBasePlayerPos_ = false;
 };

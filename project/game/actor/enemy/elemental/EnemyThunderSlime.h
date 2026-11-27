@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "BaseEnemy.h"
 #include "EffectObject3D.h"
 #include <array>
@@ -112,7 +113,7 @@ class EnemyThunderSlime : public BaseEnemy {
     void CalculateAuraShape(engine::Vector3& center, float& horizontalDiameter, float& verticalDiameter) const;
 
     // 電弧を楕円周上に分散し、個数と位相で待機・詠唱・放電を使い分ける。
-    void EmitOuterThunderEffect(const char* presetName, int count, float phaseOffset = 0.0f);
+    void EmitOuterThunderEffect(const char* presetName, std::int32_t count, float phaseOffset = 0.0f);
 
     // 落雷の発生が近づくほど電弧を中心・上方へ集める。
     void EmitLineChargeEffect(const char* presetName, float progress);
@@ -150,12 +151,12 @@ class EnemyThunderSlime : public BaseEnemy {
     float idleSparkTimer_ = 0.0f;      // 常時火花の発生間隔。
 
     enum class WildLightningState {
-        Idle,
-        Charging,
-        Striking,
+        kIdle,
+        kCharging,
+        kStriking,
     };
 
-    WildLightningState wildLightningState_ = WildLightningState::Idle;
+    WildLightningState wildLightningState_ = WildLightningState::kIdle;
 
     std::array<engine::Vector3, 5> wildStrikePositions_{};
     engine::Vector3 wildLightningDirection_ = {0.0f, 0.0f, 1.0f};
@@ -163,7 +164,7 @@ class EnemyThunderSlime : public BaseEnemy {
     float wildLightningTimer_ = 0.0f; // 暴走雷の段階切替までの残り秒数。
     float wildLightningEffectTimer_ = 0.0f; // 暴走雷の表示更新までの残り秒数。
 
-    int wildStrikeIndex_ = 0; // 暴走中の次の落雷位置を選ぶ番号。
+    std::int32_t wildStrikeIndex_ = 0; // 暴走中の次の落雷位置を選ぶ番号。
     bool wildLightningHitTarget_ = false; // 同じ暴走攻撃で対象に繰り返し命中させないための印。
 
     engine::Vector3 baseScale_ = {1.0f, 1.0f, 1.0f};

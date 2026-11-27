@@ -21,7 +21,7 @@ void DroppedCopyStar::InitializeDrop(engine::Object3DCommon* common, const std::
     start_ = start;
     destination_ = destination;
     elapsed_ = 0.0f;
-    BaseItem::Initialize(common, std::string(PlayerCopyTypeCatalog::GetEssenceModel(enemyType)));
+    BaseItem::Initialize(common, std::string(playerCopyTypeCatalog::GetEssenceModel(enemyType)));
     SetName("DroppedCopyStar_" + enemyType);
     SetItemType("DroppedCopyStar");
     SetTranslate(start);
@@ -41,10 +41,11 @@ void DroppedCopyStar::InitializeDrop(engine::Object3DCommon* common, const std::
 }
 
 void DroppedCopyStar::Update(float deltaTime) {
-    // 死亡・取得済みでは移動をやめ、編集時も寿命や軌道を進めません。
+    // 寿命切れや取得済みの星は、移動も寿命もこれ以上進めない。
     if (IsDead() || IsCollected())
         return;
     auto* manager = SceneManager::GetInstance();
+    // シーンを再生している間だけ、星の軌道と寿命を進める。
     if (!manager || !manager->IsPlaying())
         return;
     deltaTime = std::isfinite(deltaTime) ? (std::max)(0.0f, deltaTime) : 0.0f;
@@ -60,6 +61,7 @@ void DroppedCopyStar::Update(float deltaTime) {
     const float t = std::clamp(elapsed_ / kFlightDuration, 0.0f, 1.0f);
     engine::Vector3 position = start_ * (1.0f - t) + destination_ * t;
     position.y += std::sin(t * std::numbers::pi_v<float>) * 0.85f;
+    // 投下の弧を進み切った場合は、着地点からの待機中の揺れを加える。
     if (t >= 1.0f)
         position.y += std::sin((elapsed_ - kFlightDuration) * 2.15f) * 0.10f;
     SetTranslate(position);
@@ -72,12 +74,14 @@ void DroppedCopyStar::Update(float deltaTime) {
 }
 
 void DroppedCopyStar::Collect(Player* player) {
-    // 投下直後の拾い直しを防ぐ待ち時間を設け、実際に能力を適用できたときだけ星を消費します。
+    // プレイヤーが有効で、星が生存し、再取得の待ち時間後から寿命切れ前までの場合だけ処理を続ける。
     if (!player || IsCollected() || IsDead() || elapsed_ < kPickupDelay || elapsed_ >= lifetime_)
         return;
     auto* manager = SceneManager::GetInstance();
+    // 編集や停止中に拾い直しを成立させないため、実行中のシーンに限る。
     if (!manager || !manager->IsPlaying())
         return;
+    // プレイヤーへ能力を再適用できなければ、星を取得済みにしない。
     if (!player->ApplyStoredCopy(enemyType_, unlimitedDuration_))
         return;
 
@@ -121,6 +125,7 @@ void DroppedCopyStar::RestoreReplayCustomState(const json& state) {
     lifetime_ = state.value("copyDropLifetime", lifetime_);
     blinkDuration_ = state.value("copyDropBlink", blinkDuration_);
     auto restoreVector = [&](const char* key, engine::Vector3& value) {
+        // 保存キーがあり、XYZを格納した3要素の配列の場合だけ座標を置き換える。
         if (state.contains(key) && state[key].is_array() && state[key].size() == 3) {
             value = {state[key][0].get<float>(), state[key][1].get<float>(), state[key][2].get<float>()};
         }

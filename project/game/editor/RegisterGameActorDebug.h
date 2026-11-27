@@ -14,7 +14,7 @@
 #include "EditorCommon.h"
 
 // ゲーム固有の編集状態は一つにまとめる。敵本体にはImGuiや編集用の状態を増やさない。
-inline ActorDebugPanel* GetGameActorDebugPanel() { static ActorDebugPanel panel; return &panel; }
+inline ActorDebugPanel* GetGameActorDebugPanel() { static ActorDebugPanel sPanel; return &sPanel; }
 inline void RegisterGameActorDebug() {
     auto* panel = GetGameActorDebugPanel();
     // エディターの共通セッションへ、ゲーム固有の生成・更新・片付けを関数として渡す。
@@ -32,7 +32,9 @@ inline void RegisterGameActorDebug() {
         panel->playerCopyMode_ = player; panel->crownMovieMode_ = false;
         panel->statusTab_ = false;
         panel->authoringActorSelected_ = false; panel->selectedTrack_ = -1;
+        // 敵を選んだ場合だけ、ゲーム側で登録した敵タイプを編集対象へ反映する。
         if (!player) panel->enemyType_ = type;
+        // モードか敵タイプが前回と異なれば設定を取り直す。このうちプレイヤーへ切り替えた場合は再生尺を6秒にする。
         if (changed) { panel->LoadSelectedProfile(); panel->ApplyRecommendedSettings(); if (player) panel->loopDuration_ = 6.0f; }
     };
     services.draw = [panel](ProjectWindow* assets) {
@@ -41,12 +43,14 @@ panel->DrawSelectedInspector(assets);
     // 選択中のオブジェクトのワールド姿勢を基準に、隔離されたプレビューを作る。
     services.begin = [panel] {
         auto* source = panel->session_->GetTarget();
+        // 選択が解除済みなら姿勢を採れないためプレビューを作らない。
         if (!source) return false;
-        EditorCommon::DecomposeWorldPose(source->GetWorldMatrix(), panel->sourcePosition_, panel->sourceRotation_, panel->sourceScale_);
+        editorCommon::DecomposeWorldPose(source->GetWorldMatrix(), panel->sourcePosition_, panel->sourceRotation_, panel->sourceScale_);
         panel->enabled_ = true;
         panel->BeginEffects();
         panel->BuildRuntime(false);
         // 表示できる実体が作れなかった場合も、事前に始めた演出や生成物をその場で戻す。
+        // 表示できるプレビュー実体を生成できた場合だけ、開始成功として共通セッションへ返す。
         if (panel->HasPreviewActor()) return true;
         panel->ReleaseRuntime(); panel->EndEffects(); panel->enabled_ = false;
         return false;
@@ -54,7 +58,7 @@ panel->DrawSelectedInspector(assets);
     services.maintain = [panel](float deltaTime) { panel->Update(deltaTime); };
     // 固定刻みの間だけ検索対象を限定し、本番シーンのキャラクターを攻撃対象にしない。
     services.step = [panel](float deltaTime) {
-        auto* physics = CollisionManager::GetInstance();
+        auto* physics = engine::CollisionManager::GetInstance();
         auto previous = physics->ExchangeEditorQueryFilter([](const engine::Object3D* object) {
             return object->IsEditorInternal() || dynamic_cast<const Character*>(object) == nullptr;
         });

@@ -7,16 +7,20 @@
 #include <algorithm>
 #include <cmath>
 
+// 借用している全スプライトと、HP・演出の履歴を初期状態へ戻します。
 void PlayerHealthHud::Reset() { *this = PlayerHealthHud{}; }
 
 bool PlayerHealthHud::Owns(const engine::Sprite* sprite) const {
+    // 空の参照はHUDの表示要素として数えない。
     if (!sprite) return false;
+    // 登録した枠・帯・肖像のいずれかと同じ実体を指す場合だけtrueを返す。
     for (const auto* part : Parts()) if (part->sprite == sprite) return true;
     return false;
 }
 
 void PlayerHealthHud::Draw() const {
     // 不透明な枠を先に描き、残量と肖像が隠れないようにする。
+    // 存在する表示部品を、枠から肖像までの定められた重ね順で描く。
     for (const auto* part : Parts()) if (part->sprite) part->sprite->Draw();
 }
 
@@ -31,13 +35,16 @@ void PlayerHealthHud::Bind(engine::Sprite* icon, engine::Sprite* damage, engine:
     // 肖像は短辺に合わせた正方形で表示し、液面とハイライトは異なる刻みで再生します。
     const float side = (std::min)(icon_.baseSize.x, icon_.baseSize.y);
     icon_.baseSize = {side, side};
+    // 残量の液面がある場合は、8コマを0.08秒間隔で繰り返す。
     if (fill) { fill->SetAnimation(8, .08f, true); fill->Play(); }
+    // ハイライトがある場合は、6コマを0.10秒間隔で液面と別に繰り返す。
     if (highlight) { highlight->SetAnimation(6, .10f, true); highlight->Play(); }
     // 初回表示を被弾と誤認しないよう、現在HPを起点としてから見た目を反映します。
     state_.Reset(player ? player->GetHp() : 0.0f, player ? player->GetMaxHp() : 1.0f);
     Update(player, 0.0f);
     // 簡素表示はシーン側の一括Updateで進める。初期化時だけGPUへ配置を反映する。
-    if (style == Style::Simple)
+    if (style == Style::kSimple)
+        // 初期化時だけ、生成済みの部品へ確定した配置を適用する。
         for (const auto* part : Parts()) if (part->sprite) part->sprite->Update();
 }
 
@@ -46,10 +53,12 @@ void PlayerHealthHud::Update(const Player* player, float deltaTime) {
     const float maxHp = player ? (std::max)(player->GetMaxHp(), 1.0f) : 1.0f;
     const float hp = player ? std::clamp(player->GetHp(), 0.0f, maxHp) : 0.0f;
     const bool visible = player != nullptr;
-    state_.Update(hp, maxHp, deltaTime, visible, style_ == Style::Animated);
+    state_.Update(hp, maxHp, deltaTime, visible, style_ == Style::kAnimated);
     // 同じHP割合と表示状態を基に、設定した見た目でスプライトを更新する。
     const float hpRate = engine::HealthBarState::Rate(hp, maxHp);
-    if (style_ == Style::Animated) UpdateAnimated(player, hpRate, visible);
+    // 演出付きの設定では、HPの変化と時間に応じて全体の見た目を変える。
+    if (style_ == Style::kAnimated) UpdateAnimated(player, hpRate, visible);
+    // 簡素な設定では、肖像とゲージの幅を更新する。
     else UpdateSimple(player, hpRate, visible);
 }
 
@@ -60,13 +69,14 @@ PlayerHealthHud::Part PlayerHealthHud::Capture(engine::Sprite* sprite) {
 std::array<const PlayerHealthHud::Part*, 5> PlayerHealthHud::Parts() const { return {&frame_, &damage_, &fill_, &highlight_, &icon_}; }
 
 void PlayerHealthHud::UpdatePortrait(const Player* player) {
+    // レイアウトに肖像が未配置の場合は、テクスチャの更新を省く。
     if (!icon_.sprite) return;
     const char* path = Portrait(player);
     // 同じ形態の間はテクスチャ検索とUVの再設定を繰り返さない。
     if (portrait_ == path) return;
     portrait_ = path;
     const auto handle = engine::Sprite::LoadTexture(path);
-    const auto& metadata = TextureManager::GetInstance()->GetMetadata(handle);
+    const auto& metadata = engine::TextureManager::GetInstance()->GetMetadata(handle);
     icon_.sprite->SetTextureHandle(handle);
     icon_.sprite->SetTextureRect({0, 0}, {static_cast<float>(metadata.width), static_cast<float>(metadata.height)});
 }
@@ -75,6 +85,7 @@ void PlayerHealthHud::UpdateSimple(const Player* player, float rate, bool visibl
     // 形態の肖像を同期し、残量と遅れて減る色帯だけ幅をHPに連動させます。
     UpdatePortrait(player);
     for (auto* part : {&frame_, &icon_, &damage_, &fill_, &highlight_}) {
+        // レイアウトに存在しない部品は、HP更新の対象から外す。
         if (!part->sprite) continue;
         const float amount = part == &damage_ ? state_.delayedRate : rate;
         const bool bar = part != &frame_ && part != &icon_;
@@ -97,16 +108,16 @@ void PlayerHealthHud::UpdateAnimated(const Player* player, float hpRate, bool vi
     const float hpIconPulse = idleIconPulse + std::abs(pulse) * damageRate * 0.07f;
     // 枠と液体は同じ横揺れを使う。振れ幅はデザイン座標の3.2を画面用に換算する。
     const float barShake =
-        damageRate > 0.0f ? std::sin(state_.damagePulseTimer * 92.0f) * SpriteLayoutScaler::ScaleDesignX(3.2f) * damageRate
+        damageRate > 0.0f ? std::sin(state_.damagePulseTimer * 92.0f) * spriteLayoutScaler::ScaleDesignX(3.2f) * damageRate
                           : 0.0f;
     const engine::Vector2 liquidOffset = {barShake, 0.0f};
     const float liquidHeightScale = 1.0f + damageImpact * 0.07f;
     // 肖像だけは専用の残り時間でXYと回転を揺らし、枠の被弾演出とは別に終える。
     const bool damageReacting = state_.hurtIconTimer > 0.0f;
     const float hpIconShakeX =
-        damageReacting ? std::sin(state_.hurtIconTimer * 85.0f) * SpriteLayoutScaler::ScaleDesignX(3.0f) : 0.0f;
+        damageReacting ? std::sin(state_.hurtIconTimer * 85.0f) * spriteLayoutScaler::ScaleDesignX(3.0f) : 0.0f;
     const float hpIconShakeY =
-        damageReacting ? std::sin(state_.hurtIconTimer * 61.0f) * SpriteLayoutScaler::ScaleDesignY(1.2f) : 0.0f;
+        damageReacting ? std::sin(state_.hurtIconTimer * 61.0f) * spriteLayoutScaler::ScaleDesignY(1.2f) : 0.0f;
     const float hpIconRotation =
         damageReacting ? std::sin(state_.hurtIconTimer * 55.0f) * 0.055f : liquidWave * lowHpRate * 0.012f;
 
@@ -156,7 +167,7 @@ void PlayerHealthHud::UpdateAnimated(const Player* player, float hpRate, bool vi
         const float alpha = visible && hpRate > 0.001f ? highlight_.baseColor.w * shimmer : 0.0f;
         highlight_.sprite->SetVisible(visible && hpRate > 0.001f);
         highlight_.sprite->SetPosition({highlight_.basePosition.x + liquidOffset.x,
-                                             highlight_.basePosition.y - SpriteLayoutScaler::ScaleDesignY(0.35f)});
+                                             highlight_.basePosition.y - spriteLayoutScaler::ScaleDesignY(0.35f)});
         highlight_.sprite->SetSize(
             {highlight_.baseSize.x * hpRate, highlight_.baseSize.y * liquidHeightScale});
         highlight_.sprite->SetColor(
@@ -181,12 +192,12 @@ const char* PlayerHealthHud::Portrait(const Player* player) {
     // 現在の本体と同じ装飾付き肖像を表示し、被弾時も能力の目印を維持する。
     if (player && player->IsEnemyMorphed()) {
         switch (player->GetEnemyMorphType()) {
-        case Player::EnemyMorphType::Slime: return "ui/hud/copy_portraits/pink.png";
-        case Player::EnemyMorphType::FireSlime: return "ui/hud/copy_portraits/fire.png";
-        case Player::EnemyMorphType::ThunderSlime: return "ui/hud/copy_portraits/thunder.png";
-        case Player::EnemyMorphType::WindSlime: return "ui/hud/copy_portraits/wind.png";
-        case Player::EnemyMorphType::Bomber: return "ui/hud/copy_portraits/bomb.png";
-        case Player::EnemyMorphType::Crown: return "ui/hud/copy_portraits/crown.png";
+        case Player::EnemyMorphType::kSlime: return "ui/hud/copy_portraits/pink.png";
+        case Player::EnemyMorphType::kFireSlime: return "ui/hud/copy_portraits/fire.png";
+        case Player::EnemyMorphType::kThunderSlime: return "ui/hud/copy_portraits/thunder.png";
+        case Player::EnemyMorphType::kWindSlime: return "ui/hud/copy_portraits/wind.png";
+        case Player::EnemyMorphType::kBomber: return "ui/hud/copy_portraits/bomb.png";
+        case Player::EnemyMorphType::kCrown: return "ui/hud/copy_portraits/crown.png";
         default: break;
         }
     }

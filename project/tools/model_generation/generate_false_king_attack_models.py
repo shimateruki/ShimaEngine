@@ -333,10 +333,24 @@ def write_obj(model: ObjBuilder, path: Path, model_name: str) -> None:
                 file.write(f"f {a}/{a}/{a} {b}/{b}/{b} {c}/{c}/{c}\n")
 
 
+def materials_for_model(model_name: str) -> dict:
+    # 書き出しとプレビューで同じ封印用の配色を使う。
+    materials = dict(MATERIALS)
+    if model_name == "false_king_seal_core":
+        materials["RoyalViolet"] = dict(MATERIALS["RoyalViolet"],
+            kd=(.27, .78, 1.0), ks=(.79, .94, 1.0), ke=(.028, .27, .54), preview=(89, 211, 255))
+        materials["RoyalCore"] = dict(MATERIALS["RoyalCore"],
+            kd=(.68, .93, 1.0), ke=(.07, .25, .45), preview=(175, 234, 255))
+    elif model_name == "false_king_seal_link":
+        materials["RoyalCore"] = dict(MATERIALS["RoyalCore"],
+            kd=(.25, .85, 1.0), ke=(.025, .36, .58), preview=(81, 216, 255))
+    return materials
+
+
 def write_materials(path: Path) -> None:
     with path.open("w", encoding="utf-8", newline="\n") as file:
         file.write("# CG2 False King attack PBR material set\n\n")
-        for name, material in MATERIALS.items():
+        for name, material in materials_for_model(path.stem).items():
             kd = material["kd"]
             ks = material["ks"]
             ke = material["ke"]
@@ -391,8 +405,9 @@ def render_preview(models: dict[str, ObjBuilder], output: Path) -> None:
                 depth = sum(projected[index - 1][2] for index in face) / 3.0
                 triangles.append((depth, material, face, brightness))
         triangles.sort(key=lambda item: item[0], reverse=True)
+        materials = materials_for_model(name)
         for _, material, face, brightness in triangles:
-            base = MATERIALS[material]["preview"]
+            base = materials[material]["preview"]
             color = tuple(max(0, min(255, int(channel * brightness))) for channel in base) + (255,)
             draw.polygon([(projected[index - 1][0], projected[index - 1][1]) for index in face], fill=color)
         draw.text((panel_x + 24, panel_y + 22), name, fill=(255, 244, 214, 255))

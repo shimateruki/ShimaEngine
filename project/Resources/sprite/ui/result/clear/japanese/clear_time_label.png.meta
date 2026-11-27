@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "5bda8c280540ac036024be442cc57816",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/sprite/ui/result/clear/japanese/clear_time_label.png",
+  "version": 1
+}

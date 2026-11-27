@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "PresetEditor.h"
 
 #include "ModelManager.h"
@@ -16,15 +17,16 @@
 
 #ifdef USE_IMGUI
 
-// 選択プリセットの種別固有値とColliderを編集します。
+// 敵の種類を編集する。基礎ステータスの入力欄は、敵の調整・攻撃プレビューが担当する。
 bool PresetEditor::DrawEnemySettings(json& data) {
     // 敵の共通ステータスは別画面で管理し、ここでは種類の選択だけ扱います。
     bool changed = false;
-    ApplyHiddenCategoryFields(data, Category::Enemy);
+    ApplyHiddenCategoryFields(data, Category::kEnemy);
     json& param = EnsureParam(data);
 
+    // 入力欄が開いているときに、敵の種類と基礎ステータスの編集先を表示する。
     if (ImGui::CollapsingHeader("敵パラメータ", ImGuiTreeNodeFlags_DefaultOpen)) {
-        changed |= DrawTypeCombo("敵の種類", data, param, "enemyType", GetEnemyOptions(), Category::Enemy);
+        changed |= DrawTypeCombo("敵の種類", data, param, "enemyType", GetEnemyOptions(), Category::kEnemy);
         ImGui::TextDisabled("HP・攻撃力・移動・重力などは「敵の調整・攻撃プレビュー」の「基本ステータス」で編集します。");
     }
 
@@ -37,6 +39,7 @@ bool PresetEditor::RemoveManagedEnemyFields(json& data) {
     changed |= data.erase("modelName") > 0;
     changed |= data.erase("scale") > 0;
 
+    // param が無いかオブジェクトでない場合は、最上位の2項目だけの削除結果を返す。
     if (!data.contains("param") || !data["param"].is_object()) {
         return changed;
     }
@@ -58,16 +61,21 @@ PresetEditor::PropertyEditorContext* PresetEditor::GetPropertyEditor(const std::
     // 同じ型の一時 Object を使い回す。接触イベント用の汎用 Object とギミックの実体はキャッシュを分ける。
     const std::string cacheKey = (commonObject ? "Object/" : "Gimmick/") + type;
     const auto found = propertyEditors_.find(cacheKey);
+    // 同じ型の編集個体があれば、生成時の初期値とともに再利用する。
     if (found != propertyEditors_.end()) return &found->second;
     auto* scene = SceneManager::GetInstance()->GetCurrentScene();
+    // 現在のシーンや共通描画基盤が使えない場合は、一時個体を生成できない。
     if (!scene || !scene->GetObject3DCommon()) return nullptr;
     std::unique_ptr<engine::Object3D> object;
+    // 接触イベント用ならゲーム固有の型を必要としないため、基底 Object3D を用意する。
     if (commonObject) {
         object = std::make_unique<engine::Object3D>();
         object->Initialize(scene->GetObject3DCommon());
+    // ギミックでは型固有の初期値が必要なため、Factory から実体を生成する。
     } else {
-        object = EditorObjectFactoryRegistry::Create(EditorObjectFactoryRegistry::Kind::Gimmick, type, scene->GetObject3DCommon());
+        object = EditorObjectFactoryRegistry::Create(EditorObjectFactoryRegistry::Kind::kGimmick, type, scene->GetObject3DCommon());
     }
+    // 指定の型を生成できなければ、値を編集するコンテキストは登録しない。
     if (!object) return nullptr;
     PropertyEditorContext context;
     // 初期状態を保存し、別プリセットへ切り替えたときに前回の値を引き継がないようにする。
@@ -76,7 +84,9 @@ PresetEditor::PropertyEditorContext* PresetEditor::GetPropertyEditor(const std::
     return &propertyEditors_.emplace(cacheKey, std::move(context)).first->second;
 }
 
+// ギミックの種類を選び直せるようにし、現在の種類に登録された項目だけを編集する。
 bool PresetEditor::DrawGimmickSettings(json& data) {
+    // 入力欄が閉じているときはプリセットに触らない。
     if (!ImGui::CollapsingHeader("ギミックパラメータ", ImGuiTreeNodeFlags_DefaultOpen)) return false;
     bool changed = false;
     // 種類を変更した時だけ初期値を入れ、閲覧だけで既存Presetを補完しません。
@@ -89,11 +99,13 @@ bool PresetEditor::DrawGimmickSettings(json& data) {
     const std::string type = readType();
     const auto current = std::find_if(options.begin(), options.end(), [&](const TypeOption& option) { return type == option.value; });
     const char* preview = current != options.end() ? current->label : type.c_str();
+    // 選択欄を開いた場合に、登録されている型を並べる。
     if (ImGui::BeginCombo("ギミックの種類", preview)) {
         for (const auto& option : options) {
+            // 選択操作があったときは型とそれに対応する初期値を JSON へ反映する。
             if (ImGui::Selectable(option.label, type == option.value)) {
                 data["gimmickType"] = option.value;
-                ApplyTypeDefaults(data, Category::Gimmick, option.value);
+                ApplyTypeDefaults(data, Category::kGimmick, option.value);
                 changed = true;
             }
         }
@@ -101,6 +113,7 @@ bool PresetEditor::DrawGimmickSettings(json& data) {
     }
     const std::string selected = readType();
     auto* context = GetPropertyEditor(selected);
+    // 編集個体が得られない種類では型固有値の欄を出さず、元の値を保つ。
     if (!context) {
         ImGui::TextDisabled("未登録の種類です。保存済みの値は保持します。");
         return changed;
@@ -108,11 +121,12 @@ bool PresetEditor::DrawGimmickSettings(json& data) {
     auto& object = *context->object;
     // 前のPresetの省略値が混ざらないよう、Factoryの初期値から現在のJSONを復元します。
     if (context->source != data) {
-        EditorPropertyJsonBinding::Restore(object, context->defaults, data);
+        editorPropertyJsonBinding::Restore(object, context->defaults, data);
         context->source = data;
     }
     auto* registry = EditorPropertyRegistry::GetInstance();
     for (const auto* component : registry->GetComponentsForObject(&object)) {
+        // ゲーム固有の Game_ コンポーネントだけを、この種類別の設定へ出す。
         if (component->typeId.rfind("Game_", 0) != 0) continue;
         changed |= DrawRegisteredSettings(data, *context, component->typeId);
     }
@@ -124,14 +138,17 @@ bool PresetEditor::DrawGimmickSettings(json& data) {
 // ギミックとイベントで同じ入力・保存差分処理を使い、未知のJSON項目を保持します。
 bool PresetEditor::DrawRegisteredSettings(json& data, PropertyEditorContext& context, const std::string& componentType) {
     auto& object = *context.object;
+    // キャッシュ内の復元元と現在の JSON が異なる場合は、初期値を基準に復元し直す。
     if (context.source != data) {
-        EditorPropertyJsonBinding::Restore(object, context.defaults, data);
+        editorPropertyJsonBinding::Restore(object, context.defaults, data);
         context.source = data;
     }
     auto* registry = EditorPropertyRegistry::GetInstance();
     const auto* component = registry->FindComponent(componentType);
+    // 登録されていないコンポーネントの入力欄は描けないため、未変更で戻す。
     if (!component) return false;
     bool changed = false;
+    // 定義に説明があれば、個々の入力欄を表示する前に用途を示す。
     if (!component->description.empty()) ImGui::TextWrapped("%s", component->description.c_str());
     for (const auto* property : registry->GetPropertiesForComponent(componentType)) {
         // 対象の型では利用できないプロパティや、現在の値では隠す項目を入力欄から除く。
@@ -142,18 +159,22 @@ bool PresetEditor::DrawRegisteredSettings(json& data, PropertyEditorContext& con
         auto value = property->displayValue ? property->displayValue(object) : registry->GetValue(&object, property->path);
         // 現在の Object に応じた上限は入力欄のコピーへ入れ、登録済みの共通定義を変更しない。
         auto effective = *property;
+        // 動的な上限が定義されている項目だけ、対象個体から上限を計算する。
         if (property->maximum) effective.ui.maxValue = property->maximum(object);
-        const bool disabled = HasEditorPropertyFlag(property->flags, EditorPropertyFlags::ReadOnly) ||
+        const bool disabled = HasEditorPropertyFlag(property->flags, EditorPropertyFlags::kReadOnly) ||
             (property->enabled && !property->enabled(object));
         // 読み取り専用の項目は値とヘルプを表示し、入力だけを止める。
         ImGui::BeginDisabled(disabled);
         EditorPropertyDrawOptions drawOptions;
         drawOptions.compact = true;
-        if (EditorPropertyDrawer::DrawValue(effective, value, "##Value", drawOptions))
-            changed |= EditorPropertyJsonBinding::Apply(object, *property, data, value);
+        // 入力値が変更されたときだけ、個体と JSON を同じプロパティ経由で更新する。
+        if (editorPropertyDrawer::DrawValue(effective, value, "##Value", drawOptions))
+            changed |= editorPropertyJsonBinding::Apply(object, *property, data, value);
         ImGui::EndDisabled();
+        // ヘルプの生成処理が登録されている項目は、現在の値を使って補足を作る。
         if (property->help) {
             const auto help = property->help(object);
+            // 補足が空なら表示領域を増やさない。
             if (!help.empty()) ImGui::TextWrapped("%s", help.c_str());
         }
         ImGui::PopID();
@@ -164,6 +185,7 @@ bool PresetEditor::DrawRegisteredSettings(json& data, PropertyEditorContext& con
 
 bool PresetEditor::DrawEventSettings(json& data) {
     auto* context = GetPropertyEditor("ContactEvent", true);
+    // イベント用の一時個体が準備できない間は、編集開始の条件を表示して戻る。
     if (!context) {
         ImGui::TextDisabled("シーンの初期化後にイベントを編集できます。");
         return false;
@@ -174,9 +196,10 @@ bool PresetEditor::DrawEventSettings(json& data) {
 bool PresetEditor::DrawTypeCombo(const char* label, json& data, json& param, const char* key, const std::vector<TypeOption>& options, Category category) {
     // 旧JSONで型がparam内にある場合も読み、変更時は両方の参照先を揃えます。
     std::string current = ReadString(data, key, ReadString(param, key, ""));
-    int currentIndex = 0;
+    std::int32_t currentIndex = 0;
 
-    for (int i = 0; i < static_cast<int>(options.size()); ++i) {
+    for (std::int32_t i = 0; i < static_cast<std::int32_t>(options.size()); ++i) {
+        // 保存済みの型と一致した候補があれば、選択欄の初期位置に使う。
         if (current == options[i].value) {
             currentIndex = i;
             break;
@@ -190,7 +213,8 @@ bool PresetEditor::DrawTypeCombo(const char* label, json& data, json& param, con
         labels.push_back(option.label);
     }
 
-    if (ImGui::Combo(label, &currentIndex, labels.data(), static_cast<int>(labels.size()))) {
+    // 選択が変わった場合は、旧形式の参照先も同期し、新しい型の初期項目を設定する。
+    if (ImGui::Combo(label, &currentIndex, labels.data(), static_cast<std::int32_t>(labels.size()))) {
         data[key] = options[currentIndex].value;
         param[key] = options[currentIndex].value;
         ApplyHiddenCategoryFields(data, category);
@@ -201,16 +225,20 @@ bool PresetEditor::DrawTypeCombo(const char* label, json& data, json& param, con
     return false;
 }
 
+// 編集カテゴリを、生成時に読む型と保存先のカテゴリへ対応づける。
 void PresetEditor::ApplyHiddenCategoryFields(json& data, Category category) {
-    if (category == Category::Enemy) {
+    // 敵は型・保存カテゴリともに Enemy を使う。
+    if (category == Category::kEnemy) {
         data["type"] = "Enemy";
         data["saveCategory"] = "Enemy";
     }
-    else if (category == Category::Gimmick) {
+    // ギミックは Gimmick 型として生成し、汎用 Object カテゴリへ保存する。
+    else if (category == Category::kGimmick) {
         data["type"] = "Gimmick";
         data["saveCategory"] = "Object";
     }
-    else if (category == Category::Item) {
+    // アイテムは Item 型として生成し、汎用 Object カテゴリへ保存する。
+    else if (category == Category::kItem) {
         data["type"] = "Item";
         data["saveCategory"] = "Object";
     }
@@ -222,17 +250,22 @@ void PresetEditor::ApplyHiddenCategoryFields(json& data, Category category) {
     }
 }
 
+// 型を切り替えた直後に、当たり判定や型固有値の初期設定を入れる。
 void PresetEditor::ApplyTypeDefaults(json& data, Category category, const std::string& type) {
-    if (category == Category::Enemy) {
+    // 敵のモデルや基礎ステータスはそのまま編集せず、初期 Collider を決める。
+    if (category == Category::kEnemy) {
         // 大型の敵だけは生成時の当たり判定の寸法を通常より広く取る。
         if (type == "GiantSlime") {
             SetColliderDefaults(data, 1, { 2.2f, 2.2f, 2.2f });
         }
+        // 巨大スライム以外の敵は通常寸法の球で初期化する。
         else {
             SetColliderDefaults(data, 1, { 1.0f, 1.0f, 1.0f });
         }
     }
-    else if (category == Category::Gimmick) {
+    // ギミックの型変更では、Factory で生成した個体の定義を初期値として使う。
+    else if (category == Category::kGimmick) {
+        // 編集個体を取得できた場合だけ、許可したキーを既定値で置き換える。
         if (const auto* context = GetPropertyEditor(type)) {
             const auto& defaults = context->defaults;
             for (const char* key : {"param", "modelName", "scale", "color", "materialType", "blendMode", "emissive",
@@ -246,15 +279,16 @@ void PresetEditor::ApplyTypeDefaults(json& data, Category category, const std::s
 
     // ここで作った数値Maskは現在のJSON定義の値なので、IDも同時に保存します。
     if (data.contains("collisionAttribute") && data["collisionAttribute"].is_number_unsigned()) {
-        data["collisionAttributeIds"] = CollisionCategories::GetIds(data["collisionAttribute"].get<uint32_t>());
+        data["collisionAttributeIds"] = engine::collisionCategories::GetIds(data["collisionAttribute"].get<uint32_t>());
     }
 
+    // 衝突相手の数値マスクがあれば、相手カテゴリの ID も保存する。
     if (data.contains("collisionMask") && data["collisionMask"].is_number_unsigned()) {
-        data["collisionMaskIds"] = CollisionCategories::GetIds(data["collisionMask"].get<uint32_t>());
+        data["collisionMaskIds"] = engine::collisionCategories::GetIds(data["collisionMask"].get<uint32_t>());
     }
 }
 
-void PresetEditor::SetColliderDefaults(json& data, int type, const engine::Vector3& size) {
+void PresetEditor::SetColliderDefaults(json& data, std::int32_t type, const engine::Vector3& size) {
     // 形状と大きさだけ更新し、調整済みの中心・回転は残します。
     if (!data.contains("collider") || !data["collider"].is_object()) {
         data["collider"] = json::object();
@@ -263,8 +297,10 @@ void PresetEditor::SetColliderDefaults(json& data, int type, const engine::Vecto
     data["collider"]["type"] = type;
     data["collider"]["size"] = { size.x, size.y, size.z };
 
+    // 中心が未定義の場合は、モデル原点を使う。
     if (!data["collider"].contains("center"))
         data["collider"]["center"] = { 0.0f, 0.0f, 0.0f };
+    // 回転が未定義の場合は、ローカル軸に揃える。
     if (!data["collider"].contains("rotation"))
         data["collider"]["rotation"] = { 0.0f, 0.0f, 0.0f };
 }
@@ -274,15 +310,18 @@ bool PresetEditor::DrawModelField(json& data) {
     bool changed = false;
     std::string current = ReadString(data, "modelName", "");
 
+    // モデル選択欄を開いた場合は、キャッシュ済みのモデルを候補として表示する。
     if (ImGui::BeginCombo("モデル", current.empty() ? "(なし)" : current.c_str())) {
         for (const std::string& modelName : modelNames_) {
             bool selected = modelName == current;
 
+            // 選んだモデルの参照名を保存し、呼出元へ変更を返す。
             if (ImGui::Selectable(modelName.c_str(), selected)) {
                 data["modelName"] = modelName;
                 changed = true;
             }
 
+            // 現在のモデルへ既定フォーカスを合わせ、候補が多くても見つけやすくする。
             if (selected) {
                 ImGui::SetItemDefaultFocus();
             }
@@ -299,15 +338,17 @@ bool PresetEditor::DrawCollider(json& data) {
     // colliderが欠けた旧Presetも編集できるよう、初回表示時に空オブジェクトを補います。
     bool changed = false;
 
+    // 欠落・旧形式の値は、編集項目を書ける空のオブジェクトへ差し替える。
     if (!data.contains("collider") || !data["collider"].is_object()) {
         data["collider"] = json::object();
         changed = true;
     }
 
     json& collider = data["collider"];
-    int type = ReadInt(collider, "type", 0);
+    std::int32_t type = ReadInt(collider, "type", 0);
     const char* labels[] = { "なし", "球", "AABB", "OBB" };
 
+    // 形状を選び直した場合は、その列挙番号を保存する。
     if (ImGui::Combo("形状", &type, labels, 4)) {
         collider["type"] = type;
         changed = true;
@@ -325,6 +366,7 @@ bool PresetEditor::DrawStringField(json& data, const char* label, const char* ke
     std::string value = ReadString(data, key, defaultValue);
     strncpy_s(buffer, value.c_str(), _TRUNCATE);
 
+    // 入力が変更された場合にだけ、バッファーの内容を JSON へ移す。
     if (ImGui::InputText(label, buffer, sizeof(buffer))) {
         data[key] = std::string(buffer);
         return true;
@@ -337,6 +379,7 @@ bool PresetEditor::DrawFloatField(json& data, const char* label, const char* key
     // Drag操作が確定した値だけ保存し、呼び出し側へ変更を伝えます。
     float value = ReadFloat(data, key, defaultValue);
 
+    // 数値が変更された場合だけ保存し、未編集なら欠損項目を新設しない。
     if (ImGui::DragFloat(label, &value, speed)) {
         data[key] = value;
         return true;
@@ -345,10 +388,11 @@ bool PresetEditor::DrawFloatField(json& data, const char* label, const char* key
     return false;
 }
 
-bool PresetEditor::DrawIntField(json& data, const char* label, const char* key, int defaultValue) {
+bool PresetEditor::DrawIntField(json& data, const char* label, const char* key, std::int32_t defaultValue) {
     // 整数パラメータも共通の変更フラグで保存処理へ渡します。
-    int value = ReadInt(data, key, defaultValue);
+    std::int32_t value = ReadInt(data, key, defaultValue);
 
+    // 整数値が変化した場合だけ、JSON の値と変更フラグを更新する。
     if (ImGui::DragInt(label, &value, 1.0f)) {
         data[key] = value;
         return true;
@@ -361,14 +405,17 @@ bool PresetEditor::DrawColorField(json& data, const char* label, const char* key
     // 壊れた配列要素は既定色を保ち、編集時にRGBA配列へ正規化します。
     float color[4] = { defaultValue.x, defaultValue.y, defaultValue.z, defaultValue.w };
 
+    // 保存値が4要素以上の配列として読める場合に、先頭4成分を使う。
     if (data.contains(key) && data[key].is_array() && data[key].size() >= 4) {
-        for (int i = 0; i < 4; ++i) {
+        for (std::int32_t i = 0; i < 4; ++i) {
+            // 数値の成分だけ採用し、型が異なる成分は既定値にする。
             if (data[key][i].is_number()) {
                 color[i] = data[key][i].get<float>();
             }
         }
     }
 
+    // 色を編集した場合は、四成分の RGBA をまとめて保存する。
     if (ImGui::ColorEdit4(label, color)) {
         data[key] = { color[0], color[1], color[2], color[3] };
         return true;
@@ -381,6 +428,7 @@ bool PresetEditor::DrawVector3Field(json& data, const char* label, const char* k
     engine::Vector3 value = ReadVector3(data, key, defaultValue);
     float values[3] = { value.x, value.y, value.z };
 
+    // 編集された場合だけ3成分を保存する。回転項目では後続で旧クォータニオンも整理する。
     if (ImGui::DragFloat3(label, values, speed)) {
         data[key] = { values[0], values[1], values[2] };
 
@@ -426,16 +474,18 @@ json PresetEditor::BuildBlankPreset(const std::string& name, Category category) 
     json data = json::object();
     data["name"] = name;
     data["presetDisplayName"] = name;
-    data["presetUsage"] = category == Category::Model ? "装飾" : GetCategoryLabel(category);
+    data["presetUsage"] = category == Category::kModel ? "装飾" : GetCategoryLabel(category);
 
-    if (category != Category::Enemy) {
+    // 敵以外は配置時に見えるよう、ブロックモデルを暫定で指定する。
+    if (category != Category::kEnemy) {
         data["modelName"] = "Stages/block";
     }
 
     data["translate"] = { 0.0f, 0.0f, 0.0f };
     data["rotate"] = { 0.0f, 0.0f, 0.0f };
 
-    if (category != Category::Enemy) {
+    // 敵以外は単位倍率から始める。敵の倍率はステータスの定義を使う。
+    if (category != Category::kEnemy) {
         data["scale"] = { 1.0f, 1.0f, 1.0f };
     }
 
@@ -455,8 +505,8 @@ json PresetEditor::BuildBlankPreset(const std::string& name, Category category) 
     data["eventType"] = 0;
     data["collisionAttribute"] = 0;
     data["collisionMask"] = 0;
-    data["enemyType"] = category == Category::Enemy ? "Slime" : "";
-    data["gimmickType"] = category == Category::Gimmick ? "Default" : "";
+    data["enemyType"] = category == Category::kEnemy ? "Slime" : "";
+    data["gimmickType"] = category == Category::kGimmick ? "Default" : "";
     data["itemType"] = "";
     data["collider"] = {
         { "type", 2 },
@@ -465,22 +515,24 @@ json PresetEditor::BuildBlankPreset(const std::string& name, Category category) 
         { "rotation", { 0.0f, 0.0f, 0.0f } }
     };
 
-    if (category == Category::Enemy) {
+    // 敵の param は型だけ保存し、基礎ステータスを二重に定義しない。
+    if (category == Category::kEnemy) {
         data["param"] = { { "enemyType", "Slime" } };
+    // 敵以外は共通の初期パラメーターを用意してから、カテゴリごとの上書きを適用する。
     } else {
         data["param"] = {
             { "speed", 1.0f },
             { "gravity", 50.0f },
             { "interval", 3.0f },
-            { "gimmickType", category == Category::Gimmick ? "Default" : "" },
+            { "gimmickType", category == Category::kGimmick ? "Default" : "" },
             { "itemType", "" }
         };
     }
 
     const_cast<PresetEditor*>(this)->ApplyHiddenCategoryFields(data, category);
     const std::string type =
-        category == Category::Enemy ? "Slime" :
-        category == Category::Gimmick ? "Default" :
+        category == Category::kEnemy ? "Slime" :
+        category == Category::kGimmick ? "Default" :
         "";
     const_cast<PresetEditor*>(this)->ApplyTypeDefaults(data, category, type);
     return data;

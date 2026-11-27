@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "engine/utility/math/Math.h"
 #include <string>
@@ -14,7 +15,7 @@ struct CinematicTransformKey {
     // 時刻は秒。移動トラックではトラック開始が、見た目キーでは演出開始が0秒です。回転はラジアン、拡縮は各軸の倍率です。
     float time = 0.0f;
     engine::Vector3 position{}, rotation{}, scale{1, 1, 1};
-    int easingToNext = 4;
+    std::int32_t easingToNext = 4;
 };
 
 // 区間探索は全キー列で共有する。離散値の補間方法は呼び出し側で指定する。
@@ -22,11 +23,14 @@ struct CinematicTransformKey {
 template<class Key, class Blend>
 // 指定秒の両側のキーを探し、呼出側の補間関数で値を求める。
 Key SampleCinematicKeys(const std::vector<Key>& keys, float time, Blend blend) {
+    // キーがなければ補間できないため、型の既定値を返す。
     if (keys.empty()) return {};
     // 指定時刻より後ろの最初のキーを探します。同時刻のキーが並ぶ場合は最後のキーを補間の左端に選びます。
     auto upper = std::upper_bound(keys.begin(), keys.end(), time,
         [](float t, const Key& key) { return t < key.time; });
+    // 指定時刻が先頭より前なら、まだ変化を始めず先頭の姿勢を保持する。
     if (upper == keys.begin()) return keys.front();
+    // 最後のキー以降は後続キーがないため、最後の値を保持する。
     if (upper == keys.end()) return keys.back();
     return blend(*(upper - 1), *upper, time);
 }
@@ -101,7 +105,7 @@ struct CinematicObjectClip {
     std::vector<CinematicMotionSegment> motions; // キー形式とは排他。区間そのものを保存・評価する。
 };
 
-class CinematicSequence;
+struct CinematicSequence;
 // 見た目キーと区間設定の評価を共有する。sequence指定時はSignalの編集時刻を反映する。
 CinematicVisualKey SampleCinematicVisual(const CinematicObjectClip& clip, float time,
     const CinematicSequence* sequence = nullptr);

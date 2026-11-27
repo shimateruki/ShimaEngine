@@ -68,12 +68,12 @@ public:
 
 private:
     enum class Category {
-        All,
-        Stage1,
-        Enemy,
-        Gimmick,
-        Item,
-        Model
+        kAll,
+        kStage1,
+        kEnemy,
+        kGimmick,
+        kItem,
+        kModel
     };
 
     // 保存に使う識別文字列と UI に表示するラベルの対応。
@@ -143,7 +143,7 @@ private:
     void ApplyTypeDefaults(json& data, Category category, const std::string& type);
 
     /// 指定した形状と大きさで当たり判定の既定値を入れる。
-    void SetColliderDefaults(json& data, int type, const engine::Vector3& size);
+    void SetColliderDefaults(json& data, std::int32_t type, const engine::Vector3& size);
 
     /// モデル参照を編集し、変更があれば true を返す。
     bool DrawModelField(json& data);
@@ -158,7 +158,7 @@ private:
     bool DrawFloatField(json& data, const char* label, const char* key, float defaultValue, float speed);
 
     // 整数の入力欄を表示し、変更をJSONへ反映する。
-    bool DrawIntField(json& data, const char* label, const char* key, int defaultValue);
+    bool DrawIntField(json& data, const char* label, const char* key, std::int32_t defaultValue);
 
     // RGBA色の入力欄を表示し、変更をJSONへ反映する。
     bool DrawColorField(json& data, const char* label, const char* key, const engine::Vector4& defaultValue);
@@ -205,7 +205,7 @@ private:
     ImVec4 GetCategoryColor(Category category) const;
 
     /// ステージ1の区画番号に割り当てる UI 色を返す。
-    ImVec4 GetStage1SectionColor(int sectionOrder) const;
+    ImVec4 GetStage1SectionColor(std::int32_t sectionOrder) const;
 
     /// モデルのパスから一覧用の短い名前を作る。
     std::string ShortModelName(const std::string& modelName) const;
@@ -216,7 +216,7 @@ private:
     float ReadFloat(const json& data, const char* key, float defaultValue) const;
 
     // JSONの整数項目を読み、未指定時は既定値を使う。
-    int ReadInt(const json& data, const char* key, int defaultValue) const;
+    std::int32_t ReadInt(const json& data, const char* key, std::int32_t defaultValue) const;
 
     // JSONの真偽項目を読み、未指定時は既定値を使う。
     bool ReadBool(const json& data, const char* key, bool defaultValue) const;
@@ -242,7 +242,7 @@ private:
     std::string previewSelectionName_;
     std::vector<std::string> modelNames_;
     std::string selectedName_;
-    Category activeCategory_ = Category::Stage1;
+    Category activeCategory_ = Category::kStage1;
 
     // ステージ別パレットの選択。種類・検索条件とは独立して保持します。
     std::string stageCollection_ = "";
@@ -255,8 +255,8 @@ private:
     std::function<void()> selectionCallback_;
     std::function<void(const std::string&)> thumbnailInvalidator_;
     std::vector<std::string> recentPresets_;
-    int libraryCategory_ = 0;
-    int thumbnailSize_ = 128;
+    std::int32_t libraryCategory_ = 0;
+    std::int32_t thumbnailSize_ = 128;
     bool listView_ = false;
     bool requestLibraryDockExpand_ = false;
     bool selectionFromProject_ = false;

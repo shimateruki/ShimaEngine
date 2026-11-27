@@ -31,6 +31,7 @@ namespace {
 // GPU待機後、Scene固有の実行中演出を片付ける。共有Common自体は破棄しない。
 // LoadingSceneから次Sceneへ渡る際は、準備中に生成した演出を消さない。
 void ReleaseSceneEffects(BaseScene* scene) {
+    // 有効なシーンが3Dの共有基盤を使っていた場合だけ、登録されているメッシュ演出と破片を消す。
     if (scene && scene->GetObject3DCommon()) {
         MeshEffectManager::GetInstance()->Clear();
         // Commonのアドレスが変わらなくても、前Sceneの破片は持ち越さない。
@@ -40,6 +41,7 @@ void ReleaseSceneEffects(BaseScene* scene) {
 
 // 呼び出し元でGPUの参照完了を待った後、演出を止めて現行Sceneを解放する。
 void FinalizeCurrentScene(std::unique_ptr<BaseScene>& scene) {
+    // 現行シーンがまだ存在しなければ、演出や初期化済み資源の解放を行う必要がない。
     if (!scene) {
         return;
     }
@@ -48,6 +50,7 @@ void FinalizeCurrentScene(std::unique_ptr<BaseScene>& scene) {
     scene.reset();
 }
 
+// 遷移段階の所要時間をミリ秒へ直し、遅い処理の診断に渡す。
 void LogSlowLoadingStep(const char* operation, const std::string& sceneName,
                         std::chrono::steady_clock::time_point start) {
     const double elapsedMs = std::chrono::duration<double, std::milli>(
@@ -56,16 +59,16 @@ void LogSlowLoadingStep(const char* operation, const std::string& sceneName,
 }
 }
 
-SceneManager* SceneManager::instance_ = nullptr;
+SceneManager* SceneManager::sInstance = nullptr;
 
 SceneManager* SceneManager::GetInstance() {
     // SceneManagerの生存期間はアプリ側が管理し、ここでは参照だけ返す。
-    return instance_;
+    return sInstance;
 }
 
 SceneManager::SceneManager() {
     // アプリに一つのSceneManagerを遷移先の問い合わせ窓口として公開する。
-    instance_ = this;
+    sInstance = this;
 }
 
 SceneManager::~SceneManager() {
@@ -73,6 +76,7 @@ SceneManager::~SceneManager() {
     Finalize();
 }
 
+// 起動時のシーンを同期的に有効化する。CPUの素材準備は描画基盤の準備と重ねる。
 void SceneManager::Initialize(AbstractSceneFactory* factory, const std::string& firstSceneName) {
     sceneFactory_ = factory;
     currentSceneName_ = firstSceneName;
@@ -85,9 +89,10 @@ void SceneManager::Initialize(AbstractSceneFactory* factory, const std::string& 
     currentScene_ = sceneFactory_->CreateScene(firstSceneName);
     assert(currentScene_ && "Initial scene creation failed.");
 
+    // 初期シーンを生成できなければ、シーン名と遷移状態を戻して初期化を打ち切る。
     if (!currentScene_) {
         currentSceneName_.clear();
-        transitionPhase_ = TransitionPhase::Idle;
+        transitionPhase_ = TransitionPhase::kIdle;
         return;
     }
 
@@ -95,13 +100,14 @@ void SceneManager::Initialize(AbstractSceneFactory* factory, const std::string& 
     currentScene_->SetSceneManager(this);
     currentScene_->SetSceneLoadContext(activeSceneLoadContext_);
 
+    // 共有のデバッグエディターが接続済みなら、初期シーンにも同じ参照を渡す。
     if (debugEditor_) {
         currentScene_->SetDebugEditor(debugEditor_);
     }
 
     // 初回起動ではローディングSceneを生成せず、最初のSceneを直接初期化します。
     // これによりロードUIの初期化と最低表示時間を省き、ロード画面はScene遷移時だけ表示します。
-    TextureManager* textureManager = TextureManager::GetInstance();
+    engine::TextureManager* textureManager = engine::TextureManager::GetInstance();
     // Copy用バッチが取れたときだけ記録へ切り替え、取得できない場合は既存の転送経路を維持する。
     const bool initialUploadBatch = textureManager->BeginAsyncUploadBatch();
     textureManager->SetAsyncUploadRecording(initialUploadBatch);
@@ -125,6 +131,7 @@ void SceneManager::Initialize(AbstractSceneFactory* factory, const std::string& 
     catch (...) {
         textureManager->SetAsyncUploadRecording(false);
 
+        // テクスチャの転送をバッチに記録していた場合は、失敗時も投入して使用完了まで待つ。
         if (initialUploadBatch) {
             textureManager->SubmitAsyncUploadBatch();
             textureManager->WaitForAsyncUploadBatch();
@@ -139,21 +146,24 @@ void SceneManager::Initialize(AbstractSceneFactory* factory, const std::string& 
 
     textureManager->SetAsyncUploadRecording(false);
 
+    // 初期シーンのテクスチャをバッチに記録した場合は、有効化前にGPUへの転送を終える。
     if (initialUploadBatch) {
         textureManager->SubmitAsyncUploadBatch();
         textureManager->WaitForAsyncUploadBatch();
     }
 
+    // 有効化は初期化と、記録したテクスチャ転送の完了後に行う。
     currentScene_->OnActivated();
-    transitionPhase_ = TransitionPhase::Idle;
+    transitionPhase_ = TransitionPhase::kIdle;
 }
 
 void SceneManager::Finalize() {
 #ifdef USE_IMGUI
+    // エディターで選択対象の単体再生がある場合は、シーン解放より先に参照を整理する。
     if (auto* session = SelectedActorSession::Current()) session->PrepareSceneChange();
 #endif
 
-    // 非同期処理とGPUの使用完了を待ってから、現行/準備中のシーンを解放する。
+    // アセット生成の非同期処理が残っている場合は、終了を待ち、結果を回収する。
     if (assetCreationFuture_.valid()) {
         assetCreationFuture_.wait();
         try {
@@ -163,8 +173,9 @@ void SceneManager::Finalize() {
         }
     }
 
-    TextureManager::GetInstance()->WaitForAsyncUploadBatch();
+    engine::TextureManager::GetInstance()->WaitForAsyncUploadBatch();
 
+    // CPUで先読みしている処理が残っていれば、準備中シーンを破棄する前に待つ。
     if (loadingFuture_.valid()) {
         loadingFuture_.wait();
         try {
@@ -175,6 +186,7 @@ void SceneManager::Finalize() {
         }
     }
 
+    // ゲーム内の資源がまだGPUから参照されないよう、現在と準備中の両方を破棄する前に同期する。
     engine::DirectXCommon::GetInstance()->WaitForGpuAndReset();
 
     FinalizeCurrentScene(currentScene_);
@@ -183,10 +195,12 @@ void SceneManager::Finalize() {
 
     ReleaseSceneEffects(preparedScene_.get());
 
+    // 準備シーンを正常に初期化済みの場合だけ、そのシーンの終了処理を呼ぶ。
     if (preparedScene_ && preparedSceneInitialized_) {
         preparedScene_->Finalize();
     }
 
+    // 準備中の状態・読込カーソル・未実行の交換予約を解除する。
     preparedScene_.reset();
     preparedLoadData_.reset();
     preloadProgress_.reset();
@@ -204,7 +218,7 @@ void SceneManager::Finalize() {
     sceneInitializationFinished_ = false;
     directTransitionPending_ = false;
     directDestinationHandlesReveal_ = false;
-    transitionPhase_ = TransitionPhase::Idle;
+    transitionPhase_ = TransitionPhase::kIdle;
 }
 
 void SceneManager::Update(float deltaTime) {
@@ -214,11 +228,13 @@ void SceneManager::Update(float deltaTime) {
 
     switch (transitionPhase_) {
     // 旧シーンを暗転してから、ロードありと直接交換の経路に分かれる。
-    case TransitionPhase::FadingOutCurrent:
-        if (Fade::GetInstance()->GetStatus() == Fade::Status::FadeOut && !Fade::GetInstance()->IsFinished()) {
+    case TransitionPhase::kFadingOutCurrent:
+        // 暗転が再生中の間は、旧シーンの交換とロード画面の開始を待つ。
+        if (Fade::GetInstance()->GetStatus() == Fade::Status::kFadeOut && !Fade::GetInstance()->IsFinished()) {
             return;
         }
 
+        // ローディングを省く遷移が予約されている場合は、ここから遷移先を直接生成する。
         if (directTransitionPending_) {
             // 暗転が完了してから旧シーンを破棄し、次のシーンを直接初期化する。
             // ロード画面の最低表示時間と追加の暗転を挟まない。
@@ -226,36 +242,43 @@ void SceneManager::Update(float deltaTime) {
             nextSceneName_.clear();
             assert(nextScene_ && "Direct scene creation failed.");
 
+            // 直接遷移先の生成に失敗したら、予約を解除して待機状態へ戻す。
             if (!nextScene_) {
                 directTransitionPending_ = false;
-                transitionPhase_ = TransitionPhase::Idle;
+                transitionPhase_ = TransitionPhase::kIdle;
                 return;
             }
 
             SwapToDirectNextScene();
+            // 遷移先が表示を担当する指定でアイリスが動いている場合だけ、既定のフェードイン開始を省く。
+            // 遷移先が開示を担当する指定が無いか、遷移先でアイリスインを開始していなければ、既定のフェードインを始める。
             if (!directDestinationHandlesReveal_ ||
-                Fade::GetInstance()->GetStatus() != Fade::Status::IrisIn) {
+                Fade::GetInstance()->GetStatus() != Fade::Status::kIrisIn) {
                 Fade::GetInstance()->StartFadeIn(0.25f);
             }
 
             directTransitionPending_ = false;
             directDestinationHandlesReveal_ = false;
-            transitionPhase_ = TransitionPhase::Idle;
+            transitionPhase_ = TransitionPhase::kIdle;
             return;
         }
 
+        // ロード画面を使う予約なら、旧シーンの暗転が終わった時点でロード画面を初期化する。
         BeginLoadingTransition();
         return;
 
-    case TransitionPhase::Loading: {
+    // ローディング表示中は経過時間を数えながら、先読み結果に応じて初期化を進める。
+    case TransitionPhase::kLoading: {
         loadingElapsed_ += effectiveDeltaTime;
 
+        // 現在のロード画面があれば、表示用の時間でアニメーションを進める。
         if (currentScene_) {
             currentScene_->Update(effectiveDeltaTime);
         }
 
         const bool asyncReady = preparedLoadData_ || preparedSceneInitialized_ || IsAsyncSceneReady();
 
+        // 先読みが完了し、遷移先を有効化できる状態まで準備していなければ、主スレッド側の準備を進める。
         if (asyncReady && !preparedSceneInitialized_) {
             PrepareLoadedSceneOnMainThread();
         }
@@ -265,40 +288,46 @@ void SceneManager::Update(float deltaTime) {
         // 最低表示時間、初期化の完了、暗転解除の終了を満たしたときだけ、ローディング画面を閉じ始める。
         if (loadingElapsed_ >= minLoadingDisplayTime_ &&
             preparedSceneInitialized_ &&
-            Fade::GetInstance()->GetStatus() != Fade::Status::FadeIn) {
+            Fade::GetInstance()->GetStatus() != Fade::Status::kFadeIn) {
             SetLoadingProgress(1.0f);
             Fade::GetInstance()->StartFadeOut(0.35f);
-            transitionPhase_ = TransitionPhase::FadingOutLoading;
+            transitionPhase_ = TransitionPhase::kFadingOutLoading;
         }
 
         return;
     }
 
     // 進捗表示を完了に固定し、ロード画面を暗転し終えてから準備済みSceneへ交換する。
-    case TransitionPhase::FadingOutLoading:
+    case TransitionPhase::kFadingOutLoading:
+        // 閉じる暗転中もロード画面が存在すれば、暗転が完了するまで表示を進める。
         if (currentScene_) {
             currentScene_->Update(effectiveDeltaTime);
         }
 
         SetLoadingProgress(1.0f);
 
-        if (Fade::GetInstance()->GetStatus() == Fade::Status::FadeOut && !Fade::GetInstance()->IsFinished()) {
+        // ロード画面を隠す暗転が終わっていない間は、準備済みシーンへ交換しない。
+        if (Fade::GetInstance()->GetStatus() == Fade::Status::kFadeOut && !Fade::GetInstance()->IsFinished()) {
             return;
         }
 
+        // 閉じる暗転の後は初期化済みのシーンを交換し、旧ロード画面を手放す。
         PrepareLoadedSceneOnMainThread();
         SwapToPreparedScene();
         return;
 
-    case TransitionPhase::Idle:
+    // 遷移待ちがない場合は、直接交換の予約と通常のシーン更新を扱う。
+    case TransitionPhase::kIdle:
     default:
         break;
     }
 
+    // 生成済みの遷移先を直接受け取っている場合は、通常更新の前に交換する。
     if (nextScene_ != nullptr) {
         SwapToDirectNextScene();
     }
 
+    // 有効なシーンがある場合は、呼び出し元が渡した通常の経過秒数で更新する。
     if (currentScene_) {
         currentScene_->Update(deltaTime);
     }
@@ -327,6 +356,7 @@ void SceneManager::DrawShadow() {
 
 void SceneManager::SetNextScene(std::unique_ptr<BaseScene> nextScene) {
 #ifdef USE_IMGUI
+    // 単体再生セッションがあれば、直接交換を予約する前に編集用シーン参照を整理する。
     if (auto* session = SelectedActorSession::Current()) session->PrepareSceneChange();
 #endif
 
@@ -341,6 +371,7 @@ BaseScene* SceneManager::GetCurrentScene() const {
 
 void SceneManager::ChangeScene(const std::string& sceneName) {
 #ifdef USE_IMGUI
+    // エディターの単体再生中なら、通常遷移を予約する前に対象を切り離す。
     if (auto* session = SelectedActorSession::Current()) session->PrepareSceneChange();
 #endif
 
@@ -350,6 +381,7 @@ void SceneManager::ChangeScene(const std::string& sceneName) {
 
 void SceneManager::ChangeSceneWithoutLoading(const std::string& sceneName, bool destinationHandlesReveal) {
 #ifdef USE_IMGUI
+    // エディターの単体再生中なら、直接遷移を予約する前に対象を切り離す。
     if (auto* session = SelectedActorSession::Current()) session->PrepareSceneChange();
 #endif
 
@@ -359,6 +391,7 @@ void SceneManager::ChangeSceneWithoutLoading(const std::string& sceneName, bool 
 
 void SceneManager::ChangeSceneAfterFade(const std::string& sceneName) {
 #ifdef USE_IMGUI
+    // エディターの単体再生中なら、暗転後の遷移を予約する前に対象を切り離す。
     if (auto* session = SelectedActorSession::Current()) session->PrepareSceneChange();
 #endif
 
@@ -367,33 +400,38 @@ void SceneManager::ChangeSceneAfterFade(const std::string& sceneName) {
 }
 
 void SceneManager::QueueSceneChange(const std::string& sceneName, bool startFadeOut, bool skipLoading, bool destinationHandlesReveal) {
-    // 多重遷移と未登録名を拒否し、Asset指定の引継ぎを一回限りにする。
+    // シーン生成用のFactoryが未設定なら、遷移先を作れないため予約しない。
     if (sceneFactory_ == nullptr) {
         assert(false && "SceneFactory is not set in SceneManager.");
         return;
     }
 
+    // 遷移の途中なら、進行中の要求を上書きしない。
     if (IsTransitionBusy()) {
         return;
     }
 
+    // Factoryにないシーン名は生成できないため、フェードを開始する前に拒否する。
     if (!IsSceneRegistered(sceneName)) {
         assert(false && "Requested scene is not registered in SceneFactory.");
         return;
     }
 
+    // 次の遷移に引き継ぐ指定がなければ、前のScene Assetの読み込み設定を外す。
     if (!preserveSceneAssetForNextChange_) {
         ClearActiveSceneAsset();
     }
 
     preserveSceneAssetForNextChange_ = false;
 
+    // 暗転中の予約先と実際の交換時に使う名前を保持し、次回更新へ回す。
     nextSceneName_ = sceneName;
     pendingSceneNameForSwap_ = sceneName;
     directTransitionPending_ = skipLoading;
     directDestinationHandlesReveal_ = skipLoading && destinationHandlesReveal;
-    transitionPhase_ = TransitionPhase::FadingOutCurrent;
+    transitionPhase_ = TransitionPhase::kFadingOutCurrent;
 
+    // 暗転をこの要求が始める場合は、直接遷移か通常遷移かに合わせて時間を選ぶ。
     if (startFadeOut) {
         Fade::GetInstance()->StartFadeOut(skipLoading ? 0.2f : 1.0f);
     }
@@ -407,7 +445,7 @@ void SceneManager::QueueSceneChange(const std::string& sceneName, bool startFade
 }
 
 bool SceneManager::ReloadCurrentScene() {
-    // Scene Asset編集中なら次回の読み直しにも同じAssetを渡す。
+    // 現行のシーン名が空か別の遷移が進行中なら、読み直しを予約できない。
     if (currentSceneName_.empty() || IsTransitionBusy()) {
         return false;
     }
@@ -442,12 +480,13 @@ bool SceneManager::OpenSceneAsset(
 }
 
 bool SceneManager::OpenSceneAsset(const SceneLoadContext& context) {
-    // 編集中や遷移中の二重読込を避け、指定された実行シーンだけを開く。
+    // Assetと配置パスが有効で、再生中・遷移中のどちらでもなく、実行先名が登録済みの場合だけ開く。
     if (!context.IsSceneAsset() || context.objectLayoutPath.empty() ||
         isPlaying_ || IsTransitionBusy() || !IsSceneRegistered(context.runtimeScene)) {
         return false;
     }
 
+    // Assetから得たパスを次の遷移だけに引き継げるようにする。
     activeSceneLoadContext_ = context;
     preserveSceneAssetForNextChange_ = true;
     ChangeScene(context.runtimeScene);
@@ -470,10 +509,12 @@ void SceneManager::SetEditorSceneAssetPaths(
     std::string sceneAssetId = objectLayoutPath;
     const size_t slash = sceneAssetId.find_last_of("/\\");
 
+    // パスの区切りがあれば、表示用IDを末尾のファイル名だけにする。
     if (slash != std::string::npos) {
         sceneAssetId = sceneAssetId.substr(slash + 1);
     }
 
+    // 末尾が.jsonの場合は、その拡張子だけを表示用IDから取り除く。
     if (sceneAssetId.size() >= 5 && sceneAssetId.substr(sceneAssetId.size() - 5) == ".json") {
         sceneAssetId.resize(sceneAssetId.size() - 5);
     }
@@ -489,12 +530,13 @@ void SceneManager::ClearActiveSceneAsset() {
 void SceneManager::BeginLoadingTransition() {
     // GPUが旧シーンを使い終えてから解放し、LoadingSceneへ所有権を切り替える。
     const auto transitionWaitStart = std::chrono::steady_clock::now();
-    TextureManager::GetInstance()->WaitForAsyncUploadBatch();
+    engine::TextureManager::GetInstance()->WaitForAsyncUploadBatch();
     engine::DirectXCommon::GetInstance()->WaitForGpuAndReset();
     LogSlowLoadingStep("old scene GPU synchronization", currentSceneName_, transitionWaitStart);
 
     FinalizeCurrentScene(currentScene_);
 
+    // 前の準備結果と転送フラグを空にし、新しいロード画面で進捗を数え直す。
     preparedScene_.reset();
     preparedLoadData_.reset();
     preloadProgress_.reset();
@@ -509,6 +551,7 @@ void SceneManager::BeginLoadingTransition() {
     sceneInitializationStarted_ = false;
     sceneInitializationFinished_ = false;
 
+    // 旧画面を手放したら名前をロード用の予約へ移し、一時シーンを開く。
     loadingTargetSceneName_ = nextSceneName_;
     nextSceneName_.clear();
     loadingElapsed_ = 0.0f;
@@ -520,6 +563,7 @@ void SceneManager::BeginLoadingTransition() {
 #endif
     currentScene_->SetSceneManager(this);
 
+    // 共有のデバッグエディターが設定済みなら、一時的なロード画面にも渡す。
     if (debugEditor_) {
         currentScene_->SetDebugEditor(debugEditor_);
     }
@@ -528,9 +572,10 @@ void SceneManager::BeginLoadingTransition() {
     currentScene_->Initialize();
     SetLoadingProgress(0.08f);
 
+    // 先読みを別スレッドで開始し、ロード画面の表示と並行させる。
     StartAsyncSceneCreate();
     Fade::GetInstance()->StartFadeIn(0.25f);
-    transitionPhase_ = TransitionPhase::Loading;
+    transitionPhase_ = TransitionPhase::kLoading;
 }
 
 void SceneManager::StartAsyncSceneCreate() {
@@ -540,6 +585,7 @@ void SceneManager::StartAsyncSceneCreate() {
     preparedScene_ = sceneFactory_->CreateScene(targetName);
     assert(preparedScene_ && "Scene creation failed before async preload.");
 
+    // 指定したシーンの生成に失敗したら、マニフェストを作らず戻る。
     if (!preparedScene_) {
         return;
     }
@@ -547,12 +593,14 @@ void SceneManager::StartAsyncSceneCreate() {
     preparedScene_->SetSceneManager(this);
     preparedScene_->SetSceneLoadContext(activeSceneLoadContext_);
 
+    // 共有エディターが設定済みなら、先読みするシーンからも使えるよう参照を渡す。
     if (debugEditor_) {
         preparedScene_->SetDebugEditor(debugEditor_);
     }
 
     SceneLoadManifest manifest = preparedScene_->BuildAsyncLoadManifest();
 
+    // Scene Asset側でBGMが上書きされている場合は、通常のマニフェストにその音源を加える。
     if (!activeSceneLoadContext_.bgmPath.empty()) {
         manifest.AddAudio(activeSceneLoadContext_.bgmPath);
     }
@@ -570,6 +618,7 @@ void SceneManager::StartAsyncSceneCreate() {
             auto failed = std::make_shared<ScenePreloadData>();
             failed->warnings.push_back(
                 "Scene preload failed for " + targetName + ": " + exception.what());
+            // 進捗の通知先がある場合は、既知の例外が起きたときも先読みを終了扱いにする。
             if (progress) {
                 progress->Finish();
             }
@@ -578,6 +627,7 @@ void SceneManager::StartAsyncSceneCreate() {
         catch (...) {
             auto failed = std::make_shared<ScenePreloadData>();
             failed->warnings.push_back("Scene preload failed for " + targetName + ".");
+            // 進捗の通知先がある場合は、例外の種類を特定できないときも先読みを終了扱いにする。
             if (progress) {
                 progress->Finish();
             }
@@ -587,7 +637,7 @@ void SceneManager::StartAsyncSceneCreate() {
 }
 
 bool SceneManager::IsAsyncSceneReady() const {
-    // 描画スレッドを止めずに、Manifest解析の完了だけ確認する。
+    // 先読み結果のFutureがまだ作られていないか消費済みなら、準備完了として扱わない。
     if (!loadingFuture_.valid()) {
         return false;
     }
@@ -596,12 +646,14 @@ bool SceneManager::IsAsyncSceneReady() const {
 }
 
 void SceneManager::PrepareLoadedSceneOnMainThread() {
-    // 非同期で用意したAssetの転送を待ち、共有Managerを触るScene初期化は主スレッドで行う。
+    // 準備済みのシーンは再初期化せず、表示と交換の待ちへ進む。
     if (preparedSceneInitialized_) {
         return;
     }
 
+    // 結果をまだ受け取っておらず、先読み処理が存在する場合だけ、非同期結果の回収を試す。
     if (!preparedLoadData_ && loadingFuture_.valid()) {
+        // 先読みスレッドが結果を用意していなければ、このフレームでは待機せず戻る。
         if (!IsAsyncSceneReady()) {
             return;
         }
@@ -613,88 +665,103 @@ void SceneManager::PrepareLoadedSceneOnMainThread() {
             preparedLoadData_ = std::make_shared<ScenePreloadData>();
         }
 
+        // 先読みの利用可否にかかわらず、得られた警告を診断に出す。
         for (const std::string& warning : preparedLoadData_->warnings) {
             OutputDebugStringA((warning + "\n").c_str());
         }
 
+        // 遷移先の実体が残っている場合は、回収した先読みデータをそのシーンへ渡す。
         if (preparedScene_) {
             preparedScene_->SetPreparedLoadData(preparedLoadData_);
         }
 
-        asyncUploadBatchStarted_ = TextureManager::GetInstance()->BeginAsyncUploadBatch();
+        // CPUデータ回収の後に、先読みした画像をまとめて送るためのバッチを開始する。
+        asyncUploadBatchStarted_ = engine::TextureManager::GetInstance()->BeginAsyncUploadBatch();
     }
 
     assert(preparedScene_ && "Scene creation failed during loading transition.");
 
+    // 遷移先が生成されていなければ、初期化先がないので遷移を待機状態へ戻す。
     if (!preparedScene_) {
-        transitionPhase_ = TransitionPhase::Idle;
+        transitionPhase_ = TransitionPhase::kIdle;
         return;
     }
 
-    // 記録を開始したバッチは一度だけ提出し、GPU完了まで次の段階を待たせる。
-    // 提出自体の失敗と、提出済みでまだ終了していない状態を分けて扱う。どちらも後続の処理は待たせる。
-    const auto submitAndPollUploads = [this] {
-        auto* textures = TextureManager::GetInstance();
-        if (asyncUploadBatchStarted_ && !asyncUploadBatchSubmitted_) {
-            asyncUploadBatchSubmitted_ = textures->SubmitAsyncUploadBatch();
-            if (!asyncUploadBatchSubmitted_) {
-                return false;
-            }
-        }
-        return !asyncUploadBatchSubmitted_ || textures->PollAsyncUploadBatch();
-    };
-
-    if (!preparedAssetsReady_) {
-        // Asset生成、転送バッチ投入、GPU側の完了をそれぞれ別フレームで監視する。
-        // どれかが残っている間はSceneのInitializeへ進まない。
-        if (!assetCreationStarted_) {
-            StartPreparedAssetsAsync();
-            return;
-        }
-
-        if (!assetCreationFinished_) {
-            if (!assetCreationFuture_.valid() ||
-                assetCreationFuture_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
-                return;
-            }
-
-            try {
-                assetCreationFuture_.get();
-            }
-            catch (const std::exception& exception) {
-                OutputDebugStringA((std::string("Asset creation failed: ") + exception.what() + "\n").c_str());
-                assert(false && "Asset creation failed.");
-            }
-            catch (...) {
-                OutputDebugStringA("Asset creation failed with an unknown exception.\n");
-                assert(false && "Asset creation failed.");
-            }
-
-            assetCreationFinished_ = true;
-        }
-
-        if (preparedLoadData_ &&
-            (preparedTextureIndex_.load(std::memory_order_relaxed) < preparedLoadData_->textures.size() ||
-             preparedModelIndex_.load(std::memory_order_relaxed) < preparedLoadData_->modelNames.size())) {
-            return;
-        }
-
-        if (!submitAndPollUploads()) {
-            return;
-        }
-
-        preparedAssetsReady_ = true;
-        asyncUploadBatchStarted_ = false;
-        asyncUploadBatchSubmitted_ = false;
+    // 先読み分が揃ってから分割初期化へ進む。初期化中に追加されたGPU転送も完了まで待つ。
+    if (!PreparePreloadedAssets() || !AdvancePreparedSceneInitialization() || !SubmitAndPollTextureUploads()) {
+        return;
     }
 
+    // Scene初期化後のGPU転送まで終わった段階で、借りていた事前読み込み結果を取り外す。
+    preparedScene_->SetPreparedLoadData(nullptr);
+    preparedSceneInitialized_ = true;
+}
+
+bool SceneManager::PreparePreloadedAssets() {
+    // アセット生成と最初のGPU転送を確認済みなら、次の初期化ステップへ進める。
+    if (preparedAssetsReady_) {
+        return true;
+    }
+
+    // アセット生成をまだ依頼していないときは、作業スレッドを起動して次のフレームを待つ。
+    if (!assetCreationStarted_) {
+        StartPreparedAssetsAsync();
+        return false;
+    }
+
+    // 作業スレッドの結果を回収済みでない場合は、停止せず完了を確認する。
+    if (!assetCreationFinished_) {
+        // 有効な完了結果が届いていない間は、描画スレッドを止めず再び戻る。
+        if (!assetCreationFuture_.valid() ||
+            assetCreationFuture_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            return false;
+        }
+
+        try {
+            assetCreationFuture_.get();
+        }
+        // CPU側の資源生成例外を出力する。アサートが無効な構成ではその後の件数照合で未完了を扱う。
+        catch (const std::exception& exception) {
+            OutputDebugStringA((std::string("Asset creation failed: ") + exception.what() + "\n").c_str());
+            assert(false && "Asset creation failed.");
+        }
+        catch (...) {
+            OutputDebugStringA("Asset creation failed with an unknown exception.\n");
+            assert(false && "Asset creation failed.");
+        }
+
+        // 結果を回収したことを記録する。使用可能かどうかは件数と転送も確認する。
+        assetCreationFinished_ = true;
+    }
+
+    // 作成済みのテクスチャ数かモデル数が先読み一覧の件数に満たなければ、資源を使用可能にしない。
+    if (preparedLoadData_ &&
+        (preparedTextureIndex_.load(std::memory_order_relaxed) < preparedLoadData_->textures.size() ||
+         preparedModelIndex_.load(std::memory_order_relaxed) < preparedLoadData_->modelNames.size())) {
+        return false;
+    }
+
+    // 必要なGPU転送をまだ投入・完了できていなければ、次のフレームでもこの段階を調べる。
+    if (!SubmitAndPollTextureUploads()) {
+        return false;
+    }
+
+    // 件数とGPU転送の条件が揃ったら、シーンの初期化用にバッチのフラグを戻す。
+    preparedAssetsReady_ = true;
+    asyncUploadBatchStarted_ = false;
+    asyncUploadBatchSubmitted_ = false;
+    return true;
+}
+
+bool SceneManager::AdvancePreparedSceneInitialization() {
+    // シーンの分割初期化を開始する前だけ、共有描画資源の準備と参照の接続を行う。
     if (!sceneInitializationStarted_) {
-        // Scene固有の初期化前に、共有GPU基盤だけを一段進める。
-        // 完了後は毎フレーム再接続せず、エフェクトの時間設定も維持する。
-        if (!PrepareRenderCommons(preparedScene_.get(), true)) return;
+        // 共有描画資源の準備が一回のステップで終わらない場合は、シーン固有の初期化を見送る。
+        if (!PrepareRenderCommons(preparedScene_.get(), true)) return false;
         preparedScene_->SetSceneManager(this);
         preparedScene_->SetSceneLoadContext(activeSceneLoadContext_);
 
+        // 共有エディターがある場合は、分割初期化の前にその参照を渡す。
         if (debugEditor_) {
             preparedScene_->SetDebugEditor(debugEditor_);
         }
@@ -702,15 +769,16 @@ void SceneManager::PrepareLoadedSceneOnMainThread() {
         // Scene::Initialize() は CameraManager / LightManager / GPU描画管理など、
         // メインスレッド専用の共有状態を更新します。アセットの読み込み準備だけを
         // 非同期にし、Scene本体の構築は描画と競合しないこのスレッドで確定します。
-        asyncUploadBatchStarted_ = TextureManager::GetInstance()->BeginAsyncUploadBatch();
+        asyncUploadBatchStarted_ = engine::TextureManager::GetInstance()->BeginAsyncUploadBatch();
         sceneInitializationStarted_ = true;
         const auto beginStart = std::chrono::steady_clock::now();
         preparedScene_->BeginLoadingInitialize();
         LogSlowLoadingStep("BeginLoadingInitialize", loadingTargetSceneName_, beginStart);
     }
 
+    // シーンの分割初期化が続いている間は、テクスチャ転送を記録しつつ一段階だけ進める。
     if (!sceneInitializationFinished_) {
-        TextureManager::GetInstance()->SetAsyncUploadRecording(asyncUploadBatchStarted_);
+        engine::TextureManager::GetInstance()->SetAsyncUploadRecording(asyncUploadBatchStarted_);
         try {
             const auto stepStart = std::chrono::steady_clock::now();
             const float progressBefore = preparedScene_->GetLoadingInitializeProgress();
@@ -721,28 +789,39 @@ void SceneManager::PrepareLoadedSceneOnMainThread() {
                 " / InitializeLoadingStep progress=" + std::to_string(progressBefore), stepMs);
         }
         catch (...) {
-            TextureManager::GetInstance()->SetAsyncUploadRecording(false);
+            // 途中のステップが例外を返した場合は、以降の処理へ記録状態を漏らさない。
+            engine::TextureManager::GetInstance()->SetAsyncUploadRecording(false);
             throw;
         }
 
-        TextureManager::GetInstance()->SetAsyncUploadRecording(false);
+        engine::TextureManager::GetInstance()->SetAsyncUploadRecording(false);
 
+        // 今回のステップで初期化が完了しなければ、次のフレームで残りを行う。
         if (!sceneInitializationFinished_) {
-            return;
+            return false;
         }
     }
 
-    if (!submitAndPollUploads()) {
-        return;
-    }
+    return true;
+}
 
-    // Scene初期化後のGPU転送まで終わった段階で、借りていた事前読み込み結果を取り外す。
-    preparedScene_->SetPreparedLoadData(nullptr);
-    preparedSceneInitialized_ = true;
+// 提出やGPU処理の完了状態を確認し、未完了なら次のフレームへ持ち越す。
+bool SceneManager::SubmitAndPollTextureUploads() {
+    // 提出に失敗した場合とGPU上で実行中の場合は、次のフレームでもこの段階を確認する。
+    auto* textures = engine::TextureManager::GetInstance();
+    // バッチを用意したがまだ提出していない場合に限り、GPUキューへの投入を試す。
+    if (asyncUploadBatchStarted_ && !asyncUploadBatchSubmitted_) {
+        asyncUploadBatchSubmitted_ = textures->SubmitAsyncUploadBatch();
+        // バッチを提出できなければ、次のフレームでも提出を試せるよう未完了を返す。
+        if (!asyncUploadBatchSubmitted_) {
+            return false;
+        }
+    }
+    return !asyncUploadBatchSubmitted_ || textures->PollAsyncUploadBatch();
 }
 
 void SceneManager::StartPreparedAssetsAsync() {
-    // テクスチャとモデルの作成を作業スレッドへ渡し、進捗を原子的に数える。
+    // 先読みした一覧がないか、すでに作業を開始している場合は、新しい資源生成を起動しない。
     if (!preparedLoadData_ || assetCreationStarted_) {
         return;
     }
@@ -753,30 +832,34 @@ void SceneManager::StartPreparedAssetsAsync() {
         std::launch::async,
         [this, loadData, recordDeferredUploads]() {
             SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+              // ワーカーから画像を準備するため、そのスレッド自身でCOMを初期化する。
               const HRESULT comResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-              TextureManager::GetInstance()->SetAsyncUploadRecording(recordDeferredUploads);
+              engine::TextureManager::GetInstance()->SetAsyncUploadRecording(recordDeferredUploads);
               try {
                   // マニフェストに記録された色空間を保ってGPU資源を作り、完了数だけ主画面へ公開する。
                   for (const SceneLoadManifest::TextureRequest& texture : loadData->textures) {
-                      TextureManager::GetInstance()->Load(
+                      engine::TextureManager::GetInstance()->Load(
                           texture.path,
-                          texture.linear ? TextureManager::TextureColorSpace::Linear
-                                         : TextureManager::TextureColorSpace::Auto);
+                          texture.linear ? engine::TextureManager::TextureColorSpace::kLinear
+                                         : engine::TextureManager::TextureColorSpace::kAuto);
                       preparedTextureIndex_.fetch_add(1, std::memory_order_relaxed);
                   }
+                  // テクスチャに続きモデルを読み込み、処理済みの件数を進捗側へ渡す。
                   for (const std::string& modelName : loadData->modelNames) {
                       ModelManager::GetInstance()->LoadModel(modelName);
                       preparedModelIndex_.fetch_add(1, std::memory_order_relaxed);
                   }
               }
               catch (...) {
-                  TextureManager::GetInstance()->SetAsyncUploadRecording(false);
+                  engine::TextureManager::GetInstance()->SetAsyncUploadRecording(false);
+                  // このスレッドでCOMを初期化できていた場合は、例外時も対応する終了処理を呼ぶ。
                   if (SUCCEEDED(comResult)) {
                       CoUninitialize();
                   }
                   throw;
               }
-              TextureManager::GetInstance()->SetAsyncUploadRecording(false);
+              engine::TextureManager::GetInstance()->SetAsyncUploadRecording(false);
+              // このスレッドでCOMを初期化できていた場合は、資源生成の完了時に解放する。
               if (SUCCEEDED(comResult)) {
                   CoUninitialize();
               }
@@ -785,7 +868,7 @@ void SceneManager::StartPreparedAssetsAsync() {
 }
 
 float SceneManager::CalculateLoadingProgress() const {
-    // Manifest解析、Asset作成、Scene初期化、GPU転送に進捗帯を割り当てる。
+    // シーンの初期化と必要なGPU転送を完了した段階では、ロード進捗を100%とする。
     if (preparedSceneInitialized_) {
         return 1.0f;
     }
@@ -808,10 +891,12 @@ float SceneManager::CalculateLoadingProgress() const {
         : static_cast<float>(completedAssets) / static_cast<float>(totalAssets);
     const float assetProgress = 0.60f + (std::min)(1.0f, assetRatio) * 0.36f;
 
+    // アセットが揃い共有資源を準備中なら、シーン初期化前の進捗帯に共有資源の進捗を足す。
     if (preparedAssetsReady_ && !sceneInitializationStarted_ && preparedScene_ && renderCommonResources_) {
         return 0.96f + renderCommonResources_->GetPreparationProgress(preparedScene_->GetRenderPreparation()) * 0.01f;
     }
 
+    // シーンの分割初期化中は、シーンから取得したステップ進捗に合わせて表示を進める。
     if (sceneInitializationStarted_ && !sceneInitializationFinished_) {
         const float initializeRatio = preparedScene_
             ? std::clamp(preparedScene_->GetLoadingInitializeProgress(), 0.0f, 1.0f)
@@ -821,12 +906,13 @@ float SceneManager::CalculateLoadingProgress() const {
 
     // 初期化を終えてもGPU転送中は99%で止め、描画可能になるまで完了表示を出さない。
     if (sceneInitializationFinished_ &&
-        TextureManager::GetInstance()->IsAsyncUploadBatchPending()) {
+        engine::TextureManager::GetInstance()->IsAsyncUploadBatchPending()) {
         return 0.99f;
     }
 
+    // アセット転送を提出した直後でGPUが処理中なら、より後の進捗帯へ進めない。
     if (asyncUploadBatchSubmitted_ &&
-        TextureManager::GetInstance()->IsAsyncUploadBatchPending()) {
+        engine::TextureManager::GetInstance()->IsAsyncUploadBatchPending()) {
         return 0.97f;
     }
 
@@ -842,6 +928,7 @@ void SceneManager::ReplaceCurrentScene(std::unique_ptr<BaseScene>&& incomingScen
 
 void SceneManager::SwapToPreparedScene() {
 #ifdef USE_IMGUI
+    // シーンを交換する前に、存在するエディターの単体再生セッションから旧シーン参照を外す。
     if (auto* session = SelectedActorSession::Current()) session->PrepareSceneChange();
 #endif
 
@@ -857,6 +944,7 @@ void SceneManager::SwapToPreparedScene() {
     cameraEditor->SetObject3DCommon(
         currentScene_ ? currentScene_->GetObject3DCommon() : nullptr);
 #endif
+    // 新しいシーンの所有権を受け取った後、ロード専用の参照と進捗を廃棄する。
     preparedSceneInitialized_ = false;
     preparedLoadData_.reset();
     preloadProgress_.reset();
@@ -870,6 +958,7 @@ void SceneManager::SwapToPreparedScene() {
     sceneInitializationStarted_ = false;
     sceneInitializationFinished_ = false;
 
+    // 交換するシーン名が控えてあれば、現在の名前へ反映して予約から消す。
     if (!pendingSceneNameForSwap_.empty()) {
         currentSceneName_ = pendingSceneNameForSwap_;
         pendingSceneNameForSwap_.clear();
@@ -883,12 +972,14 @@ void SceneManager::SwapToPreparedScene() {
         currentScene_->OnActivated();
     }
 
+    // 有効化した画面を開示し、以後の更新を通常の状態へ戻す。
     Fade::GetInstance()->StartFadeIn(1.0f);
-    transitionPhase_ = TransitionPhase::Idle;
+    transitionPhase_ = TransitionPhase::kIdle;
 }
 
 void SceneManager::SwapToDirectNextScene() {
 #ifdef USE_IMGUI
+    // 直接交換でも、エディターの単体再生セッションがあれば先に旧シーン参照を外す。
     if (auto* session = SelectedActorSession::Current()) session->PrepareSceneChange();
 #endif
 
@@ -901,15 +992,18 @@ void SceneManager::SwapToDirectNextScene() {
 #endif
     nextScene_ = nullptr;
 
+    // シーン名による遷移として予約されている場合は、新しい現行シーン名を反映する。
     if (!pendingSceneNameForSwap_.empty()) {
         currentSceneName_ = pendingSceneNameForSwap_;
         pendingSceneNameForSwap_.clear();
     }
 
+    // 受け取ったシーンが有効な場合は、共有資源の準備・初期化・有効化を順に行う。
     if (currentScene_) {
         currentScene_->SetSceneManager(this);
         currentScene_->SetSceneLoadContext(activeSceneLoadContext_);
 
+        // 共有エディターの参照がある場合は、新しいシーンの初期化前に渡す。
         if (debugEditor_) {
             currentScene_->SetDebugEditor(debugEditor_);
         }
@@ -932,7 +1026,7 @@ void SceneManager::SetLoadingProgress(float progress) {
 
 bool SceneManager::IsTransitionBusy() const {
     // フェード中だけでなく、準備済みシーンや非同期Futureが残る間も再遷移を防ぐ。
-    return transitionPhase_ != TransitionPhase::Idle ||
+    return transitionPhase_ != TransitionPhase::kIdle ||
            !nextSceneName_.empty() ||
            nextScene_ != nullptr ||
            preparedScene_ != nullptr ||
@@ -945,6 +1039,7 @@ void SceneManager::SaveLastSceneName(const std::string& sceneName) {
     {
         std::ifstream input(kUserConfigPath);
 
+        // 既存設定が開けた場合は、最後のシーン名以外の項目を保存時に引き継ぐために読む。
         if (input.is_open()) {
             try {
                 input >> root;
@@ -954,6 +1049,7 @@ void SceneManager::SaveLastSceneName(const std::string& sceneName) {
         }
     }
 
+    // 読んだ設定がJSONオブジェクトでなければ、名前付きの項目を書ける空の設定を使う。
     if (!root.is_object()) {
         root = json::object();
     }
@@ -962,6 +1058,7 @@ void SceneManager::SaveLastSceneName(const std::string& sceneName) {
 
     std::ofstream file(kUserConfigPath);
 
+    // 設定ファイルを書き込み用に開けた場合だけ、更新したJSONを出力する。
     if (file.is_open()) {
         file << root.dump(4);
     }
@@ -971,6 +1068,7 @@ std::string SceneManager::LoadLastSceneName() {
     // 設定ファイルがない場合やJSONが壊れている場合は空名で起動側へ任せる。
     std::ifstream file(kUserConfigPath);
 
+    // 設定ファイルが開けない場合は空のシーン名を返し、起動側の既定値へ任せる。
     if (!file.is_open()) {
         return "";
     }
@@ -979,6 +1077,7 @@ std::string SceneManager::LoadLastSceneName() {
         json root;
         file >> root;
 
+        // 保存済みのシーン名が見つかれば、次回起動時に使う候補として返す。
         if (root.contains("lastScene")) {
             return root["lastScene"];
         }
@@ -988,18 +1087,22 @@ std::string SceneManager::LoadLastSceneName() {
     return "";
 }
 
+// シーンが要求する範囲の共通描画資源を準備する。分割中はfalseを返して次の更新へつなぐ。
 bool SceneManager::PrepareRenderCommons(BaseScene* scene, bool incremental) {
+    // 準備先のシーンかFrameworkから借りる共有資源がなければ、描画準備を開始できない。
     if (!scene || !renderCommonResources_) {
         throw std::logic_error("SceneManager requires Framework render resources before scene initialization");
     }
     const auto preparation = scene->GetRenderPreparation();
     // ロード画面の更新中は1ステップずつ進め、起動や直接遷移ではその場で最後まで準備する。
     if (incremental) {
+        // 共有資源を一段進めても完了しなかった場合は、次のフレームへ処理を持ち越す。
         if (!renderCommonResources_->PrepareStep(preparation)) return false;
+    // 起動や直接交換など一回で準備する経路では、共有資源をここで揃える。
     } else {
         renderCommonResources_->Prepare(preparation);
     }
-    // エンジンのエフェクト描画器も共有Commonを借用する。Sceneに接続作業を要求しない。
+    // シーンが3Dの共有基盤を参照できる場合に限り、それを使ってメッシュ演出の描画器を初期化する。
     if (auto* common = scene->GetObject3DCommon()) MeshEffectManager::GetInstance()->Initialize(common);
     return true;
 }

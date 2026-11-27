@@ -1,13 +1,14 @@
 ﻿#include "game/actor/player/Player.Internal.h"
+#include <cstdint>
 #include "Easing.h"
 
 #include "game/actor/item/DroppedCopyStar.h"
 #include "game/actor/combat/CombatGroundQuery.h"
 #include "BaseScene.h"
 
-using namespace PlayerImplementation;
+using namespace playerImplementation;
 
-// 元の更新順序と判定を維持して、担当処理をまとめています。
+// コピー解除の進行率を0〜1で返す。演出が無効な場合は0。
 float Player::GetEnemyMorphReleaseRate() const {
     // 解除演出が止まっている間は進行率を使わせない。
     if (!enemyMorphReleaseActive_ || enemyMorphReleaseDuration_ <= 0.0f) {
@@ -19,7 +20,7 @@ float Player::GetEnemyMorphReleaseRate() const {
 
 bool Player::IsPinkSlimeMorphed() const {
     // 通常のピンクコピーだけに専用ジャンプを許可する。
-    return isEnemyMorphed_ && enemyMorphType_ == EnemyMorphType::Slime;
+    return isEnemyMorphed_ && enemyMorphType_ == EnemyMorphType::kSlime;
 }
 
 void Player::ActivateCheckpoint(const engine::Vector3& position, const std::string& checkpointObjectName) {
@@ -29,6 +30,7 @@ void Player::ActivateCheckpoint(const engine::Vector3& position, const std::stri
     checkpointObjectName_ = checkpointObjectName;
     const std::string currentMorph = GetEnemyTypeForCurrentMorph();
 
+    // 保存できる通常コピーの型がある場合は、今回のチェックポイントへ記録する型を更新する。
     if (!currentMorph.empty()) {
         checkpointMorphEnemyType_ = currentMorph;
     }
@@ -38,19 +40,22 @@ void Player::ActivateCheckpoint(const engine::Vector3& position, const std::stri
 
 bool Player::ApplyStoredCopy(const std::string& enemyType, bool unlimitedDuration) {
     // 記憶台や復帰処理は登録済みの能力だけを指定でき、演出中の取得は王冠だけ許可します。
-    const PlayerCopyTypeDescriptor* descriptor = PlayerCopyTypeCatalog::Find(enemyType);
+    const PlayerCopyTypeDescriptor* descriptor = playerCopyTypeCatalog::Find(enemyType);
     const EnemyMorphType resolvedType = ResolveEnemyMorphType(enemyType);
-    if (!descriptor || resolvedType == EnemyMorphType::None || IsDead() ||
-        (isCinematicLocked_ && resolvedType != EnemyMorphType::Crown) || absorbEffectActive_ ||
+    // 登録・変換できない型は拒否する。死亡、吸収、解除中にも開始できず、演出拘束を通せるのは王冠だけ。
+    if (!descriptor || resolvedType == EnemyMorphType::kNone || IsDead() ||
+        (isCinematicLocked_ && resolvedType != EnemyMorphType::kCrown) || absorbEffectActive_ ||
         enemyMorphReleaseActive_) {
         return false;
     }
 
     // 通常攻撃と既存のコピーを先に止め、新しい能力に前回の判定や姿勢を残しません。
+    // 通常攻撃の管理があれば、能力を差し替える前に判定と操作状態を終了する。
     if (baseCombatController_) {
         baseCombatController_->Cancel(*this, true);
     }
 
+    // すでにコピー中で能力セッションがあるなら、そのセッションの発生物と技を停止する。
     if (isEnemyMorphed_ && copyAbilityController_) {
         copyAbilityController_->Cancel(*this);
     }
@@ -60,6 +65,7 @@ bool Player::ApplyStoredCopy(const std::string& enemyType, bool unlimitedDuratio
     ReleaseCarriedEnemy(true);
     aimTargetObject_ = nullptr;
 
+    // フックのマーカーが作られていれば、照準を取り消した表示へ揃える。
     if (hookMarker_) {
         hookMarker_->SetIsVisible(false);
     }
@@ -77,8 +83,9 @@ bool Player::ApplyStoredCopy(const std::string& enemyType, bool unlimitedDuratio
     enemyMorphVisualTimer_ = 0.0f;
     enemyMorphTint_ = GetEnemyMorphTint(enemyMorphType_);
 
+    // 能力の管理がある場合に、解決済みの形態から既定セッションを開く。
     if (copyAbilityController_) {
-        copyAbilityController_->ActivateDefault(static_cast<int>(enemyMorphType_));
+        copyAbilityController_->ActivateDefault(static_cast<std::int32_t>(enemyMorphType_));
     }
 
     isEnemyMorphed_ = true;
@@ -87,12 +94,13 @@ bool Player::ApplyStoredCopy(const std::string& enemyType, bool unlimitedDuratio
     // 王冠とマントの装飾で被弾範囲が広がらないよう、体の判定を維持する。
     const engine::ColliderConfig bodyCollider = GetColliderConfig();
     SetModel(std::string(descriptor->modelName));
-    if (resolvedType == EnemyMorphType::Crown)
+    // 王冠へ切り替える場合は、装飾の広がりを当たり判定へ反映しないよう、退避した Collider を戻す。
+    if (resolvedType == EnemyMorphType::kCrown)
         SetColliderConfig(bodyCollider);
     SetTexture("");
 
     // 覇王モデルは顔・金属・布を別材質で持つため、全身ジェル化しない。
-    SetMaterialType(resolvedType == EnemyMorphType::Crown ? 0 : 25);
+    SetMaterialType(resolvedType == EnemyMorphType::kCrown ? 0 : 25);
     SetEmissive(1.0f);
     SetAnimationName("");
     ResetAnimationTime();
@@ -110,21 +118,27 @@ std::string Player::GetEnemyTypeForCurrentMorph() const {
     }
 
     switch (enemyMorphType_) {
-    case EnemyMorphType::Slime:
+    // ピンクは既定の Slime として保存する。
+    case EnemyMorphType::kSlime:
         return "Slime";
 
-    case EnemyMorphType::Bomber:
+    // ボム能力は運搬可能な爆弾と区別して Bomber として保存する。
+    case EnemyMorphType::kBomber:
         return "Bomber";
 
-    case EnemyMorphType::FireSlime:
+    // 炎コピーは FireSlime から復元する。
+    case EnemyMorphType::kFireSlime:
         return "FireSlime";
 
-    case EnemyMorphType::ThunderSlime:
+    // 雷コピーは ThunderSlime から復元する。
+    case EnemyMorphType::kThunderSlime:
         return "ThunderSlime";
 
-    case EnemyMorphType::WindSlime:
+    // 風コピーは WindSlime から復元する。
+    case EnemyMorphType::kWindSlime:
         return "WindSlime";
 
+    // 王冠など通常の復帰・再取得に使わない形態は保存名を返さない。
     default:
         return {};
     }
@@ -132,7 +146,7 @@ std::string Player::GetEnemyTypeForCurrentMorph() const {
 
 void Player::ClearCrownPower() {
     // 王冠以外のコピーを解除せず、最終戦専用の能力だけ片付ける。
-    if (enemyMorphType_ == EnemyMorphType::Crown)
+    if (enemyMorphType_ == EnemyMorphType::kCrown)
         CancelEnemyMorph();
 }
 
@@ -150,12 +164,14 @@ void Player::RefreshCheckpointMorphSnapshot() {
 
 void Player::BeginEnemyMorphRelease(bool expired) {
     // 王冠の欠片は最終戦中の専用装備。任意解除による攻略不能を防ぎます。
-    if (enemyMorphType_ == EnemyMorphType::Crown && !expired)
+    if (enemyMorphType_ == EnemyMorphType::kCrown && !expired)
         return;
+    // コピーしていないか解除を開始済みなら、途中の状態と時計を再設定しない。
     if (!isEnemyMorphed_ || enemyMorphReleaseActive_) {
         return;
     }
 
+    // 管理が存在する場合は、解除の姿勢を作る前に実行中のコピー能力を止める。
     if (copyAbilityController_) {
         copyAbilityController_->Cancel(*this);
     }
@@ -184,6 +200,7 @@ void Player::BeginEnemyMorphRelease(bool expired) {
     const float residueScale = std::clamp(playerScale * 0.32f, 0.38f, 0.82f);
     enemyMorphReleaseVisualScale_ = {residueScale, residueScale, residueScale};
 
+    // 残像の表示物を作成済みなら、分離時刻までは見えない大きさと表示状態にする。
     if (enemyMorphReleaseVisual_) {
         enemyMorphReleaseVisual_->SetIsVisible(false);
         enemyMorphReleaseVisual_->SetColor(enemyMorphReleaseTint_);
@@ -206,6 +223,7 @@ void Player::EmitEnemyMorphReleaseBurst() {
     enemyMorphReleaseParticleTimer_ = 0.0f;
     enemyMorphReleaseStartPosition_ = GetWorldPosition() + engine::Vector3{0.0f, 0.82f, 0.0f};
 
+    // 残像が使える場合は、分離する位置と背後を向いた姿勢を確定して表示する。
     if (enemyMorphReleaseVisual_) {
         enemyMorphReleaseVisual_->SetTranslate(enemyMorphReleaseStartPosition_);
         enemyMorphReleaseVisual_->SetRotation({0.0f, GetMoveYaw() + kPi, 0.0f});
@@ -221,10 +239,12 @@ void Player::EmitEnemyMorphReleaseBurst() {
     engine::Vector3 burstDirection = {enemyMorphReleaseDirection_.x, 0.42f, enemyMorphReleaseDirection_.z};
     const float burstLength = engine::Math::Length(burstDirection);
 
+    // 長さが十分なら、粒子が飛ぶ向きを単位化して距離倍率と独立させる。
     if (burstLength > 0.001f) {
         burstDirection = burstDirection / burstLength;
     }
 
+    // CPU 粒子が利用できる場合に、期限切れか任意解除かで粒子量を変えて発生させる。
     if (particleSystem_) {
         particleSystem_->SpawnParticles(
             enemyMorphReleaseStartPosition_, enemyMorphReleaseExpired_ ? 20 : 28, 1.45f, &burstDirection,
@@ -233,17 +253,22 @@ void Player::EmitEnemyMorphReleaseBurst() {
             0.04f);
     }
 
-    if (enemyMorphType_ == EnemyMorphType::ThunderSlime) {
+    // 雷コピーは、形態の大きさに合わせた専用の放電を出す。
+    if (enemyMorphType_ == EnemyMorphType::kThunderSlime) {
         EmitThunderMorphBurst(enemyMorphReleaseStartPosition_, enemyMorphReleaseVisualScale_);
-    } else if (enemyMorphType_ == EnemyMorphType::Slime) {
+    // ピンクコピーは、分離位置で専用の破裂粒子を出す。
+    } else if (enemyMorphType_ == EnemyMorphType::kSlime) {
         EmitCopyMorphPreset(kPinkSlimeMorphBurstPreset, enemyMorphReleaseStartPosition_);
-    } else if (enemyMorphType_ == EnemyMorphType::Bomber) {
+    // ボムコピーは、分離位置に衝撃波とオーラを重ねる。
+    } else if (enemyMorphType_ == EnemyMorphType::kBomber) {
         SpawnCopyMorphPulse(kBomberMorphPulseEffectPath, enemyMorphReleaseStartPosition_, {1.24f, 1.24f, 1.24f});
         EmitCopyMorphPreset(kBomberMorphAuraPreset, enemyMorphReleaseStartPosition_);
-    } else if (enemyMorphType_ == EnemyMorphType::FireSlime) {
+    // 炎コピーは、分離位置に炎用の発光と粒子を重ねる。
+    } else if (enemyMorphType_ == EnemyMorphType::kFireSlime) {
         SpawnCopyMorphPulse(kFireMorphPulseEffectPath, enemyMorphReleaseStartPosition_, {1.28f, 1.28f, 1.28f});
         EmitCopyMorphPreset(kFireMorphAuraPreset, enemyMorphReleaseStartPosition_);
-    } else if (enemyMorphType_ == EnemyMorphType::WindSlime) {
+    // 風コピーは、横に広がる風のパルスとオーラを重ねる。
+    } else if (enemyMorphType_ == EnemyMorphType::kWindSlime) {
         SpawnCopyMorphPulse(kWindMorphPulseEffectPath, enemyMorphReleaseStartPosition_, {1.32f, 1.08f, 1.32f});
         EmitCopyMorphPreset(kWindMorphAuraPreset, enemyMorphReleaseStartPosition_);
     }
@@ -251,10 +276,11 @@ void Player::EmitEnemyMorphReleaseBurst() {
     // 型情報を失う前に、任意解除分だけ回収可能な星へ移します。
     const std::string droppedType = GetEnemyTypeForCurrentMorph();
     auto* sceneManager = SceneManager::GetInstance();
+    // 任意解除・保存可能な能力・描画基盤・プレイ中のシーンがすべて揃った場合だけ、背後の接地位置へ回収用の星を追加する。
     if (!enemyMorphReleaseExpired_ && !droppedType.empty() && GetObjectCommon() && sceneManager && sceneManager->IsPlaying() &&
         sceneManager->GetCurrentScene()) {
         engine::Vector3 landing = GetWorldPosition() + enemyMorphReleaseDirection_ * 2.25f;
-        landing = CombatGroundQuery::FindGroundPoint(landing, this, {16.0f, 34.0f}, GetWorldPosition().y);
+        landing = combatGroundQuery::FindGroundPoint(landing, this, {16.0f, 34.0f}, GetWorldPosition().y);
         landing.y += 0.85f;
         auto star = std::make_unique<DroppedCopyStar>();
         star->InitializeDrop(GetObjectCommon(), droppedType, !enemyMorphHasTimeLimit_, enemyMorphReleaseStartPosition_, landing);
@@ -270,6 +296,7 @@ void Player::UpdateEnemyMorphRelease(float deltaTime) {
         return;
     }
 
+    // 正の経過秒を受けた場合だけ、解除時計と次の発生までの待ち時間を進める。
     if (deltaTime > 0.0f) {
         enemyMorphReleaseTimer_ += deltaTime;
         enemyMorphReleaseParticleTimer_ -= deltaTime;
@@ -289,6 +316,7 @@ void Player::UpdateEnemyMorphRelease(float deltaTime) {
         return;
     }
 
+    // 予備区間を通過し、まだ分離していない場合にだけ残像や星を発生させる。
     if (!enemyMorphReleaseBurstStarted_) {
         EmitEnemyMorphReleaseBurst();
     }
@@ -314,8 +342,10 @@ void Player::UpdateEnemyMorphRelease(float deltaTime) {
 
         float scaleRate = 1.0f;
 
+        // 飛行の最初の2割では、残像の倍率を小さい値から立ち上げる。
         if (t < 0.20f) {
             scaleRate = 0.72f + (t / 0.20f) * 0.38f;
+        // 飛行が68%を超えたら、終点で倍率が0になるよう縮める。
         } else if (t > 0.68f) {
             scaleRate = std::clamp((1.0f - t) / 0.32f, 0.0f, 1.0f);
         }
@@ -335,7 +365,9 @@ void Player::UpdateEnemyMorphRelease(float deltaTime) {
 
     // 期限切れではすぐ、任意解除では残像が離れてから尾の粒子を発生させます。
     if (enemyMorphReleaseParticleTimer_ <= 0.0f && t < 0.82f) {
+        // 期限切れならすぐ、任意解除なら残像が離れるまで進行率0.18を待つ。
         if (enemyMorphReleaseExpired_ || t > 0.18f) {
+            // CPU 粒子が使える場合に、残像の後ろへ尾を置く。
             if (particleSystem_) {
                 engine::Vector3 trailDirection = {-enemyMorphReleaseDirection_.x, 0.12f, -enemyMorphReleaseDirection_.z};
                 engine::Vector3 trailPosition = enemyMorphReleaseVisual_ ? enemyMorphReleaseVisual_->GetWorldPosition()
@@ -368,16 +400,20 @@ void Player::RestoreEnemyMorphAppearance() {
     const float currentMoveYaw = GetMoveYaw();
     BaseEnemy* morphSource = enemyMorphSource_;
 
+    // 能力管理が残っている場合は、外観を戻す前に付随する技や演出を止める。
     if (copyAbilityController_) {
         copyAbilityController_->Cancel(*this);
     }
 
+    // 通常モデル名を保存できていた場合は、そのモデルを再設定する。
     if (!savedMorphModelName_.empty()) {
         SetModel(savedMorphModelName_);
     }
 
+    // 元のテクスチャ指定がある場合は、そのパスに戻す。
     if (!savedMorphTexturePath_.empty()) {
         SetTexture(savedMorphTexturePath_);
+    // 元のテクスチャ指定が空なら、コピー解除後にも新しい指定を残さない。
     } else {
         SetTexture("");
     }
@@ -396,11 +432,14 @@ void Player::RestoreEnemyMorphAppearance() {
     for (size_t i = 0; i < children.size(); ++i) {
         engine::Object3D* child = children[i];
 
+        // 子の参照が有効な場合だけ、親と同じ元の色と可視性を適用する。
         if (child) {
             child->SetColor(savedMorphColor_);
 
+            // コピー前に対応する子を記録していれば、そのときの可視性に戻す。
             if (i < savedMorphChildVisible_.size()) {
                 child->SetIsVisible(savedMorphChildVisible_[i]);
+            // 保存時の末尾より後にある子は、通常表示へ戻す。
             } else {
                 child->SetIsVisible(true);
             }
@@ -412,13 +451,14 @@ void Player::RestoreEnemyMorphAppearance() {
         morphSource->SetIsVisible(savedMorphSourceVisible_);
     }
 
+    // 運搬中の参照がコピー元と同一なら、コピー元を再び追従させないよう参照を外す。
     if (carriedEnemy_ == morphSource) {
         SetCarriedEnemy(nullptr);
     }
 
     // 能力の型と時間を消し、カメラの照準制限を外しても移動方向は保ちます。
     isEnemyMorphed_ = false;
-    enemyMorphType_ = EnemyMorphType::None;
+    enemyMorphType_ = EnemyMorphType::kNone;
     enemyMorphSource_ = nullptr;
     enemyMorphHasTimeLimit_ = true;
     enemyMorphTimer_ = 0.0f;
@@ -427,6 +467,7 @@ void Player::RestoreEnemyMorphAppearance() {
     savedMorphChildVisible_.clear();
     savedMorphSourceVisible_ = true;
 
+    // 本編のプレイヤーを元へ戻した場合だけ、共有メインカメラの照準制限を外す。
     if (engine::Camera* camera = CameraManager::GetInstance()->GetMainCamera(); camera && !IsEditorInternal()) {
         camera->SetAimCameraSuppressed(false);
     }
@@ -438,11 +479,13 @@ void Player::RestoreEnemyMorphAppearance() {
 
 void Player::ResetEnemyMorphRelease() {
     // 中断された解除演出も、残像と伸縮を残さず初期化する。
+    // 残像を生成済みの場合は、中断後のフレームに残らないよう非表示にする。
     if (enemyMorphReleaseVisual_) {
         enemyMorphReleaseVisual_->SetIsVisible(false);
         enemyMorphReleaseVisual_->SetScale({0.0f, 0.0f, 0.0f});
     }
 
+    // 解除中にすでに通常形態へ戻っている場合は、反動中の色と大きさも通常時に戻す。
     if (enemyMorphReleaseActive_ && !isEnemyMorphed_) {
         SetScale(savedMorphScale_);
         SetColor(savedMorphColor_);
@@ -466,6 +509,7 @@ void Player::CancelEnemyMorph() {
     ResetEnemyMorphRelease();
     RestoreEnemyMorphAppearance();
 
+    // 照準マーカーがあれば、強制解除後に表示が残らないよう閉じる。
     if (hookMarker_) {
         hookMarker_->SetIsVisible(false);
     }
@@ -478,6 +522,7 @@ void Player::CancelEnemyMorph() {
 
 #ifdef USE_IMGUI
 void Player::DebugForceEnemyMorph(BaseEnemy* enemy) {
+    // コピー元がいない、死亡中、または演出に拘束されている場合は、強制付与を行わない。
     if (!enemy || IsDead() || isCinematicLocked_) {
         return;
     }
@@ -505,19 +550,23 @@ void Player::DebugPrepareForTeleport() {
         mover_->ResetTransientState();
     }
 
+    // ゲート帰還がワープ後にも座標を動かさないよう、再生中なら途中で止める。
     if (gateReturnAnimation_.IsActive()) {
         gateReturnAnimation_.Stop(this, false);
     }
 
+    // 演出に拘束中なら、位置を指定する前に拘束状態を終了する。
     if (isCinematicLocked_) {
         EndCinematicLock(false);
     }
 
     // 攻撃・コピー能力の更新が次フレームに残らないよう、各セッションを明示的に破棄します。
+    // 通常攻撃の管理があれば、操作権を戻さない指定で技を止める。
     if (baseCombatController_) {
         baseCombatController_->Cancel(*this, false);
     }
 
+    // コピー攻撃の管理があれば、発動中の攻撃と表示を停止する。
     if (copyAbilityController_) {
         copyAbilityController_->Cancel(*this);
     }
@@ -546,14 +595,16 @@ void Player::DebugPrepareForTeleport() {
     forcedSlimeAnimationModeActive_ = false;
     aimTargetObject_ = nullptr;
 
+    // フックの表示物が作られていれば、ワープ前の照準を隠す。
     if (hookMarker_) {
         hookMarker_->SetIsVisible(false);
     }
 
+    // 待機動作と基準姿勢へ揃え、呼出側が新しい座標を設定するまで速度と入力を止める。
     ClearSlimeAbilityMotion();
     ChangeState(std::make_unique<PlayerStateIdle>());
     slimeAnimator_.Reset(managedBaseScale_, this);
-    slimeAnimator_.SetMode(PlayerSlimeAnimator::Mode::Idle);
+    slimeAnimator_.SetMode(PlayerSlimeAnimator::Mode::kIdle);
 
     engine::Vector3 stableRotation = GetRotation();
     stableRotation.x = baseRotation_.x;

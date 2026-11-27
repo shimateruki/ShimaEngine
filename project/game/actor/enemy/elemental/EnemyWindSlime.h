@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "BaseEnemy.h"
 
@@ -40,13 +41,13 @@ class EnemyWindSlime : public BaseEnemy {
   private:
     // 突風と空中弾幕の予備動作・攻撃・着地を明示的に分けます。
     enum class AttackState {
-        Idle,
-        GustWindup,
-        GustActive,
-        VolleyTakeoff,
-        VolleyActive,
-        VolleyLanding,
-        Recover,
+        kIdle,
+        kGustWindup,
+        kGustActive,
+        kVolleyTakeoff,
+        kVolleyActive,
+        kVolleyLanding,
+        kRecover,
     };
 
     // 行動不能や投げられた直後の復帰は通常 AI より先に処理します。
@@ -82,7 +83,7 @@ class EnemyWindSlime : public BaseEnemy {
     void BeginVolleyLanding(const struct EnemyAttackDefinition& attack);
 
     /// 空中弾幕の指定番号の風球を発射する。
-    void FireAerialWindOrb(int orbIndex);
+    void FireAerialWindOrb(std::int32_t orbIndex);
 
     /// 風球の着弾予告位置を更新する。
     void UpdateVolleyImpactCenters();
@@ -106,7 +107,7 @@ class EnemyWindSlime : public BaseEnemy {
     void HideHeldWindOrbs();
 
     // 三つの風弾を進行方向に対して左右へ並べ、中央だけ少し高く置く。
-    engine::Vector3 ComputeHeldWindOrbPosition(int orbIndex) const;
+    engine::Vector3 ComputeHeldWindOrbPosition(std::int32_t orbIndex) const;
 
     // 射程だけでなく向きも確認し、近距離ほど強い外力を標的へ与える。
     void DispatchEnemyBreathPush(const engine::Vector3& direction, float distance);
@@ -136,10 +137,10 @@ class EnemyWindSlime : public BaseEnemy {
     // 投擲中は回転した体を拾いやすい半径へ広げる。
     void SyncThrownCollisionRadius();
 
-    static constexpr int kWindAnimationPhaseCount = 8;
+    static constexpr std::int32_t kWindAnimationPhaseCount = 8;
 
     // 攻撃の進行と予告表示のためのタイマーです。
-    AttackState attackState_ = AttackState::Idle;
+    AttackState attackState_ = AttackState::kIdle;
     float attackStateTimer_ = 0.0f; // 攻撃状態の切替までの残り秒数。
     float attackCooldown_ = 0.75f; // 攻撃の再使用までの残り秒数。
     float recoveryDuration_ = 0.0f;
@@ -164,8 +165,8 @@ class EnemyWindSlime : public BaseEnemy {
     engine::Vector3 lockedAttackDirection_ = {0.0f, 0.0f, 1.0f};
     engine::Vector3 baseScale_ = {1.0f, 1.0f, 1.0f};
 
-    int breathParticleCursor_ = 0;
-    int volleyShotCount_ = 0; // 現在の連射で発射済みの弾数。
+    std::int32_t breathParticleCursor_ = 0;
+    std::int32_t volleyShotCount_ = 0; // 現在の連射で発射済みの弾数。
 
     bool hasBaseScale_ = false;
     bool warningTriggered_ = false;

@@ -1,0 +1,20 @@
+{
+  "version": 2,
+  "events": [
+    {
+      "type": 0,
+      "presetName": "shared/crown_idle_twinkle",
+      "triggerTime": 0.0,
+      "offset": [
+        0.3,
+        1.65,
+        0.0
+      ],
+      "scale": [
+        0.25,
+        0.25,
+        0.25
+      ]
+    }
+  ]
+}

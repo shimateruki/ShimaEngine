@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include <cstdint>
 #include "GimmickMagmaGeyser.h"
 #include "Easing.h"
 #include "ObjectPropertyDefinition.h"
@@ -64,7 +65,7 @@ void GimmickMagmaGeyser::Initialize(engine::Object3DCommon* common, const std::s
     SetStatic(false);
 
     engine::Object3D::ColliderConfig collider;
-    collider.type = ColliderType::Cylinder;
+    collider.type = engine::ColliderType::kCylinder;
     collider.center = {0.0f, kVentMouthLocalHeight + kDefaultGeyserHeight * 0.5f, 0.0f};
     collider.size = {kDefaultGeyserRadius, kDefaultGeyserHeight * 0.5f, kDefaultGeyserRadius};
     SetColliderConfig(collider);
@@ -74,6 +75,7 @@ void GimmickMagmaGeyser::Initialize(engine::Object3DCommon* common, const std::s
         GetCollider()->SetScaleOverride({1.0f, 1.0f, 1.0f});
     }
 
+    // 噴火の設定がまだなければ、既定の警告時間・噴出高・ダメージを設定できるようにする。
     if (!GetParameters().has_value()) {
         ResetParameters();
     }
@@ -99,7 +101,7 @@ void GimmickMagmaGeyser::Initialize(engine::Object3DCommon* common, const std::s
         bubble->Initialize(common);
         bubble->SetName("MagmaGeyser_Bubble");
         bubble->SetModel("Primitives/sphere");
-        bubble->SetColliderType(ColliderType::None);
+        bubble->SetColliderType(engine::ColliderType::kNone);
         bubble->SetCollisionAttribute(0);
         bubble->SetCollisionMask(0);
         bubble->SetCastShadow(false);
@@ -118,10 +120,10 @@ void GimmickMagmaGeyser::Initialize(engine::Object3DCommon* common, const std::s
     eruptionVisual_->SetName("MagmaGeyser_FireColumn");
     eruptionVisual_->SetClassName("Effect");
     eruptionVisual_->SetModel("Stages/magma_pressure_column");
-    eruptionVisual_->SetColliderType(ColliderType::None);
+    eruptionVisual_->SetColliderType(engine::ColliderType::kNone);
     eruptionVisual_->SetCollisionAttribute(0);
     eruptionVisual_->SetCollisionMask(0);
-    eruptionVisual_->SetBlendMode(BlendMode::Normal);
+    eruptionVisual_->SetBlendMode(BlendMode::kNormal);
     eruptionVisual_->SetMaterialType(9);
     eruptionVisual_->SetSelectedLighting(0);
     eruptionVisual_->SetEnableLighting(false);
@@ -130,7 +132,9 @@ void GimmickMagmaGeyser::Initialize(engine::Object3DCommon* common, const std::s
     eruptionVisual_->SetEmissive(2.2f);
     eruptionVisual_->SetIsVisible(false);
 
+    // 柱の描画側を取得できた場合に、初期の噴出パラメーターを探す。
     if (engine::MeshRenderer* renderer = eruptionVisual_->GetMeshRenderer()) {
+        // 水系の汎用GPU設定がある場合だけ、火柱の形状と色の演出に使う値を設定する。
         if (engine::MeshRenderer::WaterParamForGpu* fire = renderer->GetWaterParamData()) {
             fire->effectType = 3.0f;
             fire->waveSpeed = 3.1f;
@@ -147,7 +151,7 @@ void GimmickMagmaGeyser::Initialize(engine::Object3DCommon* common, const std::s
         }
     }
 
-    // 編集項目の宣言です。動作処理と旧paramの保存キーは変更しません。
+    // マグマ用の動作・周期・危険範囲と、水柱用の半径を用途に応じて編集できるようにする。
     using Self = GimmickMagmaGeyser;
     engine::ObjectPropertyDefinition<Self> properties(*this, kTypeId, "マグマ・水の噴出口",
         "水柱はTarget IDで移動床へ接続し、乗車タイムラインとride.waterjetのon/offで制御します（接触ダメージなし）。マグマ火山弾は真上へ発射し、上吹き飛ばしが打上げ速度です。岩盤モードは移動床からこのMy Event IDへ接続します。泡の値はマテリアルへ保存します。");
@@ -156,14 +160,17 @@ void GimmickMagmaGeyser::Initialize(engine::Object3DCommon* common, const std::s
     // 泡の調整は旧マテリアル値を直接編集し、paramや新Componentへ二重保存しません。
     properties.Accessor<float>("泡の幅倍率", "boiling_effectScaleX", "waterParam.effectScaleX",
         [](const Self& object) { auto* renderer = object.GetMeshRenderer(); return renderer ? renderer->GetWaterParamData()->effectScaleX : 1.0f; },
+        // 泡の幅は描画メッシュがある場合だけ、材質のX倍率へ書き込む。
         [](Self& object, const float& value) { if (auto* renderer = object.GetMeshRenderer()) renderer->GetWaterParamData()->effectScaleX = value; },
         0.25f, 2.0f, +[](const Self& object) { return object.GetGimmickType() != "WaterGeyser"; });
     properties.Accessor<float>("泡の高さ倍率", "boiling_effectScaleY", "waterParam.effectScaleY",
         [](const Self& object) { auto* renderer = object.GetMeshRenderer(); return renderer ? renderer->GetWaterParamData()->effectScaleY : 1.0f; },
+        // 泡の高さは描画メッシュがある場合だけ、材質のY倍率へ書き込む。
         [](Self& object, const float& value) { if (auto* renderer = object.GetMeshRenderer()) renderer->GetWaterParamData()->effectScaleY = value; },
         0.25f, 2.0f, +[](const Self& object) { return object.GetGimmickType() != "WaterGeyser"; });
     properties.Accessor<float>("泡立つ速さ", "boiling_waveSpeed", "waterParam.waveSpeed",
         [](const Self& object) { auto* renderer = object.GetMeshRenderer(); return renderer ? renderer->GetWaterParamData()->waveSpeed : 1.0f; },
+        // 泡立つ速度は描画メッシュがある場合だけ、材質の変化速度へ書き込む。
         [](Self& object, const float& value) { if (auto* renderer = object.GetMeshRenderer()) renderer->GetWaterParamData()->waveSpeed = value; },
         0.1f, 3.0f, +[](const Self& object) { return object.GetGimmickType() != "WaterGeyser"; });
     properties.Parameter("噴出口の動作", "actionMode", &Parameter::actionMode, 0.0f, 2.0f,
@@ -196,6 +203,7 @@ void GimmickMagmaGeyser::Initialize(engine::Object3DCommon* common, const std::s
     properties.Parameter("OFFで元に戻す", "returnOnOff", &Parameter::returnOnOff);
 }
 
+// 水柱・非再生・単発噴火・通常周期を切り替え、段階に応じた表示と当たり判定を更新する。
 void GimmickMagmaGeyser::Update(float deltaTime) {
     // 水版も同じ所有描画パスを使うが、周期・火山弾・接触攻撃へは入れない。
     if (GetGimmickType() == "WaterGeyser") {
@@ -203,6 +211,7 @@ void GimmickMagmaGeyser::Update(float deltaTime) {
         return;
     }
     // 非再生・単発・遠方休止・通常周期で更新を分け、休止中は判定と重い演出を止める。
+    // 噴火の挙動を読む前に、未設定のパラメーターを初期化する。
     if (!GetParameters().has_value()) {
         ResetParameters();
     }
@@ -215,6 +224,7 @@ void GimmickMagmaGeyser::Update(float deltaTime) {
         return;
     }
 
+    // 現在のプレイで初めて更新する場合だけ、編集時の色と初回の噴出時刻を記録する。
     if (!initializedForPlay_) {
         BeginPlayCycle();
     }
@@ -233,11 +243,13 @@ void GimmickMagmaGeyser::Update(float deltaTime) {
     // 遠方の噴出口は警告、当たり判定、パーティクル更新を休止する。
     // プレイヤーが接近した時点で警告フェーズから安全に再開する。
     if (!IsPlayerWithinSimulationRange()) {
+        // 遠方へ出た最初のフレームで、表示していた警告・攻撃判定・柱をまとめて消す。
         if (!simulationSleeping_) {
             simulationSleeping_ = true;
             warningTelegraph_.Hide();
             ApplyCollisionState(false, GetGeyserHeight());
 
+            // 柱を生成済みなら非表示にし、停止前の高さが残らないようにする。
             if (eruptionVisual_) {
                 eruptionVisual_->SetIsVisible(false);
             }
@@ -255,6 +267,7 @@ void GimmickMagmaGeyser::Update(float deltaTime) {
     if (simulationSleeping_) {
         simulationSleeping_ = false;
 
+        // スイッチで無効になっていない噴出口だけ、警告を新しく開始する。
         if (active_) {
             BeginWarning();
         }
@@ -269,6 +282,7 @@ void GimmickMagmaGeyser::Update(float deltaTime) {
         warningTelegraph_.Hide();
         ApplyCollisionState(false, GetGeyserHeight());
 
+        // 柱を生成済みなら信号待ちの間は隠す。
         if (eruptionVisual_) {
             eruptionVisual_->SetIsVisible(false);
         }
@@ -286,24 +300,24 @@ void GimmickMagmaGeyser::Update(float deltaTime) {
     phaseTimer_ += safeDeltaTime;
 
     // フレームが段階の境界を跨いだ分は次の段階へ渡し、一度の更新で最大3回遷移する。
-    for (int transition = 0; transition < 3 && phaseTimer_ >= phaseDuration_; ++transition) {
+    for (std::int32_t transition = 0; transition < 3 && phaseTimer_ >= phaseDuration_; ++transition) {
         const float overflow = phaseTimer_ - phaseDuration_;
         AdvancePhase();
         phaseTimer_ = overflow;
     }
 
     switch (phase_) {
-    case Phase::Warning:
+    case Phase::kWarning:
         // 噴火する場所に予兆を出す。噴火中の見た目は次の段階で更新する。
         UpdateWarningVisual();
         break;
 
-    case Phase::Erupting:
+    case Phase::kErupting:
         // 噴火の高さや表示を実行時間に合わせて進める。
         UpdateEruptionVisual(safeDeltaTime);
         break;
 
-    case Phase::Cooldown:
+    case Phase::kCooldown:
         // 噴火後の表示を待機へ戻し、次の周期の警告に備える。
         UpdateCooldownVisual();
         break;
@@ -312,6 +326,7 @@ void GimmickMagmaGeyser::Update(float deltaTime) {
     // 段階の更新で決まった予兆と噴火モデルの状態を、描画用に確定する。
     warningTelegraph_.Update(safeDeltaTime);
 
+    // 柱が生成済みで表示中なら、内部の描画物として描画行列まで確定させる。
     if (eruptionVisual_ && eruptionVisual_->GetIsVisible()) {
         eruptionVisual_->Update(safeDeltaTime);
         eruptionVisual_->UpdateWorldMatrix();
@@ -319,43 +334,48 @@ void GimmickMagmaGeyser::Update(float deltaTime) {
 
     BaseGimmick::Update(deltaTime);
     // 警告中だけ予兆の進行に合わせて泡を強め、噴火中の泡更新は止める。
-    const float pressure = phase_ == Phase::Warning ? GetWarningProgress() : 0.06f;
-    UpdateBoilingVisual(safeDeltaTime, pressure, phase_ != Phase::Erupting);
+    const float pressure = phase_ == Phase::kWarning ? GetWarningProgress() : 0.06f;
+    UpdateBoilingVisual(safeDeltaTime, pressure, phase_ != Phase::kErupting);
 }
 
 void GimmickMagmaGeyser::Draw(ID3D12Resource* pointLightResource, ID3D12Resource* spotLightResource) {
-    // 液面に埋まった噴出口の四角い本体は描かず、予告と泡だけを残す。
+    // 通常描画では予告を出す。水柱や液面に埋まった標準の噴出口は本体を描かない。
     warningTelegraph_.DrawGround(pointLightResource, spotLightResource);
 
+    // 水柱ではなく、液面に埋まった標準噴出口でもない場合だけ台座を描く。
     if (GetGimmickType() != "WaterGeyser" && (!ventInLiquid_ || GetModelName() != "Stages/magma_vent")) {
         BaseGimmick::Draw(pointLightResource, spotLightResource);
     }
 }
 
 void GimmickMagmaGeyser::DrawForCamera(engine::Camera* camera, ID3D12Resource* pointLightResource,
-                                       ID3D12Resource* spotLightResource, int previewBufferIndex) {
-    // プレビューカメラでも液面に埋まった噴出口は本体だけ非表示にする。
+                                       ID3D12Resource* spotLightResource, std::int32_t previewBufferIndex) {
+    // 水柱や液面に埋まった標準噴出口は、プレビューでも台座の描画を省く。
     if (GetGimmickType() != "WaterGeyser" && (!ventInLiquid_ || GetModelName() != "Stages/magma_vent")) {
         BaseGimmick::DrawForCamera(camera, pointLightResource, spotLightResource, previewBufferIndex);
     }
 }
 
+// プレイ中の噴出とプレイヤーの接触を確認して、火属性ダメージを通知する。戻り値は常にtrue。
 bool GimmickMagmaGeyser::OnCollision(engine::Object3D* other) {
+    // 水柱は接触でダメージを発生させない。
     if (GetGimmickType() == "WaterGeyser") return true;
     // 噴射柱モードの稼働中だけ接触ダメージを送り、連続接触には短い再発間隔を設ける。
-    if (!IsPlaying() || !active_ || (GetParameters() && GetParameters()->actionMode != 0) || phase_ != Phase::Erupting ||
+    if (!IsPlaying() || !active_ || (GetParameters() && GetParameters()->actionMode != 0) || phase_ != Phase::kErupting ||
         damageCooldownTimer_ > 0.0f) {
         return true;
     }
 
     Player* player = dynamic_cast<Player*>(other);
 
+    // プレイヤー以外への接触通知は攻撃対象にしない。
     if (!player) {
         return true;
     }
 
-    const CollisionInfo collision = CheckCollision(player);
+    const engine::CollisionInfo collision = CheckCollision(player);
 
+    // 現在の当たり判定が実際に重なっている場合にだけ、ダメージと吹き飛ばしを決める。
     if (!collision.isColliding) {
         return true;
     }
@@ -364,6 +384,7 @@ bool GimmickMagmaGeyser::OnCollision(engine::Object3D* other) {
     engine::Vector3 knockbackDirection = player->GetWorldPosition() - GetMouthPosition();
     knockbackDirection.y = 0.0f;
 
+    // 噴出口の水平中心で方向を求められない場合は、既定の+Z方向へ押す。
     if (engine::Math::Length(knockbackDirection) < 0.001f) {
         knockbackDirection = {0.0f, 0.0f, 1.0f};
     }
@@ -381,8 +402,8 @@ bool GimmickMagmaGeyser::OnCollision(engine::Object3D* other) {
         knockbackDirection.z * GetHorizontalKnockback(),
     };
 
-    damageEvent.damageType = DamageType::Fire;
-    damageEvent.statusEffect.type = StatusEffectType::Burning;
+    damageEvent.damageType = DamageType::kFire;
+    damageEvent.statusEffect.type = StatusEffectType::kBurning;
     damageEvent.statusEffect.duration = 1.2f;
     damageEvent.statusEffect.tickInterval = 0.6f;
     damageEvent.statusEffect.tickDamage = 0.35f;
@@ -397,22 +418,26 @@ void GimmickMagmaGeyser::OnTrigger() {
     OnSwitchEvent(!active_);
 }
 
+// 外部通知に従って停止・再開する。再開時の接触ダメージは予告後に有効になる。
 void GimmickMagmaGeyser::OnSwitchEvent(bool active) {
     // Timelineが先に発火する更新順でも、初回Updateで要求を消さない。
     if (GetGimmickType() == "WaterGeyser" && !initializedForPlay_ && IsPlaying()) BeginPlayCycle();
-    // 停止禁止の設定を守り、再起動時は警告から始めて即座に攻撃判定を出さない。
+    // 停止可否の設定を読み取る前に、パラメーターがない場合は用意する。
     if (!GetParameters().has_value()) {
         ResetParameters();
     }
 
+    // オフによる停止を許可していなければ、通知を受けても稼働状態を維持する。
     if (!active && !GetParameters()->returnOnOff) {
         return;
     }
 
     const bool wasActive = active_;
     active_ = active;
+    // 停止を受け付けた場合は、表示中の泡をすぐに隠す。
     if (!active_)
         HideBoilingVisuals();
+    // プレイ中にオフからオンへ切り替わった場合は、最初の警告を開始する。
     if (active_ && !wasActive && IsPlaying()) {
         BeginWarning();
     }
@@ -420,11 +445,14 @@ void GimmickMagmaGeyser::OnSwitchEvent(bool active) {
 
 bool GimmickMagmaGeyser::HasOwnedSpecialMaterialVisuals() const {
     // 特殊マテリアルの別パス描画が必要な可視エフェクトがあるかを確認する。
+    // 噴出口全体が非表示なら、所有する泡と柱も特殊材質パスに送らない。
     if (!GetIsVisible())
         return false;
+    // 描画対象となる柱があれば、泡を調べる前にtrueを返す。
     if (eruptionVisual_ && eruptionVisual_->GetIsVisible())
         return true;
     for (const auto& bubble : boilingVisuals_) {
+        // 表示中の泡が一つでもあれば、特殊材質パスが必要になる。
         if (bubble && bubble->GetIsVisible())
             return true;
     }
@@ -434,17 +462,23 @@ bool GimmickMagmaGeyser::HasOwnedSpecialMaterialVisuals() const {
 
 void GimmickMagmaGeyser::DrawOwnedSpecialMaterialVisuals(uint32_t depthSrvHandle, uint32_t grabSrvHandle) {
     // 泡と柱を特殊マテリアル用パスに流し、岩盤用の柱は移動床の底まで伸ばす。
+    // 噴出口が非表示なら、所有する泡や柱も描かない。
     if (!GetIsVisible())
         return;
     for (const auto& bubble : boilingVisuals_) {
+        // 生成済みで表示中の泡だけをマグマ用のパスへ送る。
         if (bubble && bubble->GetIsVisible())
             bubble->DrawMagma(depthSrvHandle, grabSrvHandle);
     }
 
+    // 噴出口と柱の両方が表示中の場合にだけ、柱の位置を確認して描く。
     if (GetIsVisible() && eruptionVisual_ && eruptionVisual_->GetIsVisible()) {
+        // 岩盤を持ち上げるモードだけ、周期で求めた高さを床の底まで伸ばす。
         if (GetParameters() && GetParameters()->actionMode == 2) {
+            // シーンを取得できた場合は床の現在位置を探索する。
             if (auto* scene = SceneManager::GetInstance()->GetCurrentScene()) {
                 for (const auto& object : scene->GetObjects()) {
+                    // 移動床のTarget IDがこの噴出口の有効なイベントIDに一致していたら、その床を使う。
                     if (object && object->GetGimmickType() == "MovingFloor" && GetEventId() >= 0 &&
                         object->GetTargetId() == GetEventId()) {
                         engine::Vector3 scale = eruptionVisual_->GetScale();
@@ -463,15 +497,18 @@ void GimmickMagmaGeyser::DrawOwnedSpecialMaterialVisuals(uint32_t depthSrvHandle
 }
 
 void GimmickMagmaGeyser::DrawOwnedSpecialMaterialVisualsForCamera(engine::Camera* camera, uint32_t depthSrvHandle,
-                                                                  uint32_t grabSrvHandle, int previewBufferIndex) {
+                                                                  uint32_t grabSrvHandle, std::int32_t previewBufferIndex) {
     // プレビューでも本番と同じ泡・柱だけを専用カメラの特殊マテリアルパスへ送る。
+    // 所有者の噴出口が非表示なら、プレビューでも泡と柱の描画を省く。
     if (!GetIsVisible())
         return;
     for (const auto& bubble : boilingVisuals_) {
+        // 生成済みで表示中の泡にだけ、指定カメラとプレビュー用のバッファを渡す。
         if (bubble && bubble->GetIsVisible())
             bubble->DrawSpecialMaterialForCamera(camera, depthSrvHandle, grabSrvHandle, previewBufferIndex);
     }
 
+    // 柱も生成済みで表示中なら、指定カメラへ描く。
     if (eruptionVisual_ && eruptionVisual_->GetIsVisible()) {
         eruptionVisual_->DrawSpecialMaterialForCamera(camera, depthSrvHandle, grabSrvHandle, previewBufferIndex);
     }
@@ -492,6 +529,7 @@ bool GimmickMagmaGeyser::IsPlaying() const {
     return sceneManager && sceneManager->IsPlaying();
 }
 
+// プレイヤーと噴出口の水平距離がシミュレーション範囲内か返す。
 bool GimmickMagmaGeyser::IsPlayerWithinSimulationRange() const {
     SceneManager* sceneManager = SceneManager::GetInstance();
     BaseScene* scene = sceneManager ? sceneManager->GetCurrentScene() : nullptr;
@@ -523,8 +561,10 @@ void GimmickMagmaGeyser::BeginPlayCycle() {
 
     const float initialDelay = GetInitialDelay();
 
+    // 開始時に稼働し、初回遅延が正ならその秒数だけ待ってから予告を始める。
     if (active_ && initialDelay > 0.0f) {
         BeginCooldown(initialDelay);
+    // 初回の待ち区間を使わない場合は、警告段階に揃える。
     } else {
         BeginWarning();
     }
@@ -534,6 +574,7 @@ void GimmickMagmaGeyser::ResetOutsidePlay() {
     // 編集モードへ戻ったときは攻撃判定と柱を消し、開始設定だけを保持する。
     singleEruption_ = singleFired_ = false;
 
+    // プレイ用の初期化後であれば、保存しておいた色と発光を復元する。
     if (initializedForPlay_) {
         SetColor(baseColor_);
         SetEmissive(baseEmissive_);
@@ -541,7 +582,7 @@ void GimmickMagmaGeyser::ResetOutsidePlay() {
 
     initializedForPlay_ = false;
     active_ = GetParameters().has_value() ? GetParameters()->startActive : true;
-    phase_ = Phase::Warning;
+    phase_ = Phase::kWarning;
     phaseTimer_ = 0.0f;
     phaseDuration_ = GetWarningDuration();
     damageCooldownTimer_ = 0.0f;
@@ -550,6 +591,7 @@ void GimmickMagmaGeyser::ResetOutsidePlay() {
     warningTelegraph_.Hide();
     ApplyCollisionState(false, GetGeyserHeight());
 
+    // 表示用の柱を生成済みであれば隠す。
     if (eruptionVisual_) {
         eruptionVisual_->SetIsVisible(false);
     }
@@ -557,41 +599,45 @@ void GimmickMagmaGeyser::ResetOutsidePlay() {
 
 void GimmickMagmaGeyser::BeginWarning() {
     // 警告中は危険を示す演出だけを出し、接触判定と噴射柱をまだ有効にしない。
-    phase_ = Phase::Warning;
+    phase_ = Phase::kWarning;
     phaseTimer_ = 0.0f;
     phaseDuration_ = GetWarningDuration();
     particleTimer_ = 0.0f;
     ApplyCollisionState(false, GetGeyserHeight());
 
+    // 柱を生成済みなら予告中は隠し、噴出開始まで柱が見えないようにする。
     if (eruptionVisual_) {
         eruptionVisual_->SetIsVisible(false);
     }
 }
 
 void GimmickMagmaGeyser::BeginEruption() {
-    // 設定モードに応じて火山弾か噴出柱を一回発生させ、警告表示を消す。
+    // 泡と予告を消し、噴出時間を初期化する。モードに応じて開始時の演出を選ぶ。
     HideBoilingVisuals();
-    phase_ = Phase::Erupting;
+    phase_ = Phase::kErupting;
     phaseTimer_ = 0.0f;
     phaseDuration_ = GetEruptionDuration();
     damageCooldownTimer_ = 0.0f;
     particleTimer_ = 0.0f;
     particleBandIndex_ = 0;
     warningTelegraph_.Hide();
+    // 火山弾モードだけ、噴出開始に合わせて砲弾を生成する。
     if (GetParameters() && GetParameters()->actionMode == 1)
         FireMagmaProjectiles();
+    // 火山弾モード以外では、柱の開始を知らせる噴出エフェクトを出す。
     else
         SpawnEruptionBurst();
 }
 
 void GimmickMagmaGeyser::BeginCooldown(float duration) {
     // 冷却中の再接触を防ぎ、指定時間が短すぎても最小猶予を保つ。
-    phase_ = Phase::Cooldown;
+    phase_ = Phase::kCooldown;
     phaseTimer_ = 0.0f;
     phaseDuration_ = (std::max)(0.1f, duration);
     warningTelegraph_.Hide();
     ApplyCollisionState(false, GetGeyserHeight());
 
+    // 柱を生成済みであれば冷却中は非表示にする。
     if (eruptionVisual_) {
         eruptionVisual_->SetIsVisible(false);
     }
@@ -600,20 +646,24 @@ void GimmickMagmaGeyser::BeginCooldown(float duration) {
 void GimmickMagmaGeyser::AdvancePhase() {
     // 予告から噴出、冷却、次の予告へと周期を循環させる。
     switch (phase_) {
-    case Phase::Warning:
+    case Phase::kWarning:
+        // 警告の終了時に、火山弾または噴出を開始する。
         BeginEruption();
         break;
 
-    case Phase::Erupting:
+    case Phase::kErupting:
+        // 噴出の終了時に衝突と柱を止め、設定時間だけ冷却する。
         BeginCooldown(GetCooldownDuration());
         break;
 
-    case Phase::Cooldown:
+    case Phase::kCooldown:
+        // 冷却が終わったら、次回の噴出を知らせる警告に戻る。
         BeginWarning();
         break;
     }
 }
 
+// 警告の進行率と明滅を色・発光へ反映する。接触判定はまだ有効にしない。
 void GimmickMagmaGeyser::UpdateWarningVisual() {
     const float progress = std::clamp(phaseTimer_ / phaseDuration_, 0.0f, 1.0f);
     const float pulse = 0.5f + 0.5f * std::sin(visualTimer_ * (7.0f + progress * 13.0f));
@@ -628,9 +678,11 @@ void GimmickMagmaGeyser::UpdateWarningVisual() {
     ApplyCollisionState(false, GetGeyserHeight());
 }
 
+// 現在の圧力から柱の高さと衝突を更新し、噴出粒子を間隔ごとに出す。
 void GimmickMagmaGeyser::UpdateEruptionVisual(float deltaTime) {
     // 火の玉は独立して往復するため、同じ場所に噴射柱を重ねない。
     if (GetParameters() && GetParameters()->actionMode == 1) {
+        // 火山弾モードで柱が生成済みなら隠し、弾とは別の攻撃判定を残さない。
         if (eruptionVisual_)
             eruptionVisual_->SetIsVisible(false);
         ApplyCollisionState(false, GetGeyserHeight());
@@ -645,18 +697,22 @@ void GimmickMagmaGeyser::UpdateEruptionVisual(float deltaTime) {
     SetColor(LerpColor(baseColor_, {1.0f, 0.13f, 0.01f, baseColor_.w}, 0.64f + envelope * 0.24f));
     SetEmissive(baseEmissive_ + 1.25f + envelope * 1.35f);
 
-    // 岩盤駆動と火山弾モードは、噴射柱そのものに攻撃判定を持たせない。
+    // 噴射ダメージモードで圧力が0.08を超えている間だけ、柱の接触でダメージを与える。
     ApplyCollisionState(GetParameters()->actionMode == 0 && envelope > 0.08f, activeHeight);
 
+    // 表示用の柱が生成済みの場合に、現在の高さと半径を反映する。
     if (eruptionVisual_) {
         const float visualRadius = GetGeyserRadius() * 0.78f * radiusPulse;
 
         // 専用メッシュは底面Y=0、上面Y=1。岩盤用は下端まで柱を伸ばす。
         float columnHeight = activeHeight;
 
+        // 岩盤を動かすモードだけ、連動する移動床の位置から表示高を補正する。
         if (GetParameters()->actionMode == 2) {
+            // 現在のシーンを取得できる場合に、対応する移動床を探す。
             if (auto* scene = SceneManager::GetInstance()->GetCurrentScene()) {
                 for (const auto& object : scene->GetObjects()) {
+                    // この噴出口に有効なイベントIDがあり、そのIDを参照する移動床を選ぶ。
                     if (object && object->GetGimmickType() == "MovingFloor" && object->GetTargetId() == GetEventId() &&
                         GetEventId() >= 0) {
                         columnHeight = (std::max)(0.1f, object->GetWorldPosition().y - GetMouthPosition().y - 0.8f);
@@ -671,7 +727,9 @@ void GimmickMagmaGeyser::UpdateEruptionVisual(float deltaTime) {
         eruptionVisual_->SetColor({1.0f, 0.18f, 0.018f, 0.68f + envelope * 0.24f});
         eruptionVisual_->SetIsVisible(envelope > 0.015f);
 
+        // 柱に描画メッシュがあれば、水系の材質設定を調べる。
         if (engine::MeshRenderer* renderer = eruptionVisual_->GetMeshRenderer()) {
+            // 材質設定が利用できる場合だけ、柱の縦横比を揃え炎の流れを設定する。
             if (engine::MeshRenderer::WaterParamForGpu* fire = renderer->GetWaterParamData()) {
                 fire->effectScaleX = std::clamp((visualRadius * 2.0f) / activeHeight, 0.18f, 2.4f);
                 fire->effectScaleY = 1.0f;
@@ -687,10 +745,12 @@ void GimmickMagmaGeyser::UpdateEruptionVisual(float deltaTime) {
     // 粒子は毎フレーム出さず、処理落ちでも過去分をまとめて発生させないようにします。
     particleTimer_ -= deltaTime;
 
+    // 次の粒子の時刻を迎えた場合に、この更新で一度だけ発生させる。
     if (particleTimer_ <= 0.0f) {
         EmitEruptionParticles();
         particleTimer_ += kParticleInterval;
 
+        // 1回分の間隔を足してもまだ期限を過ぎていたら、過去分を捨てて次の時刻からやり直す。
         if (particleTimer_ <= 0.0f) {
             particleTimer_ = kParticleInterval;
         }
@@ -709,11 +769,13 @@ void GimmickMagmaGeyser::UpdateCooldownVisual() {
 void GimmickMagmaGeyser::HideBoilingVisuals() {
     // 非稼働や噴出へ移った後に泡の描画が残らないよう一括で隠す。
     for (auto& bubble : boilingVisuals_) {
+        // 泡がまだ生成されていない枠は変更を省く。
         if (bubble)
             bubble->SetIsVisible(false);
     }
 }
 
+// 噴出口を覆う液面を検出し、現在の圧力と見た目の設定に合わせて泡を動かす。
 void GimmickMagmaGeyser::UpdateBoilingVisual(float deltaTime, float pressure, bool visible) {
     // マグマ面の実際の高さに合わせ、沈んだ噴出口の四角い縁は描かない。
     engine::Vector3 surface = GetMouthPosition();
@@ -722,11 +784,14 @@ void GimmickMagmaGeyser::UpdateBoilingVisual(float deltaTime, float pressure, bo
     auto* manager = SceneManager::GetInstance();
     auto* scene = manager ? manager->GetCurrentScene() : nullptr;
 
+    // シーンを取得できる場合だけ、泡を出す液面を探す。
     if (scene) {
         for (const auto& object : scene->GetObjects()) {
+            // 自分を除いだ表示中のマグマ材質オブジェクトを液面の候補にする。
             if (!object || object.get() == this || object->GetMaterialType() != 9 || !object->GetIsVisible())
                 continue;
-            const Aabb bounds = object->GetModelWorldAabb();
+            const engine::Aabb bounds = object->GetModelWorldAabb();
+            // 口のXZがモデルの範囲外か、上端との高さの差が噴出半径を超えた候補は使わない。
             if (surface.x < bounds.min.x || surface.x > bounds.max.x || surface.z < bounds.min.z ||
                 surface.z > bounds.max.z || std::abs(bounds.max.y - surface.y) > radius)
                 continue;
@@ -738,6 +803,7 @@ void GimmickMagmaGeyser::UpdateBoilingVisual(float deltaTime, float pressure, bo
 
     surface.y += 0.025f;
 
+    // 泡が不要な段階か噴出口が非表示なら、表示を消すだけで更新を終える。
     if (!visible || !GetIsVisible()) {
         HideBoilingVisuals();
         return;
@@ -746,7 +812,9 @@ void GimmickMagmaGeyser::UpdateBoilingVisual(float deltaTime, float pressure, bo
     // 噴出口の材質に保存している幅・高さ・速さを使い、警告が進むほど泡の周期を速めます。
     float width = 1.0f, height = 1.0f, speed = 0.68f;
 
+    // 噴出口の描画メッシュがある場合は、保存した泡の調整値を探す。
     if (auto* renderer = GetMeshRenderer()) {
+        // 水系の材質値が取得できれば、幅と高さの倍率、泡の速度に適用する。
         if (auto* params = renderer->GetWaterParamData()) {
             width = std::clamp(params->effectScaleX, 0.25f, 2.0f);
             height = std::clamp(params->effectScaleY, 0.25f, 2.0f);
@@ -760,6 +828,7 @@ void GimmickMagmaGeyser::UpdateBoilingVisual(float deltaTime, float pressure, bo
     // 泡ごとに周期をずらし、中央の泡と周囲の小さな泡が一斉に割れないようにします。
     for (size_t i = 0; i < boilingVisuals_.size(); ++i) {
         auto& bubble = boilingVisuals_[i];
+        // まだ生成されていない泡は更新しない。
         if (!bubble)
             continue;
         const float index = static_cast<float>(i);
@@ -770,6 +839,7 @@ void GimmickMagmaGeyser::UpdateBoilingVisual(float deltaTime, float pressure, bo
         const float angle = index * 2.399963f + GetRotation().y;
         engine::Vector3 position = surface;
 
+        // 中央の泡以外は、噴出口の周囲へずらして配置する。
         if (i > 0) {
             position.x += std::cos(angle) * radius * 0.85f * width;
             position.z += std::sin(angle) * radius * 0.85f * width;
@@ -779,7 +849,7 @@ void GimmickMagmaGeyser::UpdateBoilingVisual(float deltaTime, float pressure, bo
                              (0.6f + growth * 0.4f + pop * 0.32f);
         float bubbleHeight = radius * height * (i == 0 ? 0.30f : 0.19f) * (0.45f + pressure * 0.55f) * bulge;
 
-        // 噴出直前だけ中央に大きな一泡を溜め、発射・上昇と同時に割る。
+        // 中央の泡だけ、圧力が0.65を超えると破裂の周期を止めて、噴出直前の膨らみを見せる。
         if (i == 0 && pressure > 0.65f) {
             const float swell = Easing::SmoothStep01((pressure - 0.65f) / 0.35f);
             bubbleRadius = radius * width * (0.38f + swell * 0.18f);
@@ -794,8 +864,10 @@ void GimmickMagmaGeyser::UpdateBoilingVisual(float deltaTime, float pressure, bo
         position.y -= safeHeight * 0.12f;
         const bool slimeHead = i == 0 && GetParameters() && GetParameters()->actionMode == 1;
         const char* desiredModel = slimeHead ? "Characters/magma_hopper" : "Primitives/sphere";
+        // 今のモードに対応したモデルと違う場合にだけ差し替える。
         if (bubble->GetModelName() != desiredModel)
             bubble->SetModel(desiredModel);
+        // 火山弾モードの中央は、噴出するスライムの頭で予告する。
         if (slimeHead) {
             // 同じモデルが液面から顔を出し、そのまま噴出へつながる。
             const float base = std::clamp(GetParameters()->healAmount, 0.25f, 2.0f) * 1.3f;
@@ -803,11 +875,14 @@ void GimmickMagmaGeyser::UpdateBoilingVisual(float deltaTime, float pressure, bo
             position.y += base * (-0.08f + pressure * 0.48f);
             bubble->SetScale({base, base * (0.62f + pressure * 0.24f), base});
 
+            // 表示するカメラが見つかった場合に、頭を視点へ向ける。
             if (auto* camera = CameraManager::GetInstance()->GetActiveCamera()) {
                 const engine::Vector3 towardCamera = camera->GetEye() - position;
+                // カメラとの水平距離がほぼ0なら角度を決められないため、向きは変更しない。
                 if (towardCamera.x * towardCamera.x + towardCamera.z * towardCamera.z > 0.001f)
                     bubble->SetRotation({0.0f, std::atan2(-towardCamera.x, -towardCamera.z), 0.0f});
             }
+        // スライムで予告する場合以外は、計算した半径と高さで球の泡を描く。
         } else {
             bubble->SetScale({bubbleRadius, safeHeight, bubbleRadius});
             bubble->SetRotation({0.0f, 0.0f, 0.0f});
@@ -832,13 +907,13 @@ void GimmickMagmaGeyser::ApplyCollisionState(bool enabled, float activeHeight) {
     engine::Object3D::ColliderConfig collider = GetColliderConfig();
     const float height = (std::max)(0.1f, activeHeight);
     const float mouthHeight = GetMouthPosition().y - GetWorldPosition().y;
-    collider.type = ColliderType::Cylinder;
+    collider.type = engine::ColliderType::kCylinder;
     collider.center = {0.0f, mouthHeight + height * 0.5f, 0.0f};
     collider.size = {GetGeyserRadius(), height * 0.5f, GetGeyserRadius()};
     SetColliderConfig(collider);
 
-    SetCollisionAttribute(enabled ? CollisionCategories::Get("trigger") : 0);
-    SetCollisionMask(enabled ? CollisionCategories::Get("player") : 0);
+    SetCollisionAttribute(enabled ? engine::collisionCategories::Get("trigger") : 0);
+    SetCollisionMask(enabled ? engine::collisionCategories::Get("player") : 0);
 }
 
 void GimmickMagmaGeyser::SpawnEruptionBurst() {
@@ -846,6 +921,7 @@ void GimmickMagmaGeyser::SpawnEruptionBurst() {
     const engine::Vector3 mouth = GetMouthPosition();
     const float radius = GetGeyserRadius();
 
+    // メッシュ効果の管理機能が利用できる場合は、噴出半径に応じた開始効果を出す。
     if (MeshEffectManager* effects = MeshEffectManager::GetInstance()) {
         const float scale = std::clamp(radius * 0.42f, 0.55f, 1.55f);
         effects->SpawnEffectAt(kEruptionBurstEffect, mouth, {0.0f, 0.0f, 0.0f}, {scale, scale, scale});
@@ -853,6 +929,7 @@ void GimmickMagmaGeyser::SpawnEruptionBurst() {
 
     GpuParticleManager* particles = GpuParticleManager::GetInstance();
 
+    // GPU粒子が未初期化なら、生成できるメッシュ効果までで止める。
     if (!particles || !particles->IsInitialized()) {
         return;
     }
@@ -862,9 +939,11 @@ void GimmickMagmaGeyser::SpawnEruptionBurst() {
     particles->Emit("shared/fire_slime_cast", mouth);
 }
 
+// 柱の根元・中段・上段の順に粒子を置き、その時点の噴出高に合わせて速さも変える。
 void GimmickMagmaGeyser::EmitEruptionParticles() {
     GpuParticleManager* particles = GpuParticleManager::GetInstance();
 
+    // GPU粒子の管理機能が使えなければ、粒子も次の発生位置も更新しない。
     if (!particles || !particles->IsInitialized()) {
         return;
     }
@@ -878,6 +957,7 @@ void GimmickMagmaGeyser::EmitEruptionParticles() {
     const float speedScale = std::clamp(height / 6.5f, 0.85f, 2.2f);
     particles->EmitDirected("shared/fire_slime_breath", position, {0.0f, 1.0f, 0.0f}, speedScale);
 
+    // 根元へ粒子を出す回だけ、炎に加えて火の粉も重ねる。
     if (particleBandIndex_ == 0) {
         particles->EmitDirected("shared/fire_slime_breath_embers", position, {0.0f, 1.0f, 0.0f}, speedScale * 1.15f);
     }
@@ -885,6 +965,7 @@ void GimmickMagmaGeyser::EmitEruptionParticles() {
     particleBandIndex_ = (particleBandIndex_ + 1) % 3;
 }
 
+// 噴出口の発射口をワールド座標で求め、接続した液面の高さが使える場合に補正する。
 engine::Vector3 GimmickMagmaGeyser::GetMouthPosition() const {
     const float modelScaleY = (std::max)(0.01f, std::abs(GetScale().y));
     engine::Vector3 mouth = GetWorldPosition() + engine::Vector3{0.0f, kVentMouthLocalHeight * modelScaleY, 0.0f};
@@ -895,8 +976,10 @@ engine::Vector3 GimmickMagmaGeyser::GetMouthPosition() const {
         auto* scene = manager ? manager->GetCurrentScene() : nullptr;
         auto* liquid = scene ? scene->FindObjectByEventId(GetTargetId()) : nullptr;
 
+        // Target IDが上昇を管理する液面を指している場合に、その上端を調べる。
         if (liquid && liquid->GetGimmickType() == "LiquidLevel") {
-            const Aabb bounds = liquid->GetModelWorldAabb();
+            const engine::Aabb bounds = liquid->GetModelWorldAabb();
+            // 噴出口のXZが液面のモデル範囲内にあるときだけ、高さを液面の上端に置き換える。
             if (mouth.x >= bounds.min.x && mouth.x <= bounds.max.x && mouth.z >= bounds.min.z &&
                 mouth.z <= bounds.max.z)
                 mouth.y = bounds.max.y;
@@ -958,7 +1041,7 @@ float GimmickMagmaGeyser::GetSimulationWakeDistance() const {
 
 float GimmickMagmaGeyser::GetPressureEnvelope() const {
     // 噴出の立ち上がりと収束を滑らかにし、休止中や他フェーズでは圧力をゼロにする。
-    if (!initializedForPlay_ || !active_ || simulationSleeping_ || phase_ != Phase::Erupting)
+    if (!initializedForPlay_ || !active_ || simulationSleeping_ || phase_ != Phase::kErupting)
         return 0.0f;
     const float progress = std::clamp(phaseTimer_ / (std::max)(0.2f, phaseDuration_), 0.0f, 1.0f);
     return (std::min)(Easing::SmoothStep01(progress / 0.25f), Easing::SmoothStep01((1.0f - progress) / 0.25f));
@@ -969,6 +1052,7 @@ float GimmickMagmaGeyser::GetLiftOffset() const {
     return GetGeyserHeight() * GetPressureEnvelope();
 }
 
+// 火山弾の初速と半径から、液面より下へ戻るまでの予測秒数を返す。
 float GimmickMagmaGeyser::GetFireballFlightDuration() const {
     const float radius = GetParameters() ? std::clamp(GetParameters()->healAmount, 0.25f, 2.0f) : 0.65f;
     const float speed = GetParameters() ? std::clamp(GetParameters()->jumpPower, 8.0f, 45.0f) : 20.0f;
@@ -978,11 +1062,14 @@ float GimmickMagmaGeyser::GetFireballFlightDuration() const {
     return (speed + std::sqrt(speed * speed + 40.0f * radius * 1.8f)) / 20.0f;
 }
 
+// 噴出口の上へ火山弾を1発出し、利用可能な場合は液面の飛沫も発生させる。
 void GimmickMagmaGeyser::FireMagmaProjectiles() {
+    // 半径や打ち上げ速度を参照する設定がない場合は火山弾を生成しない。
     if (!GetParameters())
         return;
     const float radius = std::clamp(GetParameters()->healAmount, 0.25f, 2.0f);
     const float verticalSpeed = std::clamp(GetParameters()->jumpPower, 8.0f, 45.0f);
+    // 発射時に使うマグマ材質、モデルの大きさ、着弾時の飛沫を指定する。
     BulletVisualConfig visual;
     visual.materialType = 9;
     visual.effectType = 5.0f;
@@ -1000,9 +1087,10 @@ void GimmickMagmaGeyser::FireMagmaProjectiles() {
     // 一つの予兆から一発だけ垂直に噴き出し、重力で同じ場所へ戻す。
     const engine::Vector3 mouth = GetMouthPosition();
     const engine::Vector3 spawnPosition = mouth + engine::Vector3{0.0f, radius * 0.5f, 0.0f};
-    BulletManager::GetInstance()->Fire(spawnPosition, {0.0f, verticalSpeed, 0.0f}, CollisionCategories::Get("enemy_attack"),
-                                       CollisionCategories::Get("player") | CollisionCategories::Get("ground"), "Characters/magma_hopper", radius,
-                                       GetFireballFlightDuration(), visual, GetDamage(), {}, DamageType::Fire, 20.0f);
+    BulletManager::GetInstance()->Fire(spawnPosition, {0.0f, verticalSpeed, 0.0f}, engine::collisionCategories::Get("enemy_attack"),
+                                       engine::collisionCategories::Get("player") | engine::collisionCategories::Get("ground"), "Characters/magma_hopper", radius,
+                                       GetFireballFlightDuration(), visual, GetDamage(), {}, DamageType::kFire, 20.0f);
+    // GPU粒子が初期化済みの場合に、発射口へ飛沫を出す。
     if (auto* particles = GpuParticleManager::GetInstance(); particles && particles->IsInitialized()) {
         particles->Emit("shared/magma_slime_rush_splash", mouth);
     }
@@ -1010,27 +1098,31 @@ void GimmickMagmaGeyser::FireMagmaProjectiles() {
 
 float GimmickMagmaGeyser::GetWarningProgress() const {
     // 泡の予告演出には警告フェーズの進捗だけを渡す。
-    if (!initializedForPlay_ || !active_ || simulationSleeping_ || phase_ != Phase::Warning)
+    if (!initializedForPlay_ || !active_ || simulationSleeping_ || phase_ != Phase::kWarning)
         return 0.0f;
     return std::clamp(phaseTimer_ / (std::max)(0.2f, phaseDuration_), 0.0f, 1.0f);
 }
 
+// 脱出時の再起動・停止に合わせ、泡・単発・衝突を消して次の周期を設定する。
 void GimmickMagmaGeyser::ResetEscapeCycle(bool active) {
     HideBoilingVisuals();
     boilingClock_ = 0.0f;
     singleEruption_ = singleFired_ = false;
+    // プレイ用の色や周期がまだ用意されていない場合は、現在の配置から初期化する。
     if (!initializedForPlay_)
         BeginPlayCycle();
 
-    // 待機からの復帰で個別の初回遅延を上書きしないようにします。
+    // 渡された稼働状態を反映し、発射・被弾・表示の時間を最初から進める。
     simulationSleeping_ = false;
     active_ = active;
     damageCooldownTimer_ = particleTimer_ = visualTimer_ = 0.0f;
     particleBandIndex_ = 0;
     warningTelegraph_.Hide();
+    // 柱が存在する場合は次の周期まで隠す。
     if (eruptionVisual_)
         eruptionVisual_->SetIsVisible(false);
     ApplyCollisionState(false, GetGeyserHeight());
+    // 稼働時は個別の初回待ちを設定し、停止時は通常の休止時間を使う。
     BeginCooldown(active ? (std::max)(0.05f, GetInitialDelay()) : GetCooldownDuration());
 }
 
@@ -1038,6 +1130,7 @@ void GimmickMagmaGeyser::RequestFireballEruption() {
     // 外部からの単発要求は周期噴出と分離し、既に発射待ちなら重複させない。
     if (!IsPlaying() || singleEruption_ || GetGimmickType() == "WaterGeyser")
         return;
+    // プレイ開始直後の信号でも、保存された色と周期を取得してから単発を準備する。
     if (!initializedForPlay_)
         BeginPlayCycle();
     singleTimer_ = 0.0f;
@@ -1046,6 +1139,7 @@ void GimmickMagmaGeyser::RequestFireballEruption() {
     active_ = false;
     warningTelegraph_.Hide();
     ApplyCollisionState(false, GetGeyserHeight());
+    // 既に柱の表示物を持つ場合は、単発の予告中に柱を残さない。
     if (eruptionVisual_)
         eruptionVisual_->SetIsVisible(false);
 }
@@ -1053,7 +1147,9 @@ void GimmickMagmaGeyser::RequestFireballEruption() {
 void GimmickMagmaGeyser::UpdateWaterJet(float deltaTime) {
     // 経路側が床を動かし、水柱はその底面に追従する。二重の上昇タイマーを持たない。
     const bool playing = IsPlaying();
+    // プレイしていなければ攻撃用の状態を解除する。
     if (!playing) ResetOutsidePlay();
+    // プレイに入った最初のフレームでは、保存された稼働設定から開始する。
     else if (!initializedForPlay_) BeginPlayCycle();
     warningTelegraph_.Hide();
     SetCollisionAttribute(0);
@@ -1068,6 +1164,7 @@ void GimmickMagmaGeyser::UpdateWaterJet(float deltaTime) {
     const bool emitting = playing && active_ && floor && floor->GetGimmickType() == "MovingFloor";
     const float height = emitting ? std::clamp(floor->GetAabb().min.y - mouth.y + .15f, .1f, 60.0f) : .1f;
     const float radius = GetGeyserRadius();
+    // 柱を生成済みであれば描画設定を更新する。床に接続して稼働し、柱の高さが0.3超のときに表示する。
     if (eruptionVisual_) {
         auto* water = eruptionVisual_->GetMeshRenderer()->GetWaterParamData();
         water->effectType = 6.0f;
@@ -1082,6 +1179,7 @@ void GimmickMagmaGeyser::UpdateWaterJet(float deltaTime) {
     // 水面の泡もプール済みメッシュを再利用し、青白い予兆に統一する。
     for (size_t i = 0; i < boilingVisuals_.size(); ++i) {
         auto& bubble = boilingVisuals_[i];
+        // まだ生成されていない泡の枠は更新しない。
         if (!bubble) continue;
         const float phase = visualTimer_ * 2.4f + static_cast<float>(i) * 1.57f;
         const float r = radius * (.55f + .10f * std::sin(phase));
@@ -1098,7 +1196,9 @@ void GimmickMagmaGeyser::UpdateWaterJet(float deltaTime) {
     }
     // 噴射中の飛沫は発生数を固定し、フレーム落ちの遅れを一括放出しない。
     particleTimer_ -= frameDeltaTime;
+    // 稼働中で柱が1単位を超え、発生間隔を過ぎたときだけ飛沫を試みる。
     if (emitting && height > 1.0f && particleTimer_ <= 0.0f) {
+        // GPU粒子を使える場合に、水柱上部から飛沫を発生させる。
         if (auto* particles = GpuParticleManager::GetInstance(); particles && particles->IsInitialized())
             particles->Emit("shared/raft_water_spray", mouth + engine::Vector3{0, height*.9f, 0});
         particleTimer_ = .12f;
@@ -1106,6 +1206,7 @@ void GimmickMagmaGeyser::UpdateWaterJet(float deltaTime) {
     BaseGimmick::Update(deltaTime);
 }
 
+// 単発要求からの経過で予告と発射を一度行い、飛行が終わるまで新しい要求を待たせる。
 void GimmickMagmaGeyser::UpdateSingleEruption(float deltaTime) {
     singleTimer_ += deltaTime;
     const float warning = GetWarningDuration();

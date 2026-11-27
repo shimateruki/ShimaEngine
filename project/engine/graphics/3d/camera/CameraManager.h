@@ -72,7 +72,7 @@ public:
         engine::Vector4 centerRadius{};
         engine::Vector4 parameters{}; // 強度、境界幅、足元高さ、対象手前の奥行余白。
         engine::Vector4 foregroundBarrierCenter{}; // 闘技場の中心と有効な重み。
-        engine::Vector4 foregroundBarrierParameters{}; // 床高さ、残す高さ、最小不透明度、境界幅。
+        engine::Vector4 foregroundBarrierParameters{}; // 床高さ、残す高さ、最小不透明度、正値は従来の境界幅、負値の絶対値は格子の不透明度。
         float deltaTime = 0.0f;
         uint64_t serial = 0;
         bool enabled = false;

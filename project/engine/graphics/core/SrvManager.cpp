@@ -1,15 +1,18 @@
 #include "SrvManager.h"
 #include "DirectXCommon.h"
 #include <cassert>
+
+namespace engine {
 SrvManager* SrvManager::GetInstance() {
-    static SrvManager instance;
-    return &instance;
+    static SrvManager sInstance;
+    return &sInstance;
 }
 
 void SrvManager::Initialize(engine::DirectXCommon* dxCommon) {
     assert(dxCommon);
     device_ = dxCommon->GetDevice();
 
+    // CPUでビューを書き込み、シェーダーから参照できる共有ヒープを作る。
     D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
     srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     srvHeapDesc.NumDescriptors = kMaxSrvCount;
@@ -18,9 +21,10 @@ void SrvManager::Initialize(engine::DirectXCommon* dxCommon) {
     HRESULT hr = device_->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&srvDescriptorHeap_));
     assert(SUCCEEDED(hr));
 
+    // ハンドル計算で使うスロット間の増分はデバイスから取得する。
     descriptorSize_ = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-    // 再初期化した場合も ImGui が予約する 0、1 を避けて払い出しを始めます。
+    // 再初期化時も、通常の払い出しから先頭の2スロットを外します。
     nextIndex_ = 2;
 }
 
@@ -35,6 +39,7 @@ uint32_t SrvManager::CreateSrv(ID3D12Resource* resource, const D3D12_SHADER_RESO
 }
 
 void SrvManager::SetGraphicsRootDescriptorTable(ID3D12GraphicsCommandList* commandList, UINT rootParameterIndex, uint32_t srvHandle) {
+    // SetDescriptorHeapsでこのヒープを設定したコマンドリストに、描画用の参照先を渡す。
     D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = srvDescriptorHeap_->GetGPUDescriptorHandleForHeapStart();
     gpuHandle.ptr += (descriptorSize_ * srvHandle);
     commandList->SetGraphicsRootDescriptorTable(rootParameterIndex, gpuHandle);
@@ -68,6 +73,7 @@ void SrvManager::CreateSrvForResource(uint32_t index, ID3D12Resource* pResource,
 
 D3D12_GPU_DESCRIPTOR_HANDLE SrvManager::GetGpuDescriptorHandle(uint32_t index) {
     // SRVヒープの先頭から記述子一個分の幅で進め、シェーダーに渡す位置を求める。
+    // 番号がヒープの範囲外ならアサートで検出する。有効な払い出し番号は呼び出し側が保証する。
     if (index >= kMaxSrvCount) {
         assert(false && "SRV Index out of range!");
     }
@@ -79,12 +85,14 @@ D3D12_GPU_DESCRIPTOR_HANDLE SrvManager::GetGpuDescriptorHandle(uint32_t index) {
 }
 
 void SrvManager::SetComputeRootDescriptorTable(ID3D12GraphicsCommandList* commandList, UINT rootParameterIndex, uint32_t srvHandle) {
+    // 描画用とは別に、コンピュート用のルートパラメータへ同じヒープのGPUハンドルを渡す。
     D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = GetGpuDescriptorHandle(srvHandle);
     commandList->SetComputeRootDescriptorTable(rootParameterIndex, gpuHandle);
 }
 
 D3D12_CPU_DESCRIPTOR_HANDLE SrvManager::GetCpuDescriptorHandle(uint32_t index) {
     // CPUから記述子を書き換える際はGPU用とは別のヒープ先頭ハンドルを使う。
+    // CPU用でも番号が範囲外ならアサートで検出する。有効な払い出し番号は呼び出し側が保証する。
     if (index >= kMaxSrvCount) {
         assert(false && "SRV Index out of range!");
     }
@@ -94,3 +102,5 @@ D3D12_CPU_DESCRIPTOR_HANDLE SrvManager::GetCpuDescriptorHandle(uint32_t index) {
 
     return handle;
 }
+
+} // namespace engine

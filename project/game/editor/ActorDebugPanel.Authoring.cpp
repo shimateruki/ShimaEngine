@@ -1,4 +1,5 @@
 #ifdef USE_IMGUI
+#include <cstdint>
 #include "game/editor/ActorDebugPanel.h"
 #include <numbers>
 #include "game/editor/EnemyAttackPreviewRegistry.h"
@@ -48,21 +49,23 @@ bool SelectJson(const char* label, const char* directory, std::string& path, Pro
     const std::string selectedName = path.empty() ? "選択してください" : std::filesystem::path(path).stem().string();
 
     if (ImGui::BeginCombo(label, selectedName.c_str())) {
-        static char search[128]{};
-        ImGui::InputText("素材名で検索", search, sizeof(search));
+        static char sSearch[128]{};
+        ImGui::InputText("素材名で検索", sSearch, sizeof(sSearch));
         std::error_code error;
         std::vector<std::string> paths;
 
         for (std::filesystem::recursive_directory_iterator it(directory, error), end; !error && it != end; it.increment(error))
+            // 再帰列挙の候補はJSONだけとし、検索語が設定されていれば一致するパスへ絞る。
             if (it->path().extension() == ".json")
                 paths.push_back(it->path().generic_string());
         std::sort(paths.begin(), paths.end());
 
         for (const auto& candidate : paths) {
-            if (search[0] && candidate.find(search) == std::string::npos)
+            if (sSearch[0] && candidate.find(sSearch) == std::string::npos)
                 continue;
             ImGui::PushID(candidate.c_str());
 
+            // 素材画面が渡されたときにサムネイルを要求し、未取得なら同じ大きさの空欄を置く。
             if (assets) {
                 const uint64_t texture = ImGui::IsRectVisible(ImVec2(64, 64)) ? assets->GetEffectThumbnailGpuPtr(candidate) : 0;
                 if (texture)
@@ -102,6 +105,7 @@ bool SelectJson(const char* label, const char* directory, std::string& path, Pro
 
 void ActorDebugPanel::StopPlacementPreview() {
     // 未確定のギズモ操作を履歴へ閉じ、仮配置のObjectとGPUプレビューを同時に片付けます。
+    // ドラッグ中に閉じる場合も変更前の定義を履歴へ登録してから、ギズモの操作状態を解除する。
     if (placementGizmoUsing_) {
         authoringGestureOpen_ = false;
         RememberSequenceEdit(placementGestureBefore_);
@@ -113,6 +117,7 @@ void ActorDebugPanel::StopPlacementPreview() {
 
     // プレビューが現シーンに残っている場合だけ配置物を削除し、隠していた術者とダミーの表示を戻します。
     if (sceneManager_ && sceneManager_->GetCurrentScene() == previewScene_ && previewScene_) {
+        // 仮配置物の除去を予約し、このパネルの管理リストからも外す。
         if (placementObject_) {
             previewScene_->RequestRemoveObject(placementObject_);
             std::erase(spawnedPreviewObjects_, placementObject_);
@@ -130,6 +135,7 @@ void ActorDebugPanel::StopPlacementPreview() {
     placementObject_ = nullptr;
     placementGpuSignature_.clear();
     placementMessage_.clear();
+    // 作成済みのメッシュエフェクト範囲があれば停止し、作成前の状態へ戻す。
     if (placementScope_)
         MeshEffectManager::GetInstance()->StopEffectScope(placementScope_);
     placementScope_ = 0;
@@ -156,7 +162,7 @@ void ActorDebugPanel::BeginPlacementPreview() {
     placementTime_ = selectedTrack_ <= -2 ? 0.15f : 0.0f;
     // 通常トラックは表示区間の途中を初期姿勢にし、発射イベントは短い時刻で確認します。
     if (const auto* attack = GetSelectedAttackDefinition(); attack && selectedTrack_ >= 0 &&
-        selectedTrack_ < static_cast<int>(attack->sequence.tracks.size())) {
+        selectedTrack_ < static_cast<std::int32_t>(attack->sequence.tracks.size())) {
         const auto& track = attack->sequence.tracks[selectedTrack_];
         placementTime_ = (std::max)(0.01f, track.end - track.begin) * 0.4f;
     }
@@ -164,9 +170,11 @@ void ActorDebugPanel::BeginPlacementPreview() {
     UpdatePlacementPreview();
 }
 
+// 配置時刻における選択部品の姿勢を評価し、必要な仮弾・メッシュ・粒子を更新する。
 void ActorDebugPanel::UpdatePlacementPreview() {
     const auto* attack = GetSelectedAttackDefinition();
 
+    // 選択技が失われた場合は、古い部品を残さず配置確認を閉じる。
     if (!attack) {
         StopPlacementPreview();
         return;
@@ -220,6 +228,7 @@ void ActorDebugPanel::UpdatePlacementPreview() {
             placementObject_->SetColor({a.red,a.green,a.blue,a.alpha});
             placementObject_->SetEmissive(a.emissive);
 
+            // 特殊材質用の値は、描画部品とパラメーター領域の両方を取得できた場合だけ設定する。
             if (auto* renderer = placementObject_->GetMeshRenderer()) if (auto* water = renderer->GetWaterParamData()) {
                 water->effectType = 1;
                 water->effectScale = a.effectScale;
@@ -232,10 +241,17 @@ void ActorDebugPanel::UpdatePlacementPreview() {
         }
 
         // イベント種別と編集中の部位からGPU素材を選び、見た目だけを単独再生します。
-        const std::string primary = event.operation == "gpu_vfx" ? event.preset :
-            projectileSection_ == 3 ? part.trail : projectileSection_ == 4 ? part.impact : "";
-        const std::string secondary = event.operation == "gpu_vfx" ? "" :
-            projectileSection_ == 3 ? part.secondaryTrail : projectileSection_ == 4 ? part.secondaryImpact : "";
+        std::string primary;
+        std::string secondary;
+        if (event.operation == "gpu_vfx") {
+            primary = event.preset;
+        } else if (projectileSection_ == 3) {
+            primary = part.trail;
+            secondary = part.secondaryTrail;
+        } else if (projectileSection_ == 4) {
+            primary = part.impact;
+            secondary = part.secondaryImpact;
+        }
         AttackSequenceContext context;
         context.position = actor ? actor->GetTranslate() : engine::Vector3{};
         // ギズモの向きからイベント自身の回転を除き、発射方向は本編と同じ位置解決へ任せる。
@@ -248,6 +264,7 @@ void ActorDebugPanel::UpdatePlacementPreview() {
         engine::Vector3 direction = ResolveAttackSequenceEmission(event,context,0,0).direction;
         const bool directed = event.operation == "gpu_vfx" ? event.directed : projectileSection_ == 3 && part.style == "fire";
         const float speed = event.operation == "gpu_vfx" ? event.particleSpeedScale : part.appearance.trailSpeedScale;
+        // 炎の弾で飛行中の項目を選んでいる場合は、その表示に合わせてプレビューの粒子を切り替える。
         if (event.operation == "projectile" && projectileSection_ == 3 && part.style == "fire")
             direction = direction * -1;
         const auto signature = primary + "|" + secondary + "|" + std::to_string(position.x) + "|" +
@@ -259,9 +276,14 @@ void ActorDebugPanel::UpdatePlacementPreview() {
             placementGpuSignature_ = signature;
             auto* gpu = GpuParticleManager::GetInstance();
             gpu->ClearAuthoringPreview();
-            placementMessage_ = primary.empty() ?
-                (event.operation == "gpu_vfx" || projectileSection_ >= 3 ? "GPU素材は未指定です。" : "生成Objectの配置確認です。衝突は発生しません。") :
-                "選択した素材の単独表示です。寿命を過ぎると粒子は見えません。";
+            if (!primary.empty()) {
+                placementMessage_ = "選択した素材の単独表示です。寿命を過ぎると粒子は見えません。";
+            } else if (event.operation == "gpu_vfx" || projectileSection_ >= 3) {
+                placementMessage_ = "GPU素材は未指定です。";
+            } else {
+                placementMessage_ = "生成Objectの配置確認です。衝突は発生しません。";
+            }
+            // 指定された粒子だけを個別に準備する。準備に失敗した素材はメッセージに記録する。
             for (const auto& preset : {primary, secondary}) if (!preset.empty()) {
                 if (!gpu->ShowAuthoringPreview(preset, position, direction, directed,
                     speed, placementTime_)) placementMessage_ = "GPU素材を読み込めません（未登録、または単独表示非対応）: " + preset;
@@ -272,7 +294,7 @@ void ActorDebugPanel::UpdatePlacementPreview() {
     }
 
     // 通常トラックのうちMesh VFXだけがここで実体を持ち、判定トラックはViewportへ任せます。
-    if (selectedTrack_ < 0 || selectedTrack_ >= static_cast<int>(attack->sequence.tracks.size()))
+    if (selectedTrack_ < 0 || selectedTrack_ >= static_cast<std::int32_t>(attack->sequence.tracks.size()))
         return;
     const auto& track = attack->sequence.tracks[selectedTrack_];
     if (track.type != "mesh_vfx")
@@ -297,12 +319,14 @@ void ActorDebugPanel::UpdatePlacementPreview() {
 
     // プリセットが用意できた後、術者の向きとキー時刻から世界座標を評価します。
     engine::Object3D* owner = playerCopyMode_ ? static_cast<engine::Object3D*>(previewPlayer_) : static_cast<engine::Object3D*>(previewEnemy_);
+    // 発生基準になる術者を取得できない場合はワールド姿勢を評価しない。
     if (!owner)
         return;
     const float duration = (std::max)(0.01f, track.end - track.begin);
     placementTime_ = std::clamp(placementTime_, 0.0f, duration);
     std::string error;
 
+    // 技の長さに対してトラックが無効なら、理由を表示して今回の姿勢適用を中断する。
     if (!track.Validate(attack->sequence.duration, &error)) {
         profileStatus_ = "配置確認を更新できません: " + error;
         return;
@@ -313,6 +337,7 @@ void ActorDebugPanel::UpdatePlacementPreview() {
         key.position = track.keys.front().position;
     engine::Vector3 forward{0, 0, 1};
 
+    // 標的が有効で術者と重なっていなければ、術者の前方に代えて標的方向を使う。
     if (previewTarget_) {
         engine::Vector3 offset = previewTarget_->GetTranslate() - owner->GetTranslate();
         offset.y = 0;
@@ -344,13 +369,14 @@ void ActorDebugPanel::ReloadAuthoringProfile() {
     editableProfile_ = std::move(loaded);
     profileAttackIndex_ = 0;
 
-    for (int i = 0; i < static_cast<int>(editableProfile_.attacks.size()); ++i)
+    for (std::int32_t i = 0; i < static_cast<std::int32_t>(editableProfile_.attacks.size()); ++i)
+        // 現在のモードに対応するBindingを先に探し、対象になり得る既定選択を決める。
         if (playerCopyMode_ == (editableProfile_.attacks[i].sequence.binding == "player_special")) {
             profileAttackIndex_ = i;
             break;
         }
     // 同じ技IDが残っていれば、形態に応じた既定選択よりも以前の選択を優先します。
-    for (int i = 0; i < static_cast<int>(editableProfile_.attacks.size()); ++i)
+    for (std::int32_t i = 0; i < static_cast<std::int32_t>(editableProfile_.attacks.size()); ++i)
         if (editableProfile_.attacks[i].id == id) {
             profileAttackIndex_ = i;
             break;
@@ -401,19 +427,31 @@ void ActorDebugPanel::PreviewDraft(bool keepTime) {
     // 保存前の定義を検証してから、必要なら同じ再生時刻へ戻して差を確認します。
     const auto* attack = GetSelectedAttackDefinition();
 
+    // 有効な編集用シーンで、共通シーケンスを持つ攻撃だけ一時定義から動作確認できる。
     if (!attack || !attack->sequence.enabled || !IsCurrentSceneReady() || sceneManager_->IsPlaying()) {
         draftRefreshPending_ = false;
         profileStatus_ = "保存前の動作確認は共通攻撃を選び、編集モードで実行してください。";
         return;
     }
 
+    // 設定の検証で失敗した場合は、未確定な定義から再生実体を作らない。
     if (!attack->sequence.Validate(&profileStatus_)) {
         draftRefreshPending_ = false;
         return;
     }
     // 再生成前に再生時刻と停止・再生の状態を取得し、保存前の定義をプレビュー用に複製します。
-    const float time = keepTime ? (draftRefreshPending_ ? draftRefreshTime_ : elapsedTime_) : 0;
-    const bool resume = keepTime ? (draftRefreshPending_ ? draftRefreshPlaying_ : playing_) : true;
+    float time = 0.0f;
+    bool resume = true;
+    if (keepTime) {
+        // 遅延再生成を予約済みなら、時刻と再生状態を予約時点の値に戻す。
+        if (draftRefreshPending_) {
+            time = draftRefreshTime_;
+            resume = draftRefreshPlaying_;
+        } else {
+            time = elapsedTime_;
+            resume = playing_;
+        }
+    }
     draftRefreshPending_ = false;
     draftProfile_ = editableProfile_;
     useDraftProfile_ = true;
@@ -430,6 +468,7 @@ void ActorDebugPanel::PreviewDraft(bool keepTime) {
     profileStatus_ = "編集中の設定で動作確認中。JSONは保存していません。";
 }
 
+// 制作対象の攻撃と部品の一覧を描き、制作画面を担当した場合に true を返す。
 bool ActorDebugPanel::DrawAttackAuthoringHierarchy() {
 #ifdef USE_IMGUI
     // 編集Sceneで扱える敵の攻撃だけを制作対象とし、観測専用のモードとは分けます。
@@ -447,6 +486,7 @@ bool ActorDebugPanel::DrawAttackAuthoringHierarchy() {
     // 未保存の定義だけを動作確認する入口と、保存後に本編条件で再生する入口を区別します。
     if (ImGui::Button("保存", ImVec2(-1, 0)))
         SaveSelectedProfile(false);
+    // シーケンスが有効な技だけ、保存前の定義を試すボタンと同じ位置へ反映するボタンを出す。
     if (attack->sequence.enabled) {
         if (ImGui::Button("保存せずに攻撃を試す", ImVec2(-1, 0)))
             PreviewDraft(false);
@@ -462,6 +502,7 @@ bool ActorDebugPanel::DrawAttackAuthoringHierarchy() {
         profileDirty_ = true;
         SaveSelectedProfile();
 
+        // 保存で未保存フラグが消えた場合にだけ、保存済み定義での再生へ入る。
         if (!profileDirty_) {
             playing_ = true;
 
@@ -475,9 +516,10 @@ bool ActorDebugPanel::DrawAttackAuthoringHierarchy() {
     ImGui::TextWrapped("%s", profileStatus_.c_str());
     ImGui::SeparatorText("1. 既存の攻撃を開いて再編集");
 
+    // 攻撃選択方式は敵AI側の設定であり、プレイヤーのコピー技の編集には表示しない。
     if (!playerCopyMode_ && ImGui::TreeNode("本編での攻撃の選び方")) {
         const char* modes[] = {"優先度順", "均等ランダム", "重み付きランダム"};
-        int mode = editableProfile_.selectionMode == "weighted" ? 2 : editableProfile_.selectionMode == "uniform" ? 1 : 0;
+        std::int32_t mode = editableProfile_.selectionMode == "weighted" ? 2 : editableProfile_.selectionMode == "uniform" ? 1 : 0;
 
         if (ImGui::Combo("共通攻撃候補の選択", &mode, modes, 3)) {
             editableProfile_.selectionMode = mode == 2 ? "weighted" : mode == 1 ? "uniform" : "priority";
@@ -490,7 +532,7 @@ bool ActorDebugPanel::DrawAttackAuthoringHierarchy() {
 
     // プレイヤーコピー用と敵用の攻撃を同じ一覧から選ぶとき、Binding で候補を分けます。
     if (ImGui::BeginCombo("対象の攻撃", attack->displayName.c_str())) {
-        for (int i = 0; i < static_cast<int>(editableProfile_.attacks.size()); ++i) {
+        for (std::int32_t i = 0; i < static_cast<std::int32_t>(editableProfile_.attacks.size()); ++i) {
             const auto& candidate = editableProfile_.attacks[i];
             if (playerCopyMode_ != (candidate.sequence.binding == "player_special"))
                 continue;
@@ -498,6 +540,7 @@ bool ActorDebugPanel::DrawAttackAuthoringHierarchy() {
                 candidate.sequence.tracks.empty() ? " [弾・放出の構成編集]" : " [部品編集]";
             const std::string label = candidate.displayName + mode + "###" + candidate.id;
 
+            // 技を選び直すと、そのモードのプレビューにも新しい技IDを渡す。
             if (ImGui::Selectable(label.c_str(), profileAttackIndex_ == i)) {
                 StopPreview();
                 profileAttackIndex_ = i;
@@ -544,13 +587,13 @@ bool ActorDebugPanel::DrawAttackAuthoringHierarchy() {
     // 共有 Asset を複製した場合は参照 Path を外し、元の攻撃素材を編集しない独立案にします。
     if (attack->sequence.enabled && ImGui::Button("この攻撃を複製して編集", ImVec2(-1, 0))) {
         auto copy = *attack;
-        int suffix = 1;
+        std::int32_t suffix = 1;
         do { copy.id = "custom_attack_" + std::to_string(suffix++); } while (editableProfile_.FindAttack(copy.id));
         copy.displayName += " (複製)";
         copy.sequence.assetPath.clear(); // 複製後の保存が元の共有素材を書き換えないよう独立させます。
         StopPreview();
         editableProfile_.attacks.push_back(std::move(copy));
-        profileAttackIndex_ = static_cast<int>(editableProfile_.attacks.size()) - 1;
+        profileAttackIndex_ = static_cast<std::int32_t>(editableProfile_.attacks.size()) - 1;
         selectedTrack_ = -1;
         profileDirty_ = true;
         profileStatus_ = "独立した攻撃として複製しました。攻撃名と部品を変更してください。";
@@ -564,10 +607,11 @@ bool ActorDebugPanel::DrawAttackAuthoringHierarchy() {
         created.sequence.enabled = true;
         created.sequence.binding = playerCopyMode_ ? "player_special" : "enemy";
         created.sequence.duration = 1.5f;
+        // 見本が指定されている場合に読み込み、失敗した場合は新規定義を登録しない。
         if (asset && !EnemyAttackProfile::LoadSequenceAsset(asset, created.sequence, &profileStatus_))
             return false;
         created.sequence.assetPath.clear(); // サンプルの編集で、共通の見本ファイルを書き換えない。
-        int suffix = 1;
+        std::int32_t suffix = 1;
         do { created.id = "custom_attack_" + std::to_string(suffix++); } while (editableProfile_.FindAttack(created.id));
         created.displayName = std::string(name) + " " + std::to_string(suffix - 1);
         created.minRange = 0;
@@ -587,7 +631,7 @@ bool ActorDebugPanel::DrawAttackAuthoringHierarchy() {
                 created.sequence.priority = (std::max)(created.sequence.priority, (std::min)(existing.sequence.priority, 999) + 1);
         StopPreview();
         editableProfile_.attacks.push_back(std::move(created));
-        profileAttackIndex_ = static_cast<int>(editableProfile_.attacks.size()) - 1;
+        profileAttackIndex_ = static_cast<std::int32_t>(editableProfile_.attacks.size()) - 1;
         selectedTrack_ = asset ? 0 : -1;
         authoringIdentity_ = editableProfile_.enemyType + "/" + editableProfile_.attacks.back().id;
         authoringUndo_.clear();
@@ -595,6 +639,7 @@ bool ActorDebugPanel::DrawAttackAuthoringHierarchy() {
         authoringGestureOpen_ = false;
         profileDirty_ = true;
         prismChantOnly_ = false; // 新しい攻撃の確認では、以前の魔法陣だけの観測設定を引き継がない。
+        // コピー技の作成では選択結果をプレイヤー用の指定にも渡す。
         if (playerCopyMode_)
             SelectCopyProfileAction();
         ApplyRecommendedSettings();
@@ -621,6 +666,7 @@ bool ActorDebugPanel::DrawAttackAuthoringHierarchy() {
         ImGui::TreePop();
     }
 
+    // 生成で要素の参照が無効になり得るため、表示を閉じてこのフレームの構築を終える。
     if (created) {
         ImGui::EndChild();
         return true;
@@ -633,7 +679,7 @@ bool ActorDebugPanel::DrawAttackAuthoringHierarchy() {
         editableProfile_.attacks.erase(editableProfile_.attacks.begin() + profileAttackIndex_);
         profileAttackIndex_ = 0;
 
-        for (int i = 0; i < static_cast<int>(editableProfile_.attacks.size()); ++i) {
+        for (std::int32_t i = 0; i < static_cast<std::int32_t>(editableProfile_.attacks.size()); ++i) {
             if (playerCopyMode_ == (editableProfile_.attacks[i].sequence.binding == "player_special")) {
                 profileAttackIndex_ = i;
                 break;
@@ -692,6 +738,7 @@ bool ActorDebugPanel::DrawAttackAuthoringHierarchy() {
         "弾の構成編集: 本体・判定・軌跡・着弾" : "部品編集: 表示物・判定・本体の時間を編集できます");
     ImGui::SeparatorText("2. 部品を選んで配置・再編集");
 
+    // 全体を選んだ場合は個別部品の編集を解除し、術者を選んだ場合は参照用の姿勢へ切り替える。
     if (ImGui::Selectable("攻撃全体の設定", selectedTrack_ == -1 && !authoringActorSelected_)) {
         selectedTrack_ = -1;
         authoringActorSelected_ = false;
@@ -712,7 +759,7 @@ bool ActorDebugPanel::DrawAttackAuthoringHierarchy() {
     if (!sequence.events.empty()) {
         ImGui::SeparatorText("攻撃の構成（選択して再編集）");
 
-        for (int i = 0; i < static_cast<int>(sequence.events.size()); ++i) {
+        for (std::int32_t i = 0; i < static_cast<std::int32_t>(sequence.events.size()); ++i) {
             const auto& event = sequence.events[i];
             const std::string name = (event.enabled ? "" : "[無効] ") + std::to_string(i + 1) + ": " +
                 (event.name.empty() ? (event.operation == "projectile" ? "火球 / 弾" : "GPU放出: " + event.preset) : event.name);
@@ -724,12 +771,13 @@ bool ActorDebugPanel::DrawAttackAuthoringHierarchy() {
                 BeginPlacementPreview();
             }
 
+            // 発射イベントにだけ、見た目や判定などを部位別に選ぶ子項目を出す。
             if (event.operation == "projectile") {
                 ImGui::PushID(i);
                 ImGui::Indent(14);
                 const char* children[] = {"発射・移動", "弾Objectの見た目", "当たり判定", "飛行中の軌跡", "着弾エフェクト"};
 
-                for (int section = 1; section < 5; ++section) {
+                for (std::int32_t section = 1; section < 5; ++section) {
                     if (ImGui::Selectable(children[section], selectedTrack_ == -2 - i && projectileSection_ == section)) {
                         selectedTrack_ = -2 - i;
                         projectileSection_ = section;
@@ -745,6 +793,7 @@ bool ActorDebugPanel::DrawAttackAuthoringHierarchy() {
         ImGui::TextWrapped("生成Objectの下の項目を選び、右側で見た目・判定・軌跡を編集します。各項目は同じ弾の構成設定です。");
     }
 
+    // 敵の選択方式を重み付けにしている場合だけ、この技の抽選重みを受け付ける。
     if (!playerCopyMode_ && editableProfile_.selectionMode == "weighted") {
         if (ImGui::DragFloat("この攻撃の抽選重み", &attack->selectionWeight, 0.1f, 0, 100000))
             profileDirty_ = true;
@@ -753,41 +802,42 @@ bool ActorDebugPanel::DrawAttackAuthoringHierarchy() {
 
     // UI 操作前の値を保存し、部品追加・削除を一つの Undo 単位として記録します。
     const auto before = sequence;
-    ImGui::Text("生成・放出 %d / 時間区間を持つ部品 %d", static_cast<int>(sequence.events.size()), static_cast<int>(sequence.tracks.size()));
+    ImGui::Text("生成・放出 %d / 時間区間を持つ部品 %d", static_cast<std::int32_t>(sequence.events.size()), static_cast<std::int32_t>(sequence.tracks.size()));
     if (ImGui::Button("＋ 部品を追加（素材から選択）", ImVec2(-1,0)))
         ImGui::OpenPopup("攻撃部品を追加");
     if (ImGui::BeginPopup("攻撃部品を追加")) {
-        static int kind = 0;
+        static std::int32_t sKind = 0;
         const char* kinds[] = {"生成Object（モデル）", "GPU素材の放出", "表示素材（MeshEffect）", "当たり判定", "術者アニメーション"};
-        ImGui::Combo("部品の種類", &kind, kinds, 5);
+        ImGui::Combo("部品の種類", &sKind, kinds, 5);
         std::string picked;
         bool add = false;
 
-        if (kind == 0 && ImGui::BeginCombo("モデルを選択", "素材を選ぶと追加します")) {
+        // 選択した種類に応じて、モデル、GPU粒子、表示プリセット、球判定、術者クリップの入口を切り替える。
+        if (sKind == 0 && ImGui::BeginCombo("モデルを選択", "素材を選ぶと追加します")) {
             for (const auto& model : ModelManager::GetInstance()->GetAvailableModelNames())
                 if (ImGui::Selectable(model.c_str())) {
                     picked = model;
                     add = true;
                 }
             ImGui::EndCombo();
-        } else if (kind == 1) add = SelectJson("GPU素材", "Resources/json/gpu_particles", picked);
-        else if (kind == 2) add = SelectJson("表示素材", "Resources/json/effect", picked, authoringAssets_);
-        else if (kind == 3) add = ImGui::Button("球の判定を追加");
-        else if (kind == 4) add = SelectJson("術者の動き", "Resources/json/animation_clip", picked);
+        } else if (sKind == 1) add = SelectJson("GPU素材", "Resources/json/gpu_particles", picked);
+        else if (sKind == 2) add = SelectJson("表示素材", "Resources/json/effect", picked, authoringAssets_);
+        else if (sKind == 3) add = ImGui::Button("球の判定を追加");
+        else if (sKind == 4) add = SelectJson("術者の動き", "Resources/json/animation_clip", picked);
 
         if (add) {
             // Event と Track では上限と保存先が違うため、種類を確定してから分岐します。
-            if ((kind < 2 && sequence.events.size() >= 128) || (kind >= 2 && sequence.tracks.size() >= 64))
+            if ((sKind < 2 && sequence.events.size() >= 128) || (sKind >= 2 && sequence.tracks.size() >= 64))
                 profileStatus_ = "部品数の上限に達しています。";
             else {
-                if (kind < 2) {
+                if (sKind < 2) {
                     AttackSequenceEvent event;
                     event.name = std::filesystem::path(picked).stem().string();
                     event.up = 1;
                     event.forward = 1;
 
                     // モデルから作る弾には通常材質を使い、元の攻撃から受け継いだ炎と粒子を外す。
-                    if (kind == 0) {
+                    if (sKind == 0) {
                         event.projectile = ResolveProjectileComponent(*attack,event);
                         event.projectile.model = picked;
                         event.projectile.style = "plain";
@@ -798,28 +848,30 @@ bool ActorDebugPanel::DrawAttackAuthoringHierarchy() {
                         event.projectile.secondaryTrail.clear();
                         event.projectile.impact.clear();
                         event.projectile.secondaryImpact.clear();
+                    // GPU粒子では、選んだJSONのパスから実行時の素材IDを保存する。
                     } else { event.operation = "gpu_vfx";
                     event.preset = AssetKey(picked, "Resources/json/gpu_particles");
                     }
                     sequence.events.push_back(event);
-                    selectedTrack_ = -1 - static_cast<int>(sequence.events.size());
-                    projectileSection_ = kind == 0 ? 1 : 0;
+                    selectedTrack_ = -1 - static_cast<std::int32_t>(sequence.events.size());
+                    projectileSection_ = sKind == 0 ? 1 : 0;
                 } else {
                     // 持続する部品はトラックに作り、攻撃の時間内に初期の表示区間を置く。
                     AttackSequenceTrack track;
-                    track.type = kind == 2 ? "mesh_vfx" : kind == 3 ? "hitbox" : "body_animation";
-                    track.name = kind == 3 ? "攻撃判定" : std::filesystem::path(picked).stem().string();
+                    track.type = sKind == 2 ? "mesh_vfx" : sKind == 3 ? "hitbox" : "body_animation";
+                    track.name = sKind == 3 ? "攻撃判定" : std::filesystem::path(picked).stem().string();
                     track.preset = picked;
                     track.end = (std::max)(0.01f,sequence.duration);
                     sequence.duration = track.end;
                     track.keys.front().position = {0,1,1};
                     sequence.tracks.push_back(track);
-                    selectedTrack_ = static_cast<int>(sequence.tracks.size()) - 1;
+                    selectedTrack_ = static_cast<std::int32_t>(sequence.tracks.size()) - 1;
                 }
 
                 RememberSequenceEdit(before);
                 authoringActorSelected_ = false;
-                if (kind != 4)
+                // 術者クリップには独立した配置物がないため、ほかの種類だけ仮配置を開く。
+                if (sKind != 4)
                     BeginPlacementPreview();
                 else StopPlacementPreview();
                 ImGui::CloseCurrentPopup();
@@ -831,13 +883,13 @@ bool ActorDebugPanel::DrawAttackAuthoringHierarchy() {
     }
 
     // 判定 Track の親が先にある表示 Track のときだけ、Hierarchy 上でも子として描きます。
-    auto hasParent = [&](int i) {
+    auto hasParent = [&](std::int32_t i) {
         const auto& track = sequence.tracks[i];
         return track.type == "hitbox" && track.parentTrack >= 0 && track.parentTrack < i &&
             sequence.tracks[track.parentTrack].type == "mesh_vfx";
     };
 
-    auto drawPart = [&](int i, bool child) {
+    auto drawPart = [&](std::int32_t i, bool child) {
         ImGui::PushID(i);
         const auto& track = sequence.tracks[i];
         if (child)
@@ -857,12 +909,12 @@ bool ActorDebugPanel::DrawAttackAuthoringHierarchy() {
         ImGui::PopID();
     };
 
-    for (int i = 0; i < static_cast<int>(sequence.tracks.size()); ++i) {
+    for (std::int32_t i = 0; i < static_cast<std::int32_t>(sequence.tracks.size()); ++i) {
         if (hasParent(i))
             continue;
         drawPart(i, false);
 
-        for (int j = i + 1; j < static_cast<int>(sequence.tracks.size()); ++j)
+        for (std::int32_t j = i + 1; j < static_cast<std::int32_t>(sequence.tracks.size()); ++j)
             if (hasParent(j) && sequence.tracks[j].parentTrack == i)
                 drawPart(j, true);
     }
@@ -917,6 +969,7 @@ bool ActorDebugPanel::DrawAttackAuthoringHierarchy() {
 #endif
 }
 
+// 選択した攻撃の共有定義と、表示・判定・本体アニメーションのトラックを編集する。
 void ActorDebugPanel::DrawTrackInspector() {
 #ifdef USE_IMGUI
     DrawPlacementControls();
@@ -943,6 +996,7 @@ void ActorDebugPanel::DrawTrackInspector() {
                 [](unsigned char c) { return c < 128 && (std::isalnum(c) || c == '_' || c == '-'); });
             path = "Resources/json/attack_assets/" + authoringAssetName_ + ".json";
             std::error_code ec;
+            // 入力名が無効、同名ファイルが存在する、保存成功の順に結果を判定して参照を更新する。
             if (!valid)
                 profileStatus_ = "アセット名は英数字・_・-にしてください。";
             else if (std::filesystem::exists(path, ec)) profileStatus_ = "同名のアセットがあります。別名を指定してください。";
@@ -966,19 +1020,20 @@ void ActorDebugPanel::DrawTrackInspector() {
     }
 
     // 選択 Track の種類によって、表示物・術者アニメーション・判定の編集項目を切り替えます。
-    if (selectedTrack_ >= 0 && selectedTrack_ < static_cast<int>(sequence.tracks.size())) {
+    if (selectedTrack_ >= 0 && selectedTrack_ < static_cast<std::int32_t>(sequence.tracks.size())) {
         auto& track = sequence.tracks[selectedTrack_];
         ImGui::SeparatorText("選択した攻撃部品");
         changed |= EditText("部品名", track.name);
 
         // キー時刻は部品開始からの相対値で、位置と補間を Track ごとに持ちます。
-        for (int i = 0; track.type != "body_animation" && i < static_cast<int>(track.keys.size()); ++i) {
+        for (std::int32_t i = 0; track.type != "body_animation" && i < static_cast<std::int32_t>(track.keys.size()); ++i) {
             ImGui::PushID(i);
             auto& key = track.keys[i];
             ImGui::Separator();
             changed |= ImGui::DragFloat("キー時刻 (部品開始から)", &key.time, 0.01f, 0, (std::max)(0.0f, track.end - track.begin));
             changed |= ImGui::DragFloat3("位置 (右・上・前)", key.position.data(), 0.01f, -1000, 1000);
 
+            // 表示トラックだけは、同じ時刻の移動・回転・拡縮を編集項目に持つ。
             if (track.type == "mesh_vfx") {
                 changed |= ImGui::DragFloat3("回転 (ラジアン)", key.rotation.data(), 0.01f, -1000, 1000);
                 changed |= ImGui::DragFloat3("スケール", key.scale.data(), 0.01f, 0.001f, 100);
@@ -987,6 +1042,7 @@ void ActorDebugPanel::DrawTrackInspector() {
             const char* easing[] = {"保持", "線形補間", "Smoothstep"};
             changed |= ImGui::Combo("次のキーへの補間", &key.interpolation, easing, 3);
 
+            // 最低一つはキーを保持するため、複数あるときだけ削除を受け付ける。
             if (track.keys.size() > 1 && ImGui::Button("キーを削除")) {
                 track.keys.erase(track.keys.begin() + i);
                 changed = true;
@@ -1017,9 +1073,9 @@ void ActorDebugPanel::DrawTrackInspector() {
         // 接触結果で分岐する条件では、判定 Track の終了を待つため参照元を選ばせます。
         const char* ids[] = {"always", "grounded", "airborne", "target_in_range", "contact", "no_contact", "track_completed"};
         const char* labels[] = {"常時", "接地中", "空中", "標的が射程内", "指定判定の終了後: 接触あり", "指定判定の終了後: 接触なし", "指定判定の終了後: 結果を問わない"};
-        int condition = 0;
+        std::int32_t condition = 0;
 
-        for (int i = 0; i < 7; ++i)
+        for (std::int32_t i = 0; i < 7; ++i)
             if (track.condition == ids[i])
                 condition = i;
 
@@ -1027,11 +1083,12 @@ void ActorDebugPanel::DrawTrackInspector() {
             track.condition = ids[condition];
             changed = true;
         }
+        // 接触結果を待つ条件を選んだ場合だけ、現在のトラック自身を除く判定トラックを候補にする。
         if (condition >= 4) {
-            const char* sourceName = track.conditionTrack >= 0 && track.conditionTrack < static_cast<int>(sequence.tracks.size())
+            const char* sourceName = track.conditionTrack >= 0 && track.conditionTrack < static_cast<std::int32_t>(sequence.tracks.size())
                 ? sequence.tracks[track.conditionTrack].name.c_str() : "選択してください";
             if (ImGui::BeginCombo("分岐元の判定", sourceName)) {
-                for (int i = 0; i < static_cast<int>(sequence.tracks.size()); ++i) {
+                for (std::int32_t i = 0; i < static_cast<std::int32_t>(sequence.tracks.size()); ++i) {
                     const auto& source = sequence.tracks[i];
                     if (i == selectedTrack_ || source.type != "hitbox")
                         continue;
@@ -1059,7 +1116,7 @@ void ActorDebugPanel::DrawTrackInspector() {
             }
 
             const char* modes[] = {"キーで動かす", "照準して直進", "照準して追尾"};
-            int motion = track.motion == "homing" ? 2 : track.motion == "aim_launch" ? 1 : 0;
+            std::int32_t motion = track.motion == "homing" ? 2 : track.motion == "aim_launch" ? 1 : 0;
 
             if (ImGui::Combo("共通動作", &motion, modes, 3)) {
                 track.motion = motion == 2 ? "homing" : motion == 1 ? "aim_launch" : "keyframed";
@@ -1067,6 +1124,7 @@ void ActorDebugPanel::DrawTrackInspector() {
                 changed = true;
             }
 
+            // キー移動以外の共通動作は速度などの調整を表示し、発射動作だけさらに開始前の溜めを設定できる。
             if (motion != 0) {
                 changed |= ImGui::DragFloat("発射まで (部品開始から秒)", &track.launchDelay, 0.01f, 0, 30);
                 changed |= ImGui::DragFloat("移動速度 (m/s)", &track.moveSpeed, 0.1f, 0, 1000);
@@ -1089,7 +1147,7 @@ void ActorDebugPanel::DrawTrackInspector() {
                 child.begin = track.begin + (motion != 0 ? track.launchDelay : 0);
                 child.end = track.end;
                 sequence.tracks.push_back(child);
-                selectedTrack_ = static_cast<int>(sequence.tracks.size()) - 1;
+                selectedTrack_ = static_cast<std::int32_t>(sequence.tracks.size()) - 1;
                 RememberSequenceEdit(before);
                 return; // push_back後のtrack参照を使わない。
             }
@@ -1105,14 +1163,14 @@ void ActorDebugPanel::DrawTrackInspector() {
             ImGui::TextWrapped("Animation Workbenchで保存した本体変形を描画だけに重ねます。移動・判定や子オブジェクトは動かしません。キーの編集はWorkbenchで行います。");
         } else {
             // 判定 Track は表示物を親に選べますが、参照は前にある Mesh VFX Track のみに限定します。
-            const char* parentName = track.parentTrack >= 0 && track.parentTrack < static_cast<int>(sequence.tracks.size())
+            const char* parentName = track.parentTrack >= 0 && track.parentTrack < static_cast<std::int32_t>(sequence.tracks.size())
                 ? sequence.tracks[track.parentTrack].name.c_str() : "親なし / 要確認";
             if (ImGui::BeginCombo("追従するObject", parentName)) {
                 if (ImGui::Selectable("親なし", track.parentTrack == -1)) {
                     track.parentTrack = -1;
                     changed = true;
                 }
-                for (int i = 0; i < selectedTrack_; ++i) {
+                for (std::int32_t i = 0; i < selectedTrack_; ++i) {
                     if (sequence.tracks[i].type != "mesh_vfx")
                         continue;
                     ImGui::PushID(i);
@@ -1134,6 +1192,7 @@ void ActorDebugPanel::DrawTrackInspector() {
         }
 
         // 配列の追加・削除後は Track 参照が無効になり得るので、以降は値を使わず履歴へ記録します。
+        // 個数上限未満なら部品を複製できる。削除時は他の参照番号も詰め直す。
         if (ImGui::Button("部品を複製") && sequence.tracks.size() < 64) {
             auto copy = track;
             copy.name += " コピー";
@@ -1171,8 +1230,8 @@ void ActorDebugPanel::DrawProjectileInspector() {
     // 選択イベントの構成を編集し、変更前の定義をUndo単位として残します。
     DrawPlacementControls();
     auto* attack = GetSelectedAttackDefinition();
-    const int index = -2 - selectedTrack_;
-    if (!attack || index < 0 || index >= static_cast<int>(attack->sequence.events.size()))
+    const std::int32_t index = -2 - selectedTrack_;
+    if (!attack || index < 0 || index >= static_cast<std::int32_t>(attack->sequence.events.size()))
         return;
     auto& sequence = attack->sequence;
     const auto before = sequence;
@@ -1181,6 +1240,7 @@ void ActorDebugPanel::DrawProjectileInspector() {
     auto part = ResolveProjectileComponent(*attack, event);
     bool changed = false;
     ImGui::TextWrapped("%s / %s", attack->displayName.c_str(), event.name.empty() ? "名称未設定" : event.name.c_str());
+    // 下書き確認は、先頭から再生する操作と現在時刻を保つ操作を分ける。
     if (ImGui::Button("保存せず動作確認"))
         PreviewDraft(false);
     ImGui::SameLine();
@@ -1196,6 +1256,7 @@ void ActorDebugPanel::DrawProjectileInspector() {
         ImGui::PushID(label);
         std::string path = name.empty() ? "" : "Resources/json/gpu_particles/" + name + ".json";
         bool edited = SelectJson(label, "Resources/json/gpu_particles", path);
+        // 素材を選んだ場合は相対IDへ置き換え、解除ボタンは保存値を空にする。
         if (edited)
             name = AssetKey(path, "Resources/json/gpu_particles");
         if (ImGui::SmallButton("なしにする")) {
@@ -1239,7 +1300,7 @@ void ActorDebugPanel::DrawProjectileInspector() {
                 ImGui::EndCombo();
             }
 
-            int style = part.style == "plain" ? 1 : 0;
+            std::int32_t style = part.style == "plain" ? 1 : 0;
             const char* styles[] = {"炎の描画", "通常のモデル"};
 
             if (ImGui::Combo("見た目", &style, styles, 2)) {
@@ -1305,9 +1366,9 @@ void ActorDebugPanel::DrawProjectileInspector() {
         changed |= ImGui::DragFloat("水平回転", &event.yawDegrees, 0.5f, -360, 360, "%.1f 度");
         const char* ids[] = {"always", "grounded", "airborne", "target_in_range"};
         const char* labels[] = {"常時", "接地中", "空中", "標的が射程内"};
-        int condition = 0;
+        std::int32_t condition = 0;
 
-        for (int i = 0; i < 4; ++i)
+        for (std::int32_t i = 0; i < 4; ++i)
             if (event.condition == ids[i])
                 condition = i;
 
@@ -1322,11 +1383,12 @@ void ActorDebugPanel::DrawProjectileInspector() {
     if (changed && event.operation == "projectile")
         event.projectile = part;
     // 配列を変更する操作では参照中のeventが無効化され得るため、Undo記録後に直ちに戻る。
+    // 上限に達していない場合だけ、選択イベントを複製して選択先を移す。
     if (ImGui::Button("この構成を複製") && sequence.events.size() < 128) {
         auto copy = event;
         copy.name += " (複製)";
         sequence.events.push_back(std::move(copy));
-        selectedTrack_ = -1 - static_cast<int>(sequence.events.size());
+        selectedTrack_ = -1 - static_cast<std::int32_t>(sequence.events.size());
         RememberSequenceEdit(before);
         return;
     }
@@ -1344,6 +1406,7 @@ void ActorDebugPanel::DrawProjectileInspector() {
     if (changed)
         RememberSequenceEdit(before);
     std::string error;
+    // 編集結果が不正なら説明を出し、修正する箇所を同じ画面で確認できるようにする。
     if (!sequence.Validate(&error))
         ImGui::TextColored(ImVec4(1, 0.5f, 0.3f, 1), "%s", error.c_str());
     ImGui::TextWrapped("%s", profileStatus_.c_str());
@@ -1383,7 +1446,7 @@ void ActorDebugPanel::DrawTrackTimeline() {
 
     // 時刻が一点の発射や粒子発生は、開始・終了を持つ区間とは別の欄に表示する。
     if (!sequence.events.empty() && ImGui::TreeNodeEx("弾・GPU放出の発生時刻", ImGuiTreeNodeFlags_DefaultOpen)) {
-        for (int i = 0; i < static_cast<int>(sequence.events.size()); ++i) {
+        for (std::int32_t i = 0; i < static_cast<std::int32_t>(sequence.events.size()); ++i) {
             ImGui::PushID(i);
             auto& event = sequence.events[i];
             const std::string label = event.name.empty() ? (event.operation == "projectile" ? "弾の発射" : "GPU放出") : event.name;
@@ -1406,7 +1469,7 @@ void ActorDebugPanel::DrawTrackTimeline() {
     }
 
     // トラックは開始から終了までを一つの帯へ変換し、検証を通った内容だけ編集に使う。
-    for (int i = 0; i < static_cast<int>(sequence.tracks.size()); ++i) {
+    for (std::int32_t i = 0; i < static_cast<std::int32_t>(sequence.tracks.size()); ++i) {
         ImGui::PushID(i);
         auto& track = sequence.tracks[i];
 
@@ -1430,7 +1493,14 @@ void ActorDebugPanel::DrawTrackTimeline() {
         if (ImGui::IsItemClicked()) {
             selectedTrack_ = i;
             const float mouse = ImGui::GetIO().MousePos.x;
-            authoringDragMode_ = std::abs(mouse - x0) < 8 ? 1 : (std::abs(mouse - x1) < 8 ? 2 : 0);
+            // 両端の操作範囲が重なる場合は開始端を優先し、端から離れていれば帯ごと移動する。
+            if (std::abs(mouse - x0) < 8) {
+                authoringDragMode_ = 1;
+            } else if (std::abs(mouse - x1) < 8) {
+                authoringDragMode_ = 2;
+            } else {
+                authoringDragMode_ = 0;
+            }
         }
 
         // ドラッグ量を秒へ戻し、帯の位置をタイムライン上の範囲に保つ。
@@ -1439,6 +1509,7 @@ void ActorDebugPanel::DrawTrackTimeline() {
             // 横のドラッグ量を表示全幅で割り、全体の長さを掛けて移動量を秒に換算する。
             const float delta = ImGui::GetIO().MouseDelta.x / width * duration;
             const float oldLength = track.end - track.begin;
+            // 左端は開始、右端は終了、中央は区間全体を移動する。
             if (authoringDragMode_ == 1)
                 track.begin = std::clamp(track.begin + delta, 0.0f, (std::max)(0.0f, track.end - 0.001f));
             else if (authoringDragMode_ == 2) track.end = std::clamp(track.end + delta, track.begin + 0.001f, duration);
@@ -1462,11 +1533,13 @@ void ActorDebugPanel::DrawTrackTimeline() {
 
 void ActorDebugPanel::DrawAttackOverlay(float x, float y, float width, float height) {
 #ifdef USE_IMGUI
+    // 制作用Viewportが有効なら配置描画へ渡す。通常の判定表示は停止中の有効なプレビューだけ描く。
     if (IsAuthoringViewportActive())
         DrawPlacementGizmo(x, y, width, height);
     if (!enabled_ || !showAttackRadii_ || !sceneManager_ || sceneManager_->IsPlaying() || crownMovieMode_)
         return;
     const auto* camera = CameraManager::GetInstance()->GetActiveCamera();
+    // カメラまたは正の表示寸法がなければ、判定の投影を行わない。
     if (!camera || width <= 0 || height <= 0)
         return;
     const auto& matrix = camera->GetViewProjectionMatrix();
@@ -1488,6 +1561,7 @@ void ActorDebugPanel::DrawAttackOverlay(float x, float y, float width, float hei
     draw->PushClipRect({x, y}, {x + width, y + height}, true);
 
     for (const auto& bullet : BulletManager::GetInstance()->GetBullets()) {
+        // 有効な生存弾の現在の判定だけを表示する。
         if (!bullet || bullet->IsDead())
             continue;
         const auto position = bullet->GetTranslate();
@@ -1495,9 +1569,9 @@ void ActorDebugPanel::DrawAttackOverlay(float x, float y, float width, float hei
         const ImU32 color = bullet->GetCollisionMask() ? IM_COL32(255, 215, 40, 255) : IM_COL32(155, 155, 155, 200);
 
         // 実Colliderの半径を3つの大円で表示。編集用の飾り半径とは別に計算しません。
-        for (int plane = 0; plane < 3; ++plane) {
-            for (int i = 0; i < 48; ++i) {
-                auto point = [&](int segment) {
+        for (std::int32_t plane = 0; plane < 3; ++plane) {
+            for (std::int32_t i = 0; i < 48; ++i) {
+                auto point = [&](std::int32_t segment) {
                     const float angle = segment * (2.0f * std::numbers::pi_v<float>) / 48;
                     const float a = radius * std::cos(angle), b = radius * std::sin(angle);
                     return position + (plane == 0 ? engine::Vector3{a,b,0} : plane == 1 ? engine::Vector3{a,0,b} : engine::Vector3{0,a,b});
@@ -1524,9 +1598,9 @@ void ActorDebugPanel::DrawAttackOverlay(float x, float y, float width, float hei
 ActorDebugPanel::AuthoringSelectionKind ActorDebugPanel::GetAuthoringSelectionKind() const {
     // 負のトラック番号は攻撃全体と発射イベントへ割り当てています。
     if (authoringActorSelected_)
-        return AuthoringSelectionKind::Actor;
-    return selectedTrack_ == -1 ? AuthoringSelectionKind::Attack :
-        selectedTrack_ <= -2 ? AuthoringSelectionKind::Event : AuthoringSelectionKind::Track;
+        return AuthoringSelectionKind::kActor;
+    return selectedTrack_ == -1 ? AuthoringSelectionKind::kAttack :
+        selectedTrack_ <= -2 ? AuthoringSelectionKind::kEvent : AuthoringSelectionKind::kTrack;
 }
 
 bool ActorDebugPanel::IsAuthoringViewportActive() const {
@@ -1543,10 +1617,11 @@ bool ActorDebugPanel::GetPlacementTransform(engine::Vector3& position, engine::V
     // 術者と標的からローカル基準を作り、選択した構成のギズモ位置に変換します。
     const auto* attack = GetSelectedAttackDefinition();
     engine::Object3D* actor = playerCopyMode_ ? static_cast<engine::Object3D*>(previewPlayer_) : static_cast<engine::Object3D*>(previewEnemy_);
-    if (!attack || !actor || GetAuthoringSelectionKind() == AuthoringSelectionKind::Actor || selectedTrack_ == -1)
+    if (!attack || !actor || GetAuthoringSelectionKind() == AuthoringSelectionKind::kActor || selectedTrack_ == -1)
         return false;
     engine::Vector3 forward{0,0,1};
 
+    // 標的があり水平差が十分なら、その方向を素材配置の前方にする。
     if (previewTarget_) { auto delta = previewTarget_->GetTranslate() - actor->GetTranslate(); delta.y = 0;
         if (engine::Math::Length(delta) > 0.001f) forward = engine::Math::Normalize(delta); }
     engine::Vector3 origin = actor->GetTranslate();
@@ -1555,8 +1630,8 @@ bool ActorDebugPanel::GetPlacementTransform(engine::Vector3& position, engine::V
 
     // 発射イベントは実行時の位置解決を使い、弾の表示倍率をギズモへ反映します。
     if (selectedTrack_ <= -2) {
-        const int index = -2 - selectedTrack_;
-        if (index >= static_cast<int>(attack->sequence.events.size()))
+        const std::int32_t index = -2 - selectedTrack_;
+        if (index >= static_cast<std::int32_t>(attack->sequence.events.size()))
             return false;
         const auto& event = attack->sequence.events[index];
         AttackSequenceContext context;
@@ -1575,13 +1650,14 @@ bool ActorDebugPanel::GetPlacementTransform(engine::Vector3& position, engine::V
         return true;
     }
 
-    if (selectedTrack_ >= static_cast<int>(attack->sequence.tracks.size()))
+    if (selectedTrack_ >= static_cast<std::int32_t>(attack->sequence.tracks.size()))
         return false;
     const auto& track = attack->sequence.tracks[selectedTrack_];
+    // 本体クリップは配置用のTransformを公開しないため、ギズモ用の値を返さない。
     if (track.type == "body_animation")
         return false;
     // 親トラックがある場合は、子の確認時刻に対応する親の位置とヨーを先に合成します。
-    if (track.parentTrack >= 0 && track.parentTrack < static_cast<int>(attack->sequence.tracks.size())) {
+    if (track.parentTrack >= 0 && track.parentTrack < static_cast<std::int32_t>(attack->sequence.tracks.size())) {
         const auto& parent = attack->sequence.tracks[track.parentTrack];
         // 子の確認時刻を攻撃全体の時刻へ戻し、親の開始時刻を引いて親のキーを評価する。
         const auto parentKey = parent.Evaluate(track.begin + placementTime_ - parent.begin);
@@ -1611,11 +1687,12 @@ void ActorDebugPanel::ApplyPlacementTransform(const engine::Vector3& position, c
         const engine::Vector3 delta = position - previous;
 
         if (placementOperation_ == 0) {
-            const auto local = AttackPlacementMath::ToLocalDelta(delta,oldRotation.y);
+            const auto local = attackPlacementMath::ToLocalDelta(delta,oldRotation.y);
             event.right += local.x;
             event.up += local.y;
             event.forward += local.z;
-        } else if (placementOperation_ == 1) AttackPlacementMath::RotateEvent(event,previewBaseScale_,rotation.y-oldRotation.y);
+        } else if (placementOperation_ == 1) attackPlacementMath::RotateEvent(event,previewBaseScale_,rotation.y-oldRotation.y);
+        // 拡縮操作は発射で生成する弾の均等倍率だけに反映し、粒子イベントには適用しない。
         else if (event.operation == "projectile") {
             auto part = ResolveProjectileComponent(*attack,event);
 
@@ -1639,14 +1716,14 @@ void ActorDebugPanel::ApplyPlacementTransform(const engine::Vector3& position, c
         const float yaw = oldRotation.y - key.rotation[1];
 
         if (placementOperation_ == 0) {
-            const auto local = AttackPlacementMath::ToLocalDelta(delta,yaw);
+            const auto local = attackPlacementMath::ToLocalDelta(delta,yaw);
             key.position[0] += local.x;
             key.position[1] += local.y;
             key.position[2] += local.z;
         } else if (placementOperation_ == 1) key.rotation = {rotation.x,rotation.y-yaw,rotation.z};
         else key.scale = {(std::max)(0.001f,scale.x),(std::max)(0.001f,scale.y),(std::max)(0.001f,scale.z)};
         // 既存キーの編集か新規追加を共通の入口へ渡し、追加に失敗したときは上限を表示します。
-        if (!AttackPlacementMath::PutKey(track,key))
+        if (!attackPlacementMath::PutKey(track,key))
             placementMessage_ = "キー数の上限です。既存キーの時刻を選んで編集してください。";
     }
 
@@ -1661,10 +1738,11 @@ void ActorDebugPanel::DrawPlacementControls() {
     const auto* attack = GetSelectedAttackDefinition();
     if (!attack || selectedTrack_ == -1)
         return;
-    if (selectedTrack_ <= -2 && -2-selectedTrack_ >= static_cast<int>(attack->sequence.events.size()))
+    if (selectedTrack_ <= -2 && -2-selectedTrack_ >= static_cast<std::int32_t>(attack->sequence.events.size()))
         return;
+    // トラック番号が範囲内の場合にだけ種類を参照する。本体アニメーションは単独配置から外す。
     if (selectedTrack_ >= 0) {
-        if (selectedTrack_ >= static_cast<int>(attack->sequence.tracks.size()))
+        if (selectedTrack_ >= static_cast<std::int32_t>(attack->sequence.tracks.size()))
             return;
         if (attack->sequence.tracks[selectedTrack_].type == "body_animation") {
             ImGui::TextWrapped("術者のアニメーションは「保存せず動作確認」で再生します。配置ギズモは生成Object・GPU・判定が対象です。");
@@ -1676,6 +1754,7 @@ void ActorDebugPanel::DrawPlacementControls() {
     ImGui::SeparatorText("選択部品の配置");
     if (ImGui::Button("選択した部品だけを表示"))
         BeginPlacementPreview();
+    // 単独表示を開いていない間は時刻・ギズモ・カメラの操作欄を出さない。
     if (!placementPreview_) {
         ImGui::TextWrapped("単独表示ではAI・ダメージを止めて配置します。攻撃全体は「保存せず動作確認」で再生します。");
         return;
@@ -1684,7 +1763,7 @@ void ActorDebugPanel::DrawPlacementControls() {
 
     // トラックはキーの確認時刻、発射イベントは素材のみの経過時間を調整します。
     if (selectedTrack_ >= 0) {
-        if (selectedTrack_ >= static_cast<int>(attack->sequence.tracks.size()))
+        if (selectedTrack_ >= static_cast<std::int32_t>(attack->sequence.tracks.size()))
             return;
         const auto& track = attack->sequence.tracks[selectedTrack_];
         ImGui::SliderFloat("編集時刻 (部品開始から)",&placementTime_,0,(std::max)(0.01f,track.end-track.begin),"%.3f 秒");
@@ -1731,6 +1810,7 @@ void ActorDebugPanel::DrawPlacementControls() {
 void ActorDebugPanel::DrawPlacementGizmo(float x,float y,float width,float height) {
 #ifdef USE_IMGUI
     // Game Viewの矩形へ投影した位置にギズモを重ね、Scene上の選択物を操作します。
+    // 単独配置中で姿勢とカメラが両方揃った場合にだけ、投影と操作を開始する。
     if (!placementPreview_)
         return;
     engine::Vector3 position, rotation, scale;
@@ -1760,8 +1840,8 @@ void ActorDebugPanel::DrawPlacementGizmo(float x,float y,float width,float heigh
             return true;
         };
 
-        for(int plane=0;plane<3;++plane) for(int i=0;i<48;++i) {
-            auto point=[&](int n) {float a=n*(2.0f * std::numbers::pi_v<float>)/48;float c=radius*std::cos(a),s=radius*std::sin(a);
+        for(std::int32_t plane=0;plane<3;++plane) for(std::int32_t i=0;i<48;++i) {
+            auto point=[&](std::int32_t n) {float a=n*(2.0f * std::numbers::pi_v<float>)/48;float c=radius*std::cos(a),s=radius*std::sin(a);
                 return position+(plane==0?engine::Vector3{c,s,0}:plane==1?engine::Vector3{c,0,s}:engine::Vector3{0,c,s});};
             ImVec2 a,b;
             if(project(point(i),a)&&project(point(i+1),b))
@@ -1788,13 +1868,19 @@ void ActorDebugPanel::DrawPlacementGizmo(float x,float y,float width,float heigh
     ImGuizmo::SetRect(x,y,width,height);
     ImGuizmo::SetOrthographic(false);
     ImGuizmo::PushID(9021);
-    auto op = placementOperation_ == 0 ? ImGuizmo::TRANSLATE : placementOperation_ == 1 ?
-        (selectedTrack_ <= -2 ? ImGuizmo::ROTATE_Y : ImGuizmo::ROTATE) : ImGuizmo::SCALE;
+    // 回転編集では、イベントだけをY軸回転に制限する。
+    ImGuizmo::OPERATION op = ImGuizmo::SCALE;
+    if (placementOperation_ == 0) {
+        op = ImGuizmo::TRANSLATE;
+    } else if (placementOperation_ == 1) {
+        op = selectedTrack_ <= -2 ? ImGuizmo::ROTATE_Y : ImGuizmo::ROTATE;
+    }
     const auto before = attack->sequence;
     const bool changed = ImGuizmo::Manipulate(&view.m[0][0],&projection.m[0][0],op,ImGuizmo::LOCAL,&world.m[0][0]);
 
     // ドラッグ開始時点の定義を退避し、操作中は行列を分解して各フレームの差分を適用する。
     if (ImGuizmo::IsUsing()) {
+        // ドラッグの初回だけ開始前の定義を記録し、実際に行列が変わったフレームだけ値を反映する。
         if (!placementGizmoUsing_) {
             placementGestureBefore_ = before;
             placementGizmoUsing_ = true;

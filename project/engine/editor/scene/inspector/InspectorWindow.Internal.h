@@ -42,7 +42,7 @@ static float ToRadians(float degrees) { return degrees * (std::numbers::pi_v<flo
 static float ToDegrees(float radians) { return radians * (180.0f / std::numbers::pi_v<float>); }
 namespace fs = std::filesystem;
 
-namespace InspectorWindowImplementation {
+namespace inspectorWindowImplementation {
 std::string ToLowerAscii(std::string text);
 
 // 複数選択を含む現在の編集対象を集めます。戻り値はシーン所有オブジェクトへの非所有参照です。
@@ -116,7 +116,7 @@ void DrawAutomaticComponentProperties(
 // 共通Component定義を用いて単体・複数選択のInspectorを同じ手順で描画する。
 void DrawComponentPanel(DebugEditor* editor, engine::Object3D* primary, const std::vector<engine::Object3D*>& targets);}
 
-namespace InspectorWindowImplementation {
+namespace inspectorWindowImplementation {
 
 // カメラ自身とEditor専用Objectを除き、注視対象として有効な名前だけ列挙する。
 bool DrawSceneObjectNameCombo(const char* label, BaseScene* scene, engine::Object3D* cameraObject, std::string& objectName);

@@ -1,8 +1,8 @@
 ﻿#pragma once
 
 // EnemyPrismSlimeの分割実装で共有する定数・計算。攻撃の選択と進行はEnemyPrismSlimeが担当する。
-// 分割実装専用の定数・補助関数。外部からは公開ヘッダーを使用します。
 #define NOMINMAX
+#include <cstdint>
 #include "game/actor/combat/CombatMath.h"
 #include <numbers>
 #include "game/actor/enemy/boss/prism/EnemyPrismSlime.h"
@@ -27,7 +27,7 @@
 #include <cassert>
 #include <cmath>
 
-namespace EnemyPrismSlimeImplementation {
+namespace enemyPrismSlimeImplementation {
 // 攻撃プロフィールの ID。JSON 側と一致させます。
 inline constexpr const char* kCrystalSpikesAttackId = "crystal_spikes";
 inline constexpr const char* kCrystalLanceVolleyAttackId = "crystal_lance_volley";
@@ -86,14 +86,14 @@ inline constexpr const char* kPrismWindTornadoInnerEffect =
     "Resources/json/effect/shared/effect_player_wind_tornado_inner.json";
 
 // 素材、衝突、技の発生間隔、遭遇演出に使う調整値。
-inline constexpr int kFireMaterialType = 11;
-inline constexpr int kPrismCrystalMaterialType = 27;
+inline constexpr std::int32_t kFireMaterialType = 11;
+inline constexpr std::int32_t kPrismCrystalMaterialType = 27;
 inline constexpr float kPi = std::numbers::pi_v<float>;
 inline constexpr float kHalfPi = kPi * 0.5f;
 inline constexpr float kGroundCollisionWorldRadius = 3.25f;
-inline const uint32_t kPrismActiveCollisionAttribute = CollisionCategories::Get("enemy");
-inline const uint32_t kPrismActiveCollisionMask = CollisionCategories::Get("player") | CollisionCategories::Get("ground") | CollisionCategories::Get("player_attack") | CollisionCategories::Get("player_bullet");
-inline const uint32_t kPrismAppearanceCollisionMask = CollisionCategories::Get("ground");
+inline const uint32_t kPrismActiveCollisionAttribute = engine::collisionCategories::Get("enemy");
+inline const uint32_t kPrismActiveCollisionMask = engine::collisionCategories::Get("player") | engine::collisionCategories::Get("ground") | engine::collisionCategories::Get("player_attack") | engine::collisionCategories::Get("player_bullet");
+inline const uint32_t kPrismAppearanceCollisionMask = engine::collisionCategories::Get("ground");
 inline constexpr float kPrismSpikeInterval = 0.011f;
 inline constexpr float kPrismSpikeRiseDuration = 0.24f;
 inline constexpr float kPrismSpikeHoldDuration = 1.64f;
@@ -103,10 +103,10 @@ inline constexpr float kPrismSpikeLifetime =
 
 inline constexpr float kCrystalLanceInterval = 0.12f;
 inline constexpr float kCrystalLanceTrailInterval = 0.045f;
-inline constexpr int kCrystalLanceCount = 5;
+inline constexpr std::int32_t kCrystalLanceCount = 5;
 
 inline constexpr float kFireFanInterval = 0.095f;
-inline constexpr int kFireFanProjectileCount = 5;
+inline constexpr std::int32_t kFireFanProjectileCount = 5;
 
 inline constexpr float kThunderStrikeInterval = 0.115f;
 
@@ -114,10 +114,10 @@ inline constexpr float kWindPushInterval = 0.12f;
 
 inline constexpr float kSummonInterval = 0.17f;
 inline constexpr float kSummonPortalFadeDuration = 0.34f;
-inline constexpr int kSummonPortalCount = 3;
-inline constexpr int kMaxSummonWaves = 2;
+inline constexpr std::int32_t kSummonPortalCount = 3;
+inline constexpr std::int32_t kMaxSummonWaves = 2;
 
-inline constexpr int kEncounterControlledActionMode = 1;
+inline constexpr std::int32_t kEncounterControlledActionMode = 1;
 inline constexpr float kDefaultEncounterAppearanceDuration = 1.08f;
 inline constexpr float kEncounterAppearanceRise = 1.85f;
 
@@ -131,17 +131,18 @@ inline constexpr float kRepositionArenaHalfExtentZ = 18.0f;
 
 // 召喚位置の選択を再現可能にする疑似乱数です。state を呼び出し元で保持します。
 inline float NextSummonRandom01(std::uint32_t& state) {
+    // 内部状態を更新し、下位24ビットを0以上1未満の値に変換する。状態が0だと以後も0のままになる。
     state ^= state << 13;
     state ^= state >> 17;
     state ^= state << 5;
     return static_cast<float>(state & 0x00ffffffu) / static_cast<float>(0x01000000u);
 }
 
-using CombatMath::NormalizePlanar;
+using combatMath::NormalizePlanar;
 
-using CombatMath::SmoothStep01;
+using combatMath::SmoothStep01;
 
-// 水平方向の攻撃基準ベクトルを指定角度だけ回転します。
+// 水平ベクトルをY軸周りにラジアン指定で回し、水平の単位方向を返します。
 inline engine::Vector3 RotatePlanar(const engine::Vector3& direction, float angle) {
     const float cosine = std::cos(angle);
     const float sine = std::sin(angle);
@@ -152,7 +153,7 @@ inline engine::Vector3 RotatePlanar(const engine::Vector3& direction, float angl
     });
 }
 
-// 上向きのモデル軸を進行方向へ向ける Euler 角を返します。
+// 上向きのモデル軸を進行方向へ近づける、ピッチとヨーのラジアン値を返します。
 inline engine::Vector3 MakeUpAxisAimRotation(const engine::Vector3& direction) {
     const engine::Vector3 normalized = engine::Math::Normalize(direction);
     const float horizontalLength = std::sqrt(normalized.x * normalized.x + normalized.z * normalized.z);
@@ -183,7 +184,7 @@ inline float DistanceSquaredToSegment(const engine::Vector3& point, const engine
 inline BulletVisualConfig MakePrismFireVisual() {
     BulletVisualConfig visual;
     visual.materialType = kFireMaterialType;
-    visual.blendMode = BlendMode::Normal;
+    visual.blendMode = BlendMode::kNormal;
     visual.color = {1.0f, 0.30f, 0.055f, 0.98f};
     visual.emissive = 3.0f;
     visual.visualScale = 1.22f;
@@ -207,11 +208,11 @@ inline BulletVisualConfig MakePrismFireVisual() {
 // 攻撃プロフィールから燃焼状態異常へ必要な値を移します。
 inline StatusEffectApplication MakeBurningStatus(const EnemyAttackDefinition& attack) {
     StatusEffectApplication status;
-    status.type = StatusEffectType::Burning;
+    status.type = StatusEffectType::kBurning;
     status.duration = attack.statusDuration;
     status.tickInterval = attack.statusTickInterval;
     status.tickDamage = attack.statusTickDamage;
     status.vfxPreset = attack.statusVfx;
     return status;
 }
-} // namespace EnemyPrismSlimeImplementation
+} // namespace enemyPrismSlimeImplementation

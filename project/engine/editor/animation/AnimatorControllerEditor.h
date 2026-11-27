@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "IEditable.h"
 #include "engine/animation/AnimatorController.h"
@@ -69,7 +70,7 @@ private:
     std::vector<std::string> bodyAnimationFiles_;
     char fileNameBuffer_[128] = "new_animator";
     std::string previewTargetName_;
-    int selectedStateIndex_ = -1; // 選択状態。-1は未選択。
-    int selectedParameterIndex_ = -1; // 選択パラメータ。-1は未選択。
-    int selectedTransitionIndex_ = -1; // 選択遷移。-1は未選択。
+    std::int32_t selectedStateIndex_ = -1; // 選択状態。-1は未選択。
+    std::int32_t selectedParameterIndex_ = -1; // 選択パラメータ。-1は未選択。
+    std::int32_t selectedTransitionIndex_ = -1; // 選択遷移。-1は未選択。
 };

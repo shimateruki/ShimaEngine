@@ -47,7 +47,7 @@ struct EnemyAttackPreviewDescriptor {
     bool supportsPlayerBinding = false;
     bool supportsActorControl = false;
     std::string sequenceHelp;
-    DamageType damageType = DamageType::Physical;
+    DamageType damageType = DamageType::kPhysical;
     float targetDistance = 6.0f;
     float duration = 4.6f;
     std::vector<EnemyAttackPreviewOption> options;
@@ -75,11 +75,13 @@ public:
         std::unordered_set<std::string> types;
         for (const auto& entry : Entries()) types.insert(entry.type);
         for (const auto& entry : entries) {
+            // 敵タイプ、表示名、技を選ぶ処理は必須。同じ敵タイプの重複も受け付けない。
             if (entry.type.empty() || entry.displayName.empty() || !entry.selectAttack ||
                 !types.insert(entry.type).second) return false;
             // 同じ敵の中で確認モードIDが重複しないよう、型ごとに別の集合で検証します。
             std::unordered_set<std::string> options;
             for (const auto& option : entry.options) {
+                // 追加の確認項目にはID、表示名、再生尺の取得処理が揃っている必要があり、同じ敵内のID重複も拒否する。
                 if (option.id.empty() || option.displayName.empty() || !option.duration ||
                     !options.insert(option.id).second) return false;
             }
@@ -93,23 +95,26 @@ public:
 
     // 未登録なら nullptr。定義は内部一覧の借用参照で、追加登録後は取得し直す。
     static const EnemyAttackPreviewDescriptor* Find(const std::string& type) {
+        // 対象の敵タイプが登録されている場合だけ、対応するプレビュー設定を借用する。
         for (const auto& entry : Entries()) if (entry.type == type) return &entry;
         return nullptr;
     }
 
     static const EnemyAttackPreviewOption* FindOption(const std::string& type, const std::string& id) {
+        // 指定した敵が登録済みの場合だけ、その敵の追加モードを検索する。
         if (const auto* entry = Find(type))
+            // 追加モードのIDが一致した項目だけを返す。
             for (const auto& option : entry->options) if (option.id == id) return &option;
         return nullptr;
     }
 
 private:
     static StatusEditor& StatusServices() {
-        static StatusEditor editor;
-        return editor;
+        static StatusEditor sEditor;
+        return sEditor;
     }
     static std::vector<EnemyAttackPreviewDescriptor>& Entries() {
-        static std::vector<EnemyAttackPreviewDescriptor> entries;
-        return entries;
+        static std::vector<EnemyAttackPreviewDescriptor> sEntries;
+        return sEntries;
     }
 };

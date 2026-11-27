@@ -29,8 +29,8 @@ engine::Vector3 NormalizeOrZero(const engine::Vector3& value) {
     return length > kMinimumDistance ? value * (1.0f / length) : engine::Vector3{};
 }
 
+// 与えられた位置にColliderの設定上の中心オフセットを足して、掃引の始点を返します。
 engine::Vector3 ResolveQueryCenter(const engine::Object3D& owner, const engine::Vector3& position) {
-    // モデル原点ではなくコライダー中心から Sweep を始める。
     const engine::Object3D::ColliderConfig& collider = owner.GetColliderConfig();
     return position + collider.center;
 }
@@ -59,6 +59,8 @@ void CharacterMotor::BeginFrame(bool& grounded) {
     result_.steppedUp = false;
     result_.groundNormal = {0.0f, 1.0f, 0.0f};
     result_.groundObject = nullptr;
+    result_.horizontalHitObject = nullptr;
+    result_.horizontalHitNormal = {};
     grounded = false;
 }
 
@@ -67,6 +69,7 @@ void CharacterMotor::ApplyGravity(engine::Vector3& velocity, float gravity, floa
     // 重力は下向き加速度の大きさ、deltaTimeは秒。掛け合わせた速度変化を鉛直速度から引きます。
     velocity.y -= gravity * deltaTime;
 
+    // 重力を反映した鉛直速度が落下上限を下回れば、下向きの符号を保って上限に丸める。
     if (velocity.y < -maxFallSpeed) {
         velocity.y = -maxFallSpeed;
     }
@@ -80,8 +83,8 @@ void CharacterMotor::Move(engine::Object3D& owner, engine::Vector3& position, en
 
     const engine::Vector3 displacement = velocity * deltaTime;
 
+    // 連続衝突を無効にした設定では、掃引を行わず変位を一度だけ位置に足す。
     if (!settings_.continuousCollision) {
-        // 既存実装と同じ積分式を維持する互換経路です。
         position += displacement;
         return;
     }
@@ -89,10 +92,10 @@ void CharacterMotor::Move(engine::Object3D& owner, engine::Vector3& position, en
     MoveSwept(owner, position, velocity, grounded, displacement);
 }
 
-void CharacterMotor::ResolveCollision(engine::Vector3& position, engine::Vector3& velocity, bool& grounded, const CollisionInfo& info,
+void CharacterMotor::ResolveCollision(engine::Vector3& position, engine::Vector3& velocity, bool& grounded, const engine::CollisionInfo& info,
                                       std::uint32_t attribute) {
     // 地面以外の接触では押し戻しや接地状態を変更しない。
-    if (!(attribute & CollisionCategories::Get("ground"))) {
+    if (!(attribute & engine::collisionCategories::Get("ground"))) {
         return;
     }
 
@@ -101,18 +104,20 @@ void CharacterMotor::ResolveCollision(engine::Vector3& position, engine::Vector3
 
     const float velocityIntoSurface = Dot(velocity, info.normal);
 
+    // 内積が負なら速度に面へ入る成分があるので、その成分だけ打ち消す。
     if (velocityIntoSurface < 0.0f) {
         velocity = velocity - info.normal * velocityIntoSurface;
     }
 
     result_.blocked = true;
 
-    // 歩ける傾きの面に限って接地させ、下降速度をリセットします。
+    // 接触の法線が歩行可能な傾きの場合だけ、この接触を床として記録する。
     if (IsWalkable(info.normal)) {
         grounded = true;
         result_.grounded = true;
         result_.groundNormal = info.normal;
 
+        // 床に触れた後も下向きの速度が残っていれば、鉛直速度を0にする。
         if (velocity.y < 0.0f) {
             velocity.y = 0.0f;
         }
@@ -127,12 +132,12 @@ bool CharacterMotor::IsWalkable(const engine::Vector3& normal) const {
 
 bool CharacterMotor::TryStep(engine::Object3D& owner, engine::Vector3& position, engine::Vector3& velocity, bool& grounded,
                              const engine::Vector3& planarDisplacement, float queryRadius) {
-    // 一度上へ持ち上げて前方の空きを調べ、着地できる段差だけ越える。
+    // 段差越えの高さが0以下か、水平変位がしきい値以下なら、持ち上げの判定を始めない。
     if (settings_.stepHeight <= 0.0f || Length(planarDisplacement) <= kMinimumDistance) {
         return false;
     }
 
-    PhysicsQueryFilter filter;
+    engine::PhysicsQueryFilter filter;
     filter.mask = settings_.collisionMask;
     filter.ignoredObject = &owner;
     filter.includeTriggers = false;
@@ -142,22 +147,24 @@ bool CharacterMotor::TryStep(engine::Object3D& owner, engine::Vector3& position,
     const engine::Vector3 direction = NormalizeOrZero(planarDisplacement);
     const engine::Vector3 raisedPosition = position + engine::Vector3{0.0f, settings_.stepHeight, 0.0f};
     const engine::Vector3 raisedCenter = ResolveQueryCenter(owner, raisedPosition);
-    const RaycastHit forwardHit = CollisionManager::GetInstance()->SphereCast(
+    const engine::RaycastHit forwardHit = engine::CollisionManager::GetInstance()->SphereCast(
         raisedCenter, queryRadius, direction, planarDistance + settings_.skinWidth, filter);
+    // 持ち上げた高さでも水平経路が遮られていれば、位置を動かす前に段差越えを中止する。
     if (forwardHit.isHit) {
         return false;
     }
 
-    // 持ち上げた位置から候補地点へ進め、歩ける床がなければ段差分の高さだけを戻します。
+    // 持ち上げた位置から候補地点へ水平移動し、その地点の下に床を探す。
     position = raisedPosition + planarDisplacement;
     SnapToGround(owner, position, velocity, grounded, queryRadius,
                  settings_.stepHeight + settings_.groundProbeDistance);
+    // 接地補正後もgroundedがfalseなら、追加した高さだけを戻す。水平移動分は位置に残る。
     if (!grounded) {
         position = position - engine::Vector3{0.0f, settings_.stepHeight, 0.0f};
         return false;
     }
 
-    // 候補地点で歩ける床まで到達した時だけ、上がった位置を段差越えとして報告します。
+    // 接地状態が得られた経路を段差越えとして呼び出し元へ報告する。
     result_.steppedUp = true;
     return true;
 }
@@ -165,7 +172,7 @@ bool CharacterMotor::TryStep(engine::Object3D& owner, engine::Vector3& position,
 void CharacterMotor::MoveSwept(engine::Object3D& owner, engine::Vector3& position, engine::Vector3& velocity, bool& grounded,
                                const engine::Vector3& displacement) {
     // 自分自身とトリガーを除外し、固体だけを連続衝突の対象にします。
-    PhysicsQueryFilter filter;
+    engine::PhysicsQueryFilter filter;
     filter.mask = settings_.collisionMask;
     filter.ignoredObject = &owner;
     filter.includeTriggers = false;
@@ -174,16 +181,20 @@ void CharacterMotor::MoveSwept(engine::Object3D& owner, engine::Vector3& positio
     const engine::Vector3 planarDisplacement = {displacement.x, 0.0f, displacement.z};
     const float planarDistance = Length(planarDisplacement);
 
+    // 水平の移動距離がしきい値を超えるときだけ、横方向の掃引を行う。
     if (planarDistance > kMinimumDistance) {
         // 横移動を先に Sweep し、遮蔽物があれば段差越えを試してから表面方向へ逃がす。
         const engine::Vector3 planarDirection = planarDisplacement * (1.0f / planarDistance);
-        const RaycastHit hit =
-            CollisionManager::GetInstance()->SphereCast(ResolveQueryCenter(owner, position), queryRadius,
+        const engine::RaycastHit hit =
+            engine::CollisionManager::GetInstance()->SphereCast(ResolveQueryCenter(owner, position), queryRadius,
                                                         planarDirection, planarDistance + settings_.skinWidth, filter);
+        // 横方向に当たる物が見つからなければ、予定した水平変位をそのまま適用する。
         if (!hit.isHit) {
             position += planarDisplacement;
         // 段差を越えられなければ接触直前まで進み、残りの変位と速度から面へ向かう成分を除きます。
         } else if (!TryStep(owner, position, velocity, grounded, planarDisplacement, queryRadius)) {
+            result_.horizontalHitObject = hit.hitObject;
+            result_.horizontalHitNormal = hit.normal;
             const float safeDistance = (std::max)(0.0f, hit.distance - settings_.skinWidth);
             const float travelledDistance = (std::min)(safeDistance, planarDistance);
             position += planarDirection * travelledDistance;
@@ -191,15 +202,17 @@ void CharacterMotor::MoveSwept(engine::Object3D& owner, engine::Vector3& positio
             engine::Vector3 remaining = planarDisplacement - planarDirection * travelledDistance;
             const float intoSurface = Dot(remaining, hit.normal);
 
+            // 残りの変位が壁へ向かう場合は、法線方向の成分を引いて壁に沿う移動を残す。
             if (intoSurface < 0.0f) {
                 remaining = remaining - hit.normal * intoSurface;
             }
 
             position += remaining;
 
-            // このフレームの残り変位に続き、次回の移動へ渡す速度からも壁向きの成分を取り除きます。
+            // 残り変位の補正を終えたら、次の移動に引き継ぐ速度も壁の法線と比較する。
             const float velocityIntoSurface = Dot(velocity, hit.normal);
 
+            // 次回に持ち越す速度がまだ壁へ向いていれば、壁向きの成分だけを取り除く。
             if (velocityIntoSurface < 0.0f) {
                 velocity = velocity - hit.normal * velocityIntoSurface;
             }
@@ -211,13 +224,16 @@ void CharacterMotor::MoveSwept(engine::Object3D& owner, engine::Vector3& positio
     // 横方向を解決してから、その地点で上方向・下方向の移動を検査します。
     const float verticalDistance = std::abs(displacement.y);
 
+    // 鉛直変位がしきい値を超える場合に限り、予定した上下方向へ掃引する。
     if (verticalDistance > kMinimumDistance) {
         const engine::Vector3 verticalDirection = {0.0f, displacement.y > 0.0f ? 1.0f : -1.0f, 0.0f};
-        const RaycastHit hit = CollisionManager::GetInstance()->SphereCast(
+        const engine::RaycastHit hit = engine::CollisionManager::GetInstance()->SphereCast(
             ResolveQueryCenter(owner, position), queryRadius, verticalDirection, verticalDistance + settings_.skinWidth,
             filter);
+        // 上下の経路に衝突がなければ、予定していた高さまでそのまま移動する。
         if (!hit.isHit) {
             position.y += displacement.y;
+        // 上下の経路に当たる物があれば、接触面と隙間を保てる範囲で高さを変える。
         } else {
             const float safeDistance = (std::max)(0.0f, hit.distance - settings_.skinWidth);
             position.y += verticalDirection.y * (std::min)(safeDistance, verticalDistance);
@@ -230,32 +246,34 @@ void CharacterMotor::MoveSwept(engine::Object3D& owner, engine::Vector3& positio
                 result_.groundObject = hit.hitObject;
             }
 
+            // 上下方向で接触した場合は、床として使える面かにかかわらず鉛直速度を止める。
             velocity.y = 0.0f;
             result_.blocked = true;
         }
     }
 
+    // 床への吸着が有効で速度が水平または下降中なら、下向きの接地補正を行う。
     if (settings_.snapToGround && velocity.y <= 0.0f) {
-        // 上昇中は地面へ引き戻さず、下降・水平移動時だけ接地を補正する。
         SnapToGround(owner, position, velocity, grounded, queryRadius, settings_.groundProbeDistance);
     }
 }
 
 void CharacterMotor::SnapToGround(engine::Object3D& owner, engine::Vector3& position, engine::Vector3& velocity, bool& grounded,
                                   float queryRadius, float maximumDistance) {
-    // 小さな段差からの離陸を防ぐため、歩行可能な面に限って下方へ吸着する。
+    // 吸着できる距離が0以下なら、下向きの検索や位置補正を行わない。
     if (maximumDistance <= 0.0f) {
         return;
     }
 
-    PhysicsQueryFilter filter;
+    engine::PhysicsQueryFilter filter;
     filter.mask = settings_.collisionMask;
     filter.ignoredObject = &owner;
     filter.includeTriggers = false;
 
-    const RaycastHit hit =
-        CollisionManager::GetInstance()->SphereCast(ResolveQueryCenter(owner, position), queryRadius,
+    const engine::RaycastHit hit =
+        engine::CollisionManager::GetInstance()->SphereCast(ResolveQueryCenter(owner, position), queryRadius,
                                                     {0.0f, -1.0f, 0.0f}, maximumDistance + settings_.skinWidth, filter);
+    // 足元に何もないか、当たった面が歩行可能な傾きを超える場合は吸着しない。
     if (!hit.isHit || !IsWalkable(hit.normal)) {
         return;
     }
@@ -268,6 +286,7 @@ void CharacterMotor::SnapToGround(engine::Object3D& owner, engine::Vector3& posi
     result_.groundNormal = hit.normal;
     result_.groundObject = hit.hitObject;
 
+    // 吸着で床に乗った後は、残っている下向きの速度を打ち消す。
     if (velocity.y < 0.0f) {
         velocity.y = 0.0f;
     }

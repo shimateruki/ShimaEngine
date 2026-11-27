@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include <cstdint>
 #include "DebugEditor.h"
 #include <numbers>
 #include "SceneManager.h"    
@@ -43,7 +44,7 @@
 
 #include <DebugConsole.h>
 #include <CollisionManager.h>
-#include <filesystem> // ファイル操作用
+#include <filesystem>
 #include <game/system/combat/BulletManager.h>
 #include "engine/editor/assets/preset/PresetManager.h"
 #include <PresetEditor.h>
@@ -57,17 +58,16 @@ namespace fs = std::filesystem;
 
 
 
-// ========================================================================
-// 初期化
-// ========================================================================
 
 void DebugEditor::SetSelectedObject(engine::Object3D* obj) {
     // 現在のSceneに属するObjectだけ選択し、古いSceneのポインタは保持しません。
     selectedObjects_.clear();
 
+    // 有効な現在のシーンの実体なら、単独選択として保持する。
     if (obj && IsObjectInCurrentScene(obj)) {
         selectedObject_ = obj;
         selectedObjects_.push_back(obj);
+    // 選択解除や他シーンの参照なら、主選択も空にする。
     } else {
         selectedObject_ = nullptr;
     }
@@ -76,13 +76,16 @@ void DebugEditor::SetSelectedObject(engine::Object3D* obj) {
 void DebugEditor::SyncObjectSelectionToInspector() {
     // Ghost系Editorが選択中ならInspectorを奪わず、通常のObject選択だけ同期します。
     EditorManager* editorManager = EditorManager::GetInstance();
+    // Ghostの再生・演出ツールがInspectorを使っている間は、選択先を変更しない。
     if ((ghostRecorder_ && editorManager->GetSelectedObject() == ghostRecorder_) ||
         (ghostDirector_ && editorManager->GetSelectedObject() == ghostDirector_)) {
         return;
     }
 
+    // 主選択がある場合は、シーンオブジェクトを表示するInspectorの担当を選ぶ。
     if (selectedObject_) {
         editorManager->SetSelectedObject(this);
+    // オブジェクトの主選択がなければ、Inspector側の選択を解除する。
     } else {
         editorManager->ClearSelection();
     }
@@ -99,10 +102,12 @@ bool DebugEditor::FocusSceneObject(engine::Object3D* object) {
 
 bool DebugEditor::IsObjectSelected(const engine::Object3D* object) const {
     // 選択配列に残った古いポインタを肯定しないようScene所属も調べます。
+    // 有効な現在のシーンの実体でなければ、その参照が選択配列に残っていてもfalseを返す。
     if (!object || !IsObjectInCurrentScene(object))
         return false;
 
     for (engine::Object3D* selected : selectedObjects_) {
+        // 現在の選択集合から同一の実体を見つけた場合にtrueを返す。
         if (selected == object)
             return true;
     }
@@ -110,15 +115,15 @@ bool DebugEditor::IsObjectSelected(const engine::Object3D* object) const {
     return false;
 }
 
-int DebugEditor::GetSelectionOverlayMode() const {
+std::int32_t DebugEditor::GetSelectionOverlayMode() const {
     // UI保存用の整数値として選択表示モードを返します。
-    return static_cast<int>(selectionOverlayMode_);
+    return static_cast<std::int32_t>(selectionOverlayMode_);
 }
 
-void DebugEditor::SetSelectionOverlayMode(int mode) {
+void DebugEditor::SetSelectionOverlayMode(std::int32_t mode) {
     // 永続化データの範囲外値を無視し、表示モードを不正な列挙値にしません。
-    if (mode < static_cast<int>(SelectionOverlayMode::Compact) ||
-        mode > static_cast<int>(SelectionOverlayMode::Hidden)) {
+    if (mode < static_cast<std::int32_t>(SelectionOverlayMode::kCompact) ||
+        mode > static_cast<std::int32_t>(SelectionOverlayMode::kHidden)) {
         return;
     }
 
@@ -134,10 +139,12 @@ void DebugEditor::ClearObjectSelection() {
 
 void DebugEditor::AddSelectedObject(engine::Object3D* object) {
     // 同じObjectを重複登録せず、最後に追加したものを主選択にします。
+    // 現在のシーンが保持する有効な参照だけ、複数選択に加えられる。
     if (!object || !IsObjectInCurrentScene(object))
         return;
 
     for (engine::Object3D* selected : selectedObjects_) {
+        // すでに登録済みならその実体を主選択にし、配列の要素は増やさない。
         if (selected == object) {
             selectedObject_ = object;
             return;
@@ -150,10 +157,12 @@ void DebugEditor::AddSelectedObject(engine::Object3D* object) {
 
 void DebugEditor::ToggleSelectedObject(engine::Object3D* object) {
     // 除外後の主選択を最後の残存Objectへ移し、選択配列と同期します。
+    // 有効なオブジェクトに対してだけ、選択状態を切り替える。
     if (!object || !IsObjectInCurrentScene(object))
         return;
 
     for (auto it = selectedObjects_.begin(); it != selectedObjects_.end(); ++it) {
+        // すでに選択中の場合は外し、残っている最後の要素を主選択にする。
         if (*it == object) {
             selectedObjects_.erase(it);
             selectedObject_ = selectedObjects_.empty() ? nullptr : selectedObjects_.back();
@@ -161,6 +170,7 @@ void DebugEditor::ToggleSelectedObject(engine::Object3D* object) {
         }
     }
 
+    // まだ選ばれていない場合は、通常の追加経路で主選択にする。
     AddSelectedObject(object);
 }
 
@@ -170,18 +180,21 @@ void DebugEditor::PruneInvalidSelectedObjects() {
     validObjects.reserve(selectedObjects_.size());
 
     for (engine::Object3D* object : selectedObjects_) {
+        // 無効な参照やシーンをまたいだ参照は新しい選択集合へ残さない。
         if (!object || !IsObjectInCurrentScene(object))
             continue;
 
         bool alreadyAdded = false;
 
         for (engine::Object3D* added : validObjects) {
+            // 同じ実体が既に新しい集合にあれば、重複として記録する。
             if (added == object) {
                 alreadyAdded = true;
                 break;
             }
         }
 
+        // 現シーンにあり、まだ保存していない実体だけ選択集合へ書き戻す。
         if (!alreadyAdded) {
             validObjects.push_back(object);
         }
@@ -189,20 +202,24 @@ void DebugEditor::PruneInvalidSelectedObjects() {
 
     selectedObjects_ = validObjects;
 
+    // 主選択を失った場合は、有効な最後の選択へ移す。残りがなければ解除する。
     if (!selectedObject_ || !IsObjectInCurrentScene(selectedObject_)) {
         selectedObject_ = selectedObjects_.empty() ? nullptr : selectedObjects_.back();
     }
 }
 
+// ワールド座標の線分上で、選択または配置に使える最も手前の面を探す。交差位置は0～1の線分比率。
 bool DebugEditor::RaycastSceneSurface(const engine::Ray& ray, engine::RayResult& result,
     engine::Object3D** hitObject, const engine::Object3D* ignore, bool forSelection,
     const std::unordered_set<std::string>* ignoredRootGuids) {
 
     result = {};
+    // 当たった実体を受け取る引数がある場合は、未命中の状態に初期化する。
     if (hitObject) *hitObject = nullptr;
     const auto finite = [](const engine::Vector3& v) {
         return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
     };
+    // 現在のシーンがないか、線分が非有限または長さがほぼ0なら判定できない。
     if (!sceneManager_ || !sceneManager_->GetCurrentScene() || !finite(ray.origin) || !finite(ray.diff) ||
         engine::Math::Dot(ray.diff, ray.diff) < 1e-12f)
         return false;
@@ -212,9 +229,10 @@ bool DebugEditor::RaycastSceneSurface(const engine::Ray& ray, engine::RayResult&
     auto accept = [&](engine::Object3D* object, float distance, const engine::Vector3& localNormal,
                       const engine::Matrix4x4& inverseWorld) {
         auto normal = engine::Math::TransformNormal(localNormal, engine::Math::Transpose(inverseWorld));
+        // 逆転置後の法線が無効なら、位置だけが正しくても候補を採用しない。
         if (!finite(normal) || engine::Math::Dot(normal, normal) < 1e-12f) return;
         normal = engine::Math::Normalize(normal);
-        // 両面を拾うため、配置側へ向く法線にそろえる。非一様拡大には逆転置を使う。
+        // 表裏を区別せず交差を許すため、法線はレイの進行方向と反対を向くよう揃える。
         if (engine::Math::Dot(normal, ray.diff) > 0) normal = -normal;
         bestDistance = distance; hit = object;
         result = { true, distance, ray.origin + ray.diff * distance, normal };
@@ -222,26 +240,31 @@ bool DebugEditor::RaycastSceneSurface(const engine::Ray& ray, engine::RayResult&
     auto& objects = sceneManager_->GetCurrentScene()->GetObjects();
 
     for (auto& obj : objects) {
+        // 空の枠とエディター内部のオブジェクトを判定から外す。
         if (!obj || obj->IsEditorInternal())
             continue;
+        // カーソルや描画補助の線を名前で除外する。
         if (obj->GetName() == "Cursor" || obj->GetName() == "Line")
             continue;
+        // 描画されない物は除外する。ロックは選択用途の場合にだけ対象外とする。
         if (!obj->GetIsRenderVisible() || (forSelection && obj->GetIsLocked()))
             continue;
         bool ignored = false;
         for (auto* ancestor = obj.get(); ancestor; ancestor = ancestor->GetParent())
+            // オブジェクト自身または祖先が除外対象なら、その階層の面を判定しない。
             if (ancestor == ignore || (ignoredRootGuids && ignoredRootGuids->contains(ancestor->GetPersistentGuid()))) {
                 ignored = true; break;
             }
+        // 除外された階層に加え、配置に使う面の検索ではモデルのない物も飛ばす。
         if (ignored || (!forSelection && !obj->GetModel()))
             continue;
 
         const engine::Matrix4x4 worldMatrix = obj->GetWorldMatrix();
 
-        // ゼロスケールの変換行列は逆変換できないため、選択判定から除外する。
         const engine::Vector3 axisX = { worldMatrix.m[0][0], worldMatrix.m[0][1], worldMatrix.m[0][2] };
         const engine::Vector3 axisY = { worldMatrix.m[1][0], worldMatrix.m[1][1], worldMatrix.m[1][2] };
         const engine::Vector3 axisZ = { worldMatrix.m[2][0], worldMatrix.m[2][1], worldMatrix.m[2][2] };
+        // 変換のいずれかの軸がほぼ0なら逆変換できないため、その物体を調べない。
         if (engine::Math::Dot(axisX, axisX) < 1e-12f ||
             engine::Math::Dot(axisY, axisY) < 1e-12f ||
             engine::Math::Dot(axisZ, axisZ) < 1e-12f) continue;
@@ -253,17 +276,20 @@ bool DebugEditor::RaycastSceneSurface(const engine::Ray& ray, engine::RayResult&
             engine::Math::TransformNormal(ray.diff, inverseWorld)
         };
 
+        // ローカルへ変換した結果が非有限なら、その物体との交差を判定しない。
         if (!std::isfinite(localRay.origin.x) || !std::isfinite(localRay.origin.y) || !std::isfinite(localRay.origin.z) ||
             !std::isfinite(localRay.diff.x) || !std::isfinite(localRay.diff.y) || !std::isfinite(localRay.diff.z)) continue;
         engine::Vector3 localMin = { -0.5f, -0.5f, -0.5f };
         engine::Vector3 localMax = { 0.5f, 0.5f, 0.5f };
         engine::Model* model = obj->GetModel();
 
+        // モデルがある場合はモデルのローカル境界を使い、モデルなし選択では既定の単位箱を使う。
         if (model) {
             localMin = model->GetLocalAabbMin();
             localMax = model->GetLocalAabbMax();
         }
 
+        // 境界値が非有限か最小値と最大値が逆の場合は、交差区間を作らない。
         if (!std::isfinite(localMin.x) || !std::isfinite(localMin.y) || !std::isfinite(localMin.z) ||
             !std::isfinite(localMax.x) || !std::isfinite(localMax.y) || !std::isfinite(localMax.z) ||
             localMin.x > localMax.x || localMin.y > localMax.y || localMin.z > localMax.z) continue;
@@ -277,11 +303,13 @@ bool DebugEditor::RaycastSceneSurface(const engine::Ray& ray, engine::RayResult&
         bool intersects = true;
 
         // 各軸で箱に入っているレイ区間を重ねる。区間が重ならなければ、箱を通過する点は存在しない。
-        for (int axis = 0; axis < 3; ++axis) {
+        for (std::int32_t axis = 0; axis < 3; ++axis) {
+            // どれかの軸で始点が箱の外にあれば、始点を外部とする。
             if (origins[axis] < mins[axis] || origins[axis] > maxs[axis])
                 startsInside = false;
             // 面とほぼ平行な軸では、始点がその軸の範囲内かだけ確認する。
             if (std::abs(directions[axis]) < 1e-6f) {
+                // 平行に近く、始点がその軸の範囲外なら、この線分は箱の内側へ入れない。
                 if (origins[axis] < mins[axis] || origins[axis] > maxs[axis])
                     intersects = false;
                 continue;
@@ -289,17 +317,20 @@ bool DebugEditor::RaycastSceneSurface(const engine::Ray& ray, engine::RayResult&
 
             float nearT = (mins[axis] - origins[axis]) / directions[axis];
             float farT = (maxs[axis] - origins[axis]) / directions[axis];
+            // 逆向きの軸では二つの交点が逆順で出るため、入口と出口を入れ替える。
             if (nearT > farT)
                 std::swap(nearT, farT);
             entry = (std::max)(entry, nearT);
             exit = (std::min)(exit, farT);
 
+            // 現在までに求めた入口が出口を越えたら、全軸で共通する交差区間はない。
             if (entry > exit) {
                 intersects = false;
                 break;
             }
         }
 
+        // 箱を通過しないか既に見つけた面より手前に入口がない場合は、三角形の計算を省く。
         if (!intersects || entry > bestDistance)
             continue;
 
@@ -307,11 +338,13 @@ bool DebugEditor::RaycastSceneSurface(const engine::Ray& ray, engine::RayResult&
         // アニメーション中の頂点はCPU側と一致しないため、従来の箱判定を使う。
         const bool useMeshSurface = model && !model->GetModelData().hasSkinning &&
             !model->GetModelData().usesNodeAnimationProxy;
+        // モデルがあり、ボーンでもノードでも頂点が変形しない場合に、実際の面で選別する。
         if (useMeshSurface) {
             const auto& meshes = model->GetModelData().meshes;
-            const int drawIndex = obj->GetMeshDrawIndex();
+            const std::int32_t drawIndex = obj->GetMeshDrawIndex();
 
             for (size_t meshIndex = 0; meshIndex < meshes.size(); ++meshIndex) {
+                // 描画メッシュを指定されている場合、表示対象外のメッシュの三角形は調べない。
                 if (drawIndex >= 0 && meshIndex != static_cast<size_t>(drawIndex))
                     continue;
                 const auto& mesh = meshes[meshIndex];
@@ -320,6 +353,7 @@ bool DebugEditor::RaycastSceneSurface(const engine::Ray& ray, engine::RayResult&
                     const uint32_t i0 = mesh.indices[index];
                     const uint32_t i1 = mesh.indices[index + 1];
                     const uint32_t i2 = mesh.indices[index + 2];
+                    // 三点のいずれかが頂点配列に存在しない面は交差を計算できない。
                     if (i0 >= mesh.vertices.size() || i1 >= mesh.vertices.size() || i2 >= mesh.vertices.size())
                         continue;
                     const auto& a = mesh.vertices[i0].position;
@@ -328,42 +362,52 @@ bool DebugEditor::RaycastSceneSurface(const engine::Ray& ray, engine::RayResult&
                     const engine::Vector3 edge1 = { b.x - a.x, b.y - a.y, b.z - a.z };
                     const engine::Vector3 edge2 = { c.x - a.x, c.y - a.y, c.z - a.z };
                     const engine::Vector3 p = engine::Math::Cross(localRay.diff, edge2);
-                    // レイが面とほぼ平行な三角形を除外し、辺に対する比率 u と v で交差点が三角形内部かを判定する。
+                    // レイが面と平行に近い場合は分母が0に近くなるため、交差の計算を進めない。
                     const float determinant = engine::Math::Dot(edge1, p);
+                    // 行列式の絶対値がしきい値より小さい場合は、その面を飛ばす。
                     if (std::abs(determinant) < 1e-8f)
                         continue;
                     const float inverseDeterminant = 1.0f / determinant;
                     const engine::Vector3 fromA = { localRay.origin.x - a.x, localRay.origin.y - a.y, localRay.origin.z - a.z };
                     const float u = engine::Math::Dot(fromA, p) * inverseDeterminant;
+                    // 最初の辺の比率が0から1の範囲を外れた場合は三角形の外。
                     if (u < 0.0f || u > 1.0f)
                         continue;
                     const engine::Vector3 q = engine::Math::Cross(fromA, edge1);
                     const float v = engine::Math::Dot(localRay.diff, q) * inverseDeterminant;
+                    // もう一方の比率が負か、二つの比率の和が1を超えた場合も三角形の外。
                     if (v < 0.0f || u + v > 1.0f)
                         continue;
                     const float distance = engine::Math::Dot(edge2, q) * inverseDeterminant;
 
+                    // 交差位置が線分内で、現在の最寄り候補より手前の場合だけ登録を試みる。
                     if (distance >= 0.0f && distance <= 1.0f && distance < bestDistance) {
                         accept(obj.get(), distance, engine::Math::Cross(edge1, edge2), inverseWorld);
                     }
                 }
             }
+        // 頂点が変形するモデルやモデルなし選択では、三角形の代わりにローカル境界箱を使う。
         } else {
             // 箱の内側から始まるレイは出口を比較し、周囲の大きなObjectを優先しない。
             const float distance = startsInside ? exit : entry;
 
+            // 入出口のうち使う点が線分内で、現在の候補より手前なら、触れた箱の面を調べる。
             if (distance >= 0.0f && distance < bestDistance) {
                 const auto point = localRay.origin + localRay.diff * distance;
                 engine::Vector3 normal{};
                 float nearest = (std::numeric_limits<float>::max)();
                 const float coords[3] = {point.x, point.y, point.z};
-                for (int axis = 0; axis < 3; ++axis) {
-                    for (int side = 0; side < 2; ++side) {
+                for (std::int32_t axis = 0; axis < 3; ++axis) {
+                    for (std::int32_t side = 0; side < 2; ++side) {
                         const float error = std::abs(coords[axis] - (side ? maxs[axis] : mins[axis]));
+                        // 交差点と面の座標との差が最小になった軸と側から、その外向き法線を選ぶ。
                         if (error < nearest) {
                             nearest = error; normal = {};
+                            // 差が最小の面がXに垂直なら、X成分だけを外側へ向ける。
                             if (axis == 0) normal.x = side ? 1.f : -1.f;
+                            // 差が最小の面がYに垂直なら、Y成分だけを外側へ向ける。
                             if (axis == 1) normal.y = side ? 1.f : -1.f;
+                            // 差が最小の面がZに垂直なら、Z成分だけを外側へ向ける。
                             if (axis == 2) normal.z = side ? 1.f : -1.f;
                         }
                     }
@@ -373,10 +417,12 @@ bool DebugEditor::RaycastSceneSurface(const engine::Ray& ray, engine::RayResult&
         }
     }
 
+    // 出力先が指定された場合は最寄りの実体を渡し、未命中ならnullptrのままにする。
     if (hitObject) *hitObject = hit;
     return result.isHit;
 }
 
+// ゲームビューのピクセル位置を選択用の線分に変換し、最前面の操作対象を返す。
 engine::Object3D* DebugEditor::PickObjectAtGameViewPos(const engine::Vector2& mousePos) {
     engine::RayResult result{};
     engine::Object3D* hit = nullptr;
@@ -392,11 +438,13 @@ engine::Object3D* DebugEditor::PickObjectAtGameViewPos(const engine::Vector2& mo
 
 engine::Vector3 DebugEditor::GetObjectWorldPositionForSelection(engine::Object3D* object) {
     // モデルのワールドAABBが有効なら、その中心を画面選択の代表点にします。
+    // 実体を参照できない場合は代表点を原点として返す。
     if (!object)
         return { 0.0f, 0.0f, 0.0f };
 
-    Aabb modelAabb = object->GetModelWorldAabb();
+    engine::Aabb modelAabb = object->GetModelWorldAabb();
 
+    // モデルのワールド境界が有効な場合は、その中心を代表点にする。
     if (IsValidAabb(modelAabb)) {
         return {
             (modelAabb.min.x + modelAabb.max.x) * 0.5f,
@@ -405,12 +453,14 @@ engine::Vector3 DebugEditor::GetObjectWorldPositionForSelection(engine::Object3D
         };
     }
 
+    // モデル境界が取れない場合は、実体のワールド行列の並進を代表点にする。
     engine::Matrix4x4 worldMatrix = object->GetWorldMatrix();
     return { worldMatrix.m[3][0], worldMatrix.m[3][1], worldMatrix.m[3][2] };
 }
 
 void DebugEditor::SelectObjectsInGameViewRect(const engine::Vector2& start, const engine::Vector2& end, bool additive) {
     // Game View内のドラッグ矩形を画面座標へ変換してObjectの投影位置と比べます。
+    // 現在のシーンがなければ投影する実体がないため、選択を変更しない。
     if (!sceneManager_ || !sceneManager_->GetCurrentScene())
         return;
 
@@ -425,6 +475,7 @@ void DebugEditor::SelectObjectsInGameViewRect(const engine::Vector2& start, cons
     const float screenTop = gameViewOffset_.y + localTop;
     const float screenBottom = gameViewOffset_.y + localBottom;
 
+    // 既存の選択に追加する指定がなければ、ドラッグ前の選択を解除する。
     if (!additive) {
         ClearObjectSelection();
     }
@@ -432,24 +483,30 @@ void DebugEditor::SelectObjectsInGameViewRect(const engine::Vector2& start, cons
     auto& objects = sceneManager_->GetCurrentScene()->GetObjects();
 
     for (auto& obj : objects) {
+        // 空の枠とエディター内部の実体を矩形選択から外す。
         if (!obj || obj->IsEditorInternal())
             continue;
+        // 名前で識別するカーソルと線の補助物を除く。
         if (obj->GetName() == "Cursor" || obj->GetName() == "Line")
             continue;
+        // 非表示の実体と編集をロックした実体を選択に加えない。
         if (!obj->GetIsRenderVisible() || obj->GetIsLocked())
             continue;
 
         // 境界が矩形に少しかかるだけでは選択しない。モデルの代表点を投影し、矩形に収まる Object を選ぶ。
         engine::Vector3 screenPosition = WorldToScreen(GetObjectWorldPositionForSelection(obj.get()));
+        // 視点の後方へ投影された代表点は、画面上の矩形に含めない。
         if (screenPosition.z < 0.0f)
             continue;
 
+        // 代表点がドラッグ矩形の上下左右の内側か境界にあれば選ぶ。
         if (screenPosition.x >= screenLeft && screenPosition.x <= screenRight &&
             screenPosition.y >= screenTop && screenPosition.y <= screenBottom) {
             AddSelectedObject(obj.get());
         }
     }
 
+    // 主選択がある場合か、前の選択を置換した場合に、Inspectorの表示を同期する。
     if (selectedObject_ || !additive) {
         SyncObjectSelectionToInspector();
     }
@@ -475,20 +532,24 @@ void DebugEditor::DrawSelectionRectangleOverlay() {
 #endif
 }
 
+// 現在選択中の実体を、通常・詳細の表示方式に合う印や枠でゲームビューに重ねる。
 void DebugEditor::DrawSelectedObjectBoundsOverlay() {
 #ifdef USE_IMGUI
+    // 選択表示を無効にしていれば、境界の投影を行わない。
     if (!drawSelectionBounds_)
         return;
     PruneInvalidSelectedObjects();
-    if (selectedObjects_.empty() || selectionOverlayMode_ == SelectionOverlayMode::Hidden)
+    // 無効な選択を除いた後、表示対象が空か非表示モードなら描画しない。
+    if (selectedObjects_.empty() || selectionOverlayMode_ == SelectionOverlayMode::kHidden)
         return;
+    // ゲームビューの幅か高さがほぼない場合は、座標変換とクリップを省く。
     if (gameViewSize_.x <= 1.0f || gameViewSize_.y <= 1.0f)
         return;
 
     ImDrawList* drawList = ImGui::GetForegroundDrawList();
     const std::size_t selectedCount = selectedObjects_.size();
     const bool showTemporaryDetails =
-        selectionOverlayMode_ == SelectionOverlayMode::Compact && ImGui::GetIO().KeyAlt;
+        selectionOverlayMode_ == SelectionOverlayMode::kCompact && ImGui::GetIO().KeyAlt;
     const ImVec2 viewMin = ImVec2(gameViewOffset_.x, gameViewOffset_.y);
     const ImVec2 viewMax = ImVec2(
         gameViewOffset_.x + gameViewSize_.x,
@@ -515,6 +576,7 @@ void DebugEditor::DrawSelectedObjectBoundsOverlay() {
             1.3f);
     };
 
+    // 矩形の角を二本ずつの短い線で示し、背景用の太い線を先に描く。
     auto drawCornerBrackets = [&](const ImVec2& minimum, const ImVec2& maximum, ImU32 color, float thickness) {
         const float width = maximum.x - minimum.x;
         const float height = maximum.y - minimum.y;
@@ -536,11 +598,11 @@ void DebugEditor::DrawSelectedObjectBoundsOverlay() {
             { maximum.x - bracketLength, maximum.y }, { maximum.x, maximum.y - bracketLength }
         };
 
-        for (int i = 0; i < 8; ++i) {
+        for (std::int32_t i = 0; i < 8; ++i) {
             drawList->AddLine(starts[i], ends[i], shadowColor, shadowThickness);
         }
 
-        for (int i = 0; i < 8; ++i) {
+        for (std::int32_t i = 0; i < 8; ++i) {
             drawList->AddLine(starts[i], ends[i], color, thickness);
         }
     };
@@ -548,6 +610,7 @@ void DebugEditor::DrawSelectedObjectBoundsOverlay() {
     drawList->PushClipRect(viewMin, viewMax, true);
 
     for (engine::Object3D* object : selectedObjects_) {
+        // 実体が無いか現在のシーンに属さない場合は、表示対象にしません。
         if (!object || !IsObjectInCurrentScene(object))
             continue;
 
@@ -562,6 +625,7 @@ void DebugEditor::DrawSelectedObjectBoundsOverlay() {
             const bool isFiniteBounds =
                 std::isfinite(localMin.x) && std::isfinite(localMin.y) && std::isfinite(localMin.z) &&
                 std::isfinite(localMax.x) && std::isfinite(localMax.y) && std::isfinite(localMax.z);
+            // ローカル境界の全成分が有限で、範囲の順序も有効な場合だけ8頂点を変換する。
             if (isFiniteBounds &&
                 localMax.x >= localMin.x && localMax.y >= localMin.y && localMax.z >= localMin.z) {
                 const engine::Vector3 localCorners[8] = {
@@ -577,7 +641,7 @@ void DebugEditor::DrawSelectedObjectBoundsOverlay() {
 
                 const engine::Matrix4x4 worldMatrix = object->GetWorldMatrix();
 
-                for (int i = 0; i < 8; ++i) {
+                for (std::int32_t i = 0; i < 8; ++i) {
                     corners[i] = engine::Math::Transform(localCorners[i], worldMatrix);
                 }
 
@@ -594,8 +658,9 @@ void DebugEditor::DrawSelectedObjectBoundsOverlay() {
 
         if (!hasOrientedModelBounds) {
             // モデル境界を取得できないObjectも選択可能にするため、World AABBかTransformスケールで補う。
-            Aabb aabb = object->GetModelWorldAabb();
+            engine::Aabb aabb = object->GetModelWorldAabb();
 
+            // ワールドの境界が無効であれば、基準位置と拡縮値から最小寸法付きの箱を作る。
             if (!IsValidAabb(aabb)) {
                 const engine::Vector3 scale = object->GetTransform()->scale;
                 const engine::Vector3 halfSize = {
@@ -623,12 +688,13 @@ void DebugEditor::DrawSelectedObjectBoundsOverlay() {
         const ImU32 frameColor =
             isPrimary ? IM_COL32(255, 226, 72, 255) : IM_COL32(80, 210, 255, 235);
         const bool showBounds = isPrimary ||
-            selectionOverlayMode_ == SelectionOverlayMode::Detailed ||
+            selectionOverlayMode_ == SelectionOverlayMode::kDetailed ||
             showTemporaryDetails;
 
+        // 主選択以外で詳細表示を要求していない場合は、中心マーカーだけを描く。
         if (!showBounds) {
-            // 通常表示は副選択Objectを点だけに縮め、複数選択時の枠の重なりを抑える。
             const engine::Vector3 screen = WorldToScreen(center);
+            // 中心がカメラ後方にあるか画面座標が無効なら、中心マーカーも描かない。
             if (screen.z < 0.0f || !std::isfinite(screen.x) || !std::isfinite(screen.y))
                 continue;
 
@@ -640,25 +706,28 @@ void DebugEditor::DrawSelectedObjectBoundsOverlay() {
         }
 
         bool hasScreenPoint = false;
-        int visibleCornerCount = 0;
+        std::int32_t visibleCornerCount = 0;
         engine::Vector3 projectedCorners[8] = {};
         bool cornerVisible[8] = {};
         ImVec2 rectMin = ImVec2(0.0f, 0.0f);
         ImVec2 rectMax = ImVec2(0.0f, 0.0f);
 
-        for (int i = 0; i < 8; ++i) {
+        for (std::int32_t i = 0; i < 8; ++i) {
             projectedCorners[i] = WorldToScreen(corners[i]);
             const engine::Vector3& screen = projectedCorners[i];
+            // 画面に投影できない角は、矩形や詳細な辺の基準点にしない。
             if (screen.z < 0.0f || !std::isfinite(screen.x) || !std::isfinite(screen.y))
                 continue;
 
             cornerVisible[i] = true;
             ++visibleCornerCount;
 
+            // 最初に投影できた角を、画面上の矩形の最小・最大の初期点とする。
             if (!hasScreenPoint) {
                 rectMin = ImVec2(screen.x, screen.y);
                 rectMax = rectMin;
                 hasScreenPoint = true;
+            // 二つ目以降の投影点は既存の矩形を広げる。
             } else {
                 rectMin.x = (std::min)(rectMin.x, screen.x);
                 rectMin.y = (std::min)(rectMin.y, screen.y);
@@ -670,6 +739,7 @@ void DebugEditor::DrawSelectedObjectBoundsOverlay() {
         const engine::Vector3 centerScreen = WorldToScreen(center);
         const bool hasCenterScreen = centerScreen.z >= 0.0f &&
             std::isfinite(centerScreen.x) && std::isfinite(centerScreen.y);
+        // 角も中心も投影できなければ、そのオブジェクトには何も重ねない。
         if (!hasScreenPoint && !hasCenterScreen)
             continue;
 
@@ -686,11 +756,13 @@ void DebugEditor::DrawSelectedObjectBoundsOverlay() {
             widthCoverage > 0.70f || heightCoverage > 0.70f || areaCoverage > 0.32f;
         // 一部の角が投影できない箱や、画面を大きく覆う箱は枠が見づらいため、Compact では中心だけ示す。
         const bool useCompactMarker =
-            selectionOverlayMode_ == SelectionOverlayMode::Compact &&
+            selectionOverlayMode_ == SelectionOverlayMode::kCompact &&
             !showTemporaryDetails &&
             (projectionIsUnstable || isOversized || !intersectsView);
 
+        // 通常表示で投影が不安定、または枠が大きい・画面と重ならない場合は、枠を中心マーカーに切り替える。
         if (useCompactMarker) {
+            // 中心点を投影できなければ、代わりのマーカーも表示できない。
             if (!hasCenterScreen)
                 continue;
 
@@ -701,6 +773,7 @@ void DebugEditor::DrawSelectedObjectBoundsOverlay() {
 
             std::string label = object->GetName().empty() ? "Selected" : object->GetName();
 
+            // 複数選択中なら、表示名にほかの選択数も付ける。
             if (selectedCount > 1) {
                 label += " (+" + std::to_string(selectedCount - 1) + ")";
             }
@@ -717,6 +790,7 @@ void DebugEditor::DrawSelectedObjectBoundsOverlay() {
             continue;
         }
 
+        // 投影可能な角がなく画面枠を作れないか、矩形がビューに重ならない場合は枠を省く。
         if (!hasScreenPoint || !intersectsView)
             continue;
 
@@ -724,6 +798,7 @@ void DebugEditor::DrawSelectedObjectBoundsOverlay() {
         rectMin.y = clampFloat(rectMin.y, viewMin.y + 2.0f, viewMax.y - 2.0f);
         rectMax.x = clampFloat(rectMax.x, viewMin.x + 2.0f, viewMax.x - 2.0f);
         rectMax.y = clampFloat(rectMax.y, viewMin.y + 2.0f, viewMax.y - 2.0f);
+        // ビュー内へ丸めた結果の幅か高さが0以下なら、描画できる矩形が残っていない。
         if (rectMax.x <= rectMin.x || rectMax.y <= rectMin.y)
             continue;
 
@@ -732,6 +807,7 @@ void DebugEditor::DrawSelectedObjectBoundsOverlay() {
         const ImVec2 rectCenter = ImVec2(
             (rectMin.x + rectMax.x) * 0.5f,
             (rectMin.y + rectMax.y) * 0.5f);
+        // 幅が最低サイズ未満なら、ビュー内で中心を基準に左右へ広げる。
         if (rectMax.x - rectMin.x < kMinimumDisplaySize) {
             rectMin.x = clampFloat(
                 rectCenter.x - kMinimumDisplaySize * 0.5f,
@@ -743,6 +819,7 @@ void DebugEditor::DrawSelectedObjectBoundsOverlay() {
                 viewMax.x - 2.0f);
         }
 
+        // 高さが最低サイズ未満なら、ビュー内で中心を基準に上下へ広げる。
         if (rectMax.y - rectMin.y < kMinimumDisplaySize) {
             rectMin.y = clampFloat(
                 rectCenter.y - kMinimumDisplaySize * 0.5f,
@@ -756,9 +833,10 @@ void DebugEditor::DrawSelectedObjectBoundsOverlay() {
 
         // 詳細表示は投影できた角同士を線で結ぶ。通常表示は画面座標で求めた矩形の角だけ描く。
         const bool showDetailedBounds =
-            selectionOverlayMode_ == SelectionOverlayMode::Detailed || showTemporaryDetails;
+            selectionOverlayMode_ == SelectionOverlayMode::kDetailed || showTemporaryDetails;
+        // 詳細モードか一時的な詳細表示の場合は、投影した箱の辺をつなぐ。
         if (showDetailedBounds) {
-            constexpr int kEdges[12][2] = {
+            constexpr std::int32_t kEdges[12][2] = {
                 { 0, 1 }, { 1, 3 }, { 3, 2 }, { 2, 0 },
                 { 4, 5 }, { 5, 7 }, { 7, 6 }, { 6, 4 },
                 { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 }
@@ -767,6 +845,7 @@ void DebugEditor::DrawSelectedObjectBoundsOverlay() {
             const float thickness = isPrimary ? 2.0f : 1.5f;
 
             for (const auto& edge : kEdges) {
+                // 辺の両端が投影できない場合は、その辺を線で結ばない。
                 if (!cornerVisible[edge[0]] || !cornerVisible[edge[1]])
                     continue;
                 const ImVec2 start =
@@ -776,13 +855,16 @@ void DebugEditor::DrawSelectedObjectBoundsOverlay() {
                 drawList->AddLine(start, end, IM_COL32(8, 18, 28, 210), thickness + 2.0f);
                 drawList->AddLine(start, end, frameColor, thickness);
             }
+        // 通常の枠表示では、投影範囲から計算した矩形の角だけを描く。
         } else {
             drawCornerBrackets(rectMin, rectMax, frameColor, isPrimary ? 2.2f : 1.7f);
         }
 
+        // 詳細枠・角枠のどちらでも、主選択にだけ名前を重ねる。
         if (isPrimary) {
             std::string label = object->GetName().empty() ? "Selected" : object->GetName();
 
+            // 主選択以外にも選んでいる実体があれば、その数を表示名の横に置く。
             if (selectedCount > 1) {
                 label += " (+" + std::to_string(selectedCount - 1) + ")";
             }
@@ -818,6 +900,7 @@ bool DebugEditor::IsObjectInCurrentScene(const engine::Object3D* object) const {
     const auto& objects = sceneManager_->GetCurrentScene()->GetObjects();
 
     for (const auto& candidate : objects) {
+        // シーンの所有リストに同一の実体が見つかったら、選択可能な所属として返す。
         if (candidate.get() == object) {
             return true;
         }
@@ -831,6 +914,7 @@ void DebugEditor::ClearInvalidSelectedObject() {
     const bool editorWasSelected = EditorManager::GetInstance()->GetSelectedObject() == this;
     PruneInvalidSelectedObjects();
 
+    // 無効な項目を除いても主選択が残っていれば、編集状態を継続する。
     if (selectedObject_) {
         return;
     }
@@ -841,6 +925,7 @@ void DebugEditor::ClearInvalidSelectedObject() {
     inspectorEditStartStates_.clear();
     tempObjectStateStart_.clear();
 
+    // Inspectorがこの編集ツールを表示していた場合だけ、無効になった選択表示を解く。
     if (editorWasSelected) {
         EditorManager::GetInstance()->ClearSelection();
     }

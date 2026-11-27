@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "engine/utility/math/Math.h"
 #include "TextureManager.h"
@@ -26,7 +27,7 @@ public:
     // 関連：Model（この型を使う機能の本体）
     struct Bone {
         std::string name;
-        engine::Matrix4x4 inverseBindPoseMatrix; // メッシュの初期姿勢へ戻す行列。
+        engine::Matrix4x4 inverseBindPoseMatrix; // バインド時の頂点を、ボーンのローカル座標へ移す行列。
     };
 
     /// <summary>アニメーションの時刻（秒）と、その時点の値を保持する。</summary>
@@ -95,7 +96,7 @@ public:
     struct QuaternionTransform {
         engine::Vector3 scale = {1.0f, 1.0f, 1.0f};
         engine::Quaternion rotate = {0.0f, 0.0f, 0.0f, 1.0f};
-        engine::Vector3 translate = engine::Vector3::ZERO;
+        engine::Vector3 translate = engine::Vector3::kZero;
     };
 
     /// <summary>スケルトン内の一関節と、親子関係および計算済み行列を保持する。</summary>
@@ -153,7 +154,7 @@ public:
         uint32_t normalMapHandle = 0;
         uint32_t ormMapHandle = 0;
 
-        engine::Vector4 baseColorFactor = engine::Colors::White;
+        engine::Vector4 baseColorFactor = engine::colors::kWhite;
         float roughness = 0.5f;
         float metallic = 0.0f;
 
@@ -190,6 +191,7 @@ public:
         std::vector<Bone> bones;
         std::vector<Animation> animations;
         bool hasSkinning = false;
+        // 骨のないモデルに動くノードがある場合、単一の代理ボーンで変形を伝える。
         bool usesNodeAnimationProxy = false;
         Skeleton skeleton;
     };
@@ -248,11 +250,11 @@ public:
         ID3D12Resource* overrideMaterialResource = nullptr, uint32_t normalMapHandle = 0, uint32_t ormMapHandle = 0, uint32_t overrideTextureHandle = 0,
         uint32_t instanceCount = 1,
         uint32_t startInstanceLocation = 0,
-        int meshDrawIndex = -1
+        std::int32_t meshDrawIndex = -1
     );
 
     /// <summary>影マップ用に深度のみを描画する。-1なら全メッシュを対象にする。</summary>
-    void DrawShadow(ID3D12Resource* wvpResource, int meshDrawIndex = -1);
+    void DrawShadow(ID3D12Resource* wvpResource, std::int32_t meshDrawIndex = -1);
 
     /// <summary>
     /// 現在のボーン行列からスキニング済み頂点をCompute Shaderで生成します。
@@ -268,6 +270,7 @@ public:
 
     /// <summary>先頭マテリアルのテクスチャハンドルを返す。未設定時は0。</summary>
     uint32_t GetTextureHandle() const {
+        // 先頭の材質が存在しなければ、テクスチャを指定するハンドルはないので 0 を返す。
         if (modelData_.materials.empty())
             return 0;
         return modelData_.materials[0].textureHandle;
@@ -309,13 +312,13 @@ public:
     const std::vector<Joint>& GetJoints() const;
 
     /// <summary>名前に一致する関節の索引を返す。未登録なら-1。</summary>
-    int FindJointIndex(const std::string& name) const;
+    std::int32_t FindJointIndex(const std::string& name) const;
 
-    /// <summary>指定関節の現在のローカル姿勢を返す。</summary>
-    QuaternionTransform GetJointTransform(int jointIndex) const;
+    /// <summary>指定関節の親ローカル姿勢を返す。番号が範囲外の場合は単位拡縮・単位回転・移動ゼロ。</summary>
+    QuaternionTransform GetJointTransform(std::int32_t jointIndex) const;
 
-    /// <summary>指定関節のローカル姿勢を変更する。索引が無効ならfalse。</summary>
-    bool SetJointTransform(int jointIndex, const QuaternionTransform& transform);
+    /// <summary>指定関節のローカル姿勢から骨格行列と GPU データを再計算する。番号が範囲外なら false。</summary>
+    bool SetJointTransform(std::int32_t jointIndex, const QuaternionTransform& transform);
 
     /// <summary>関節をモデルの初期姿勢に戻す。</summary>
     void ResetSkeletonPose();
@@ -333,7 +336,7 @@ public:
     engine::Vector3 GetLocalAabbMax() const { return localAabbMax_; }
 
     /// <summary>マテリアル設定を行わず、指定メッシュの頂点・インデックスを描画する。</summary>
-    void DrawMeshOnly(int meshDrawIndex = -1);
+    void DrawMeshOnly(std::int32_t meshDrawIndex = -1);
 
     /// <summary>外部から渡された頂点・インデックスで描画モデルを作る。</summary>
     void CreateFromVertices(ModelCommon* common, const std::vector<VertexData>& vertices, const std::vector<uint32_t>& indices);
@@ -400,7 +403,7 @@ private:
 
     engine::Math math_;
     engine::Vector3 size_ = { 1.0f, 1.0f, 1.0f };
-    engine::Vector3 center_ = engine::Vector3::ZERO;
+    engine::Vector3 center_ = engine::Vector3::kZero;
 
     // ボーン行列のGPU転送状態。
     Microsoft::WRL::ComPtr<ID3D12Resource> boneResource_;
@@ -408,12 +411,13 @@ private:
     uint32_t boneSrvIndex_ = 0; // ボーン行列を参照するSRV番号。
     uint32_t lastUpdateFrame_ = 0xFFFFFFFF; // 最後に更新したフレーム番号。
     bool computeSkinningAvailable_ = false;
+    // 姿勢が更新され、Compute Skinning の出力を作り直す必要があるか。
     bool computeSkinningDirty_ = true;
     // 現在姿勢の頂点をComputeで生成したか。描画で使う頂点バッファの切り替えに使う。
     bool computeSkinningOutputReady_ = false;
 
-    engine::Vector3 localAabbMin_ = engine::Vector3::ZERO;
-    engine::Vector3 localAabbMax_ = engine::Vector3::ZERO;
+    engine::Vector3 localAabbMin_ = engine::Vector3::kZero;
+    engine::Vector3 localAabbMax_ = engine::Vector3::kZero;
 };
 
 } // namespace engine

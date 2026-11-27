@@ -1,23 +1,24 @@
 #pragma once
+#include <cstdint>
 #ifdef USE_IMGUI
 #include "InputManager.h"
 #include "WinApp.h"
 #include <fstream>
 
 // 仮想SDLコントローラーから実際のUpdateを通し、押し込み変換と押下エッジを確認します。
-namespace SdlStickRuntimeProbe {
+namespace sdlStickRuntimeProbe {
 inline bool Enabled() { return GetEnvironmentVariableA("CG2_SDL_STICK_TEST", nullptr, 0) > 0; }
 // 専用プロセスで一度だけ仮想パッドを接続し、検証結果を path のログへ書き出す。
 inline void AfterDraw(const std::string& path) {
-    static bool done = false;
-    if (done) return;
-    done = true;
+    static bool sDone = false;
+    if (sDone) return;
+    sDone = true;
     std::ofstream log(path, std::ios::trunc);
     auto finish = [&](const char* message) { log << message << std::endl; WinApp::CloseNow(); };
     XINPUT_STATE physical{};
     const bool xinputConnected = XInputGetState(0, &physical) == ERROR_SUCCESS;
     log << "XInput index 0 connected=" << xinputConnected << " SDL devices=" << SDL_NumJoysticks() << std::endl;
-    for (int i = 0; i < SDL_NumJoysticks(); ++i) {
+    for (std::int32_t i = 0; i < SDL_NumJoysticks(); ++i) {
         const char* name = SDL_JoystickNameForIndex(i);
         log << "SDL device " << i << ' ' << (name ? name : "unknown") << std::endl;
     }
@@ -33,7 +34,7 @@ inline void AfterDraw(const std::string& path) {
                               (1u << SDL_CONTROLLER_BUTTON_RIGHTSTICK) |
                               (1u << SDL_CONTROLLER_BUTTON_LEFTSHOULDER);
     description.name = "CG2 SDL stick input regression";
-    const int index = SDL_JoystickAttachVirtualEx(&description);
+    const std::int32_t index = SDL_JoystickAttachVirtualEx(&description);
     SDL_GameController* controller = index >= 0 ? SDL_GameControllerOpen(index) : nullptr;
     if (!controller) {
         if (index >= 0) SDL_JoystickDetachVirtual(index);
@@ -47,7 +48,7 @@ inline void AfterDraw(const std::string& path) {
               right.bindType == SDL_CONTROLLER_BINDTYPE_BUTTON && shoulder.bindType == SDL_CONTROLLER_BINDTYPE_BUTTON;
     auto* input = engine::InputManager::GetInstance();
     input->Update();
-    auto set = [&](int button, bool pressed) {
+    auto set = [&](std::int32_t button, bool pressed) {
         ok = SDL_JoystickSetVirtualButton(joystick, button, pressed ? 1 : 0) == 0 && ok;
         input->Update();
     };

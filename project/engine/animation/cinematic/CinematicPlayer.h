@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "engine/animation/cinematic/CinematicSequence.h"
 #include "engine/animation/BodyAnimationClip.h"
@@ -144,7 +145,7 @@ class CinematicPlayer {
     // アンカーのワールド位置と Y 回転（ラジアン）を返す。親付き・未解決なら false。
     bool GetAnchorPose(engine::Vector3& position, float& yaw) const;
 
-    int GetLastEventId() const { return lastEventId_; }
+    std::int32_t GetLastEventId() const { return lastEventId_; }
 
     engine::Object3D* GetLastEventTarget() const { return lastEventTarget_; }
 
@@ -166,6 +167,15 @@ class CinematicPlayer {
     CinematicTransformKey UpdateSpringAttachment(const std::string& name, const SpringInput& input, float deltaTime);
     void ResetSpringAttachment(const std::string& name) { springStates_.erase(name); }
 
+    // 直前の視点からキーへつなぐ時間を秒で指定する。
+    void SetPresentationCameraBlend(float seconds) { presentationCameraBlend_ = seconds; }
+    Camera* GetPresentationCamera() const { return presentationCamera_.get(); }
+    // 借りた視点だけを戻し、オブジェクトの姿勢と再生時刻は維持する。
+    void RestorePresentationCamera();
+
+    // UI用の余白を空けて指定のカメラ構図を調整する。
+    static void FrameCameraForOverlay(std::span<const Vector3> points, float fov, float aspect, float margin,
+        float reveal, float uiCenterX, float subjectOffset, Vector3& eye, Vector3& target);
     // 実投影比率とワールド座標の包囲点から、両対象を収めるeye/targetを更新する。
     // margin/topMarginは画面寸法に対する割合。centerOffsetでUIを避ける中心補正を渡す。
     static void FitCameraToPoints(std::span<const engine::Vector3> points, float fov, float aspect,
@@ -209,20 +219,26 @@ class CinematicPlayer {
     std::vector<PresentationObject> presentationObjects_;
     std::vector<std::pair<engine::Object3D*, bool>> presentationHidden_;
     std::unique_ptr<engine::Camera> presentationCamera_;
+    struct CameraBlendOrigin {
+        Vector3 eye, target; // 演出へ入る前のワールド座標。
+        float fov; // 垂直画角、ラジアン。
+    };
+    std::optional<CameraBlendOrigin> presentationCameraOrigin_;
+    float presentationCameraBlend_ = 0.0f;
     engine::Camera* presentationPreviousCamera_ = nullptr; // 演出開始前の有効カメラ。借用参照。
     engine::Vector3 presentationOrigin_{}, presentationLookAt_{}, presentationScale_{1, 1, 1};
     float presentationYaw_ = 0.0f, presentationBars_ = 0.0f;
     bool presentationCaptured_ = false, finished_ = false, bindingsReady_ = false;
 
-    static std::function<void(const std::string&, float, bool)> playAudio_;
-    static std::function<void(const std::string&)> stopAudio_;
-    static std::function<std::vector<AudioEntry>()> audioEntries_;
+    static std::function<void(const std::string&, float, bool)> kPlayAudio;
+    static std::function<void(const std::string&)> kStopAudio;
+    static std::function<std::vector<AudioEntry>()> sAudioEntries;
     // 演出開始前の Transform と対象の借用参照。相対トラックの基準と停止時の復元に使う。
     // 関連：CinematicPlayer（この型を使う機能の本体）
     struct TransformRuntime {
         engine::Object3D* target = nullptr; // 操作対象への借用参照。
-        engine::Vector3 basePosition = engine::Vector3::ZERO;
-        engine::Vector3 baseRotation = engine::Vector3::ZERO;
+        engine::Vector3 basePosition = engine::Vector3::kZero;
+        engine::Vector3 baseRotation = engine::Vector3::kZero;
         engine::Vector3 baseScale = {1.0f, 1.0f, 1.0f};
         bool captured = false;
     };
@@ -307,7 +323,7 @@ class CinematicPlayer {
     std::vector<AudioRuntime> audioRuntime_;
     std::vector<AnimationRuntime> animationRuntime_;
     engine::Object3D* activeCameraObject_ = nullptr;
-    int activeCameraShotIndex_ = -1; // 現在のカメラカット。-1は適用なし。
+    std::int32_t activeCameraShotIndex_ = -1; // 現在のカメラカット。-1は適用なし。
 
     AnimationCallback animationCallback_;
     std::function<engine::Object3D*(const CinematicObjectBinding&)> bindingResolver_;
@@ -320,7 +336,7 @@ class CinematicPlayer {
     bool anchorCaptured_ = false;
     engine::Vector3 anchorPosition_ = {};
     float anchorYaw_ = 0.0f; // 相対演出の基準ヨー角（ラジアン）。
-    int lastEventId_ = 0;
+    std::int32_t lastEventId_ = 0;
     engine::Object3D* lastEventTarget_ = nullptr; // 直近のイベント対象。借用参照。
 };
 

@@ -35,13 +35,13 @@ public:
 
 private:
     enum class ItemKind {
-        Command,
-        Object,
-        Asset,
-        Scene,
-        Preset,
-        Prefab,
-        Window,
+        kCommand,
+        kObject,
+        kAsset,
+        kScene,
+        kPreset,
+        kPrefab,
+        kWindow,
     };
 
     /// 検索・順位付け・実行に必要な一件分の候補。
@@ -52,11 +52,11 @@ private:
         std::string category;
         std::string detail;
         std::string searchableText;
-        ItemKind kind = ItemKind::Command;
-        int score = 0;
+        ItemKind kind = ItemKind::kCommand;
+        std::int32_t score = 0;
         bool enabled = true;
         bool favorite = false;
-        int recentRank = -1;
+        std::int32_t recentRank = -1;
         std::function<void()> execute;
     };
 
@@ -82,7 +82,7 @@ private:
     void CollectEditorWindows(std::vector<SearchItem>& items) const;
 
     // 検索語の一致度と利用履歴を使って表示順位を決めます。
-    int ScoreItem(const SearchItem& item, const std::string& normalizedQuery) const;
+    std::int32_t ScoreItem(const SearchItem& item, const std::string& normalizedQuery) const;
 
     // 表示中の候補を実行し、お気に入りとは別に最近使った履歴へ記録する。
     void ExecuteItem(std::size_t index);
@@ -96,7 +96,7 @@ private:
     bool IsFavorite(const std::string& id) const;
 
     // 候補の最近使った一覧での順位を求める。
-    int FindRecentRank(const std::string& id) const;
+    std::int32_t FindRecentRank(const std::string& id) const;
 
     // 利用者固有のお気に入り・履歴だけをディスクへ永続化します。
     void LoadState();
@@ -122,7 +122,7 @@ private:
     std::size_t lastPresetCount_ = 0;
     std::size_t lastPrefabCount_ = 0;
 
-    int selectedIndex_ = 0; // 現在選択している検索結果の位置。
+    std::int32_t selectedIndex_ = 0; // 現在選択している検索結果の位置。
     bool openRequested_ = false; // 次のUI描画で開く予約。
     bool focusQueryRequested_ = false; // 検索欄へ入力フォーカスを移す予約。
 

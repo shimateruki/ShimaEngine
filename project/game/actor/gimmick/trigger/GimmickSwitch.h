@@ -1,8 +1,9 @@
 ﻿#pragma once
+#include <cstdint>
 #include "BaseGimmick.h"
 
 // 接触または時間条件によって Target ID のイベントを切り替えるスイッチです。
-// 関連：BaseGimmickの配置・衝突基盤を使い、固有の状態と表示をこのクラスで更新する。調整項目はInitializeでProperty登録する。
+// BaseGimmickの接触を押下状態に変え、動作方式に応じてBaseSceneの接続先へ通知する。
 // 主な入口：Initialize / Update / OnCollision
 class GimmickSwitch : public BaseGimmick {
   public:
@@ -12,6 +13,7 @@ class GimmickSwitch : public BaseGimmick {
 
     virtual ~GimmickSwitch() = default;
 
+    // 踏める床としての衝突と、押下・切替・時間制限の編集項目を初期化する。
     void Initialize(engine::Object3DCommon* common, const std::string& modelName) override;
 
     // 短い接触間隔では押下状態を保ち、踏んだ直後の瞬間的な判定抜けを吸収する。
@@ -26,13 +28,15 @@ class GimmickSwitch : public BaseGimmick {
     // 脱出ギミックを再実行できるよう、出力と接触履歴を初期化します。
     void ResetEscapeCycle();
 
+    // 現在のイベント出力がオンならtrue。プレイヤーが触れていない間も方式によってオンを保持する。
     bool IsOutputActive() const { return isOutputActive_; }
 
   private:
     // 状態変更を一度だけイベントとして配信し、連続接触での重複発火を防ぎます。
     void SendActive(bool active);
 
-    int GetSwitchMode() const;
+    // 配置に保存された方式を返す。未設定なら通常方式の0。
+    std::int32_t GetSwitchMode() const;
 
     float contactTimer_ = 0.0f; // 床やスイッチの接触保持までの残り秒数。
     float timedTimer_ = 0.0f; // 時間制限スイッチの出力終了までの残り秒数。

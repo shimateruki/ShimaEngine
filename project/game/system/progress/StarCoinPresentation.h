@@ -4,7 +4,7 @@
 #include "Object3D.h"
 
 // 銀スターのモデルと粒子名を共有し、取得時も同じ配色の演出を選ぶ。
-namespace StarCoinPresentation {
+namespace starCoinPresentation {
 inline constexpr const char* kGoldModel = "Gimmicks/star";
 inline constexpr const char* kSilverModel = "Gimmicks/star/star_silver.gltf";
 inline constexpr const char* kSilverIdle = "shared/star_sparkle_silver";
@@ -33,6 +33,7 @@ inline void ApplyPreviouslyCollected(engine::Object3D& object) {
 }
 // 編集時に銀モデルで保存された配置も、未取得のセーブでは金色へ戻す。
 inline void RestoreUncollectedIfSilver(engine::Object3D& object) {
+    // 銀の表示が残っている場合だけ金へ戻す。既に金のモデルなら材質や粒子を上書きしない。
     if (!IsSilver(object))
         return;
     // 見た目だけを未取得の金へ戻し、配置時の取得範囲は残します。
@@ -49,4 +50,4 @@ inline void RestoreUncollectedIfSilver(engine::Object3D& object) {
     object.SetEmissive(1.65f);
     object.SetGpuParticleName("shared/star_sparkle");
 }
-} // namespace StarCoinPresentation
+} // namespace starCoinPresentation

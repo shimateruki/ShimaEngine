@@ -42,16 +42,22 @@ struct CameraVisibilitySettings {
     }
     // 既定値から有効なJSON項目を読み、範囲を検証する。
     void FromJson(const nlohmann::json& j) {
+        // 読み込みのたびに既定値から始め、前に開いた設定の値が省略項目へ残らないようにする。
         *this = {};
+        // オブジェクト形式でないデータには設定項目がないため、既定値の状態で終了する。
         if (!j.is_object()) return;
+        // 有効フラグは真偽値として保存されている場合だけ読み込む。
         if (j.contains("enabled") && j["enabled"].is_boolean()) enabled = j["enabled"].get<bool>();
+        // シルエット色はRGBAの4要素を持つ配列だけを候補にする。
         if (j.contains("silhouetteColor") && j["silhouetteColor"].is_array() && j["silhouetteColor"].size() == 4) {
             // RGBAのいずれかが数値以外なら、一部だけを書き換えず既定の色を保持します。
             bool numeric = true;
             for (const auto& component : j["silhouetteColor"]) numeric = numeric && component.is_number();
+            // 4成分すべてが数値と確認できた場合だけ、既定の色をまとめて置き換える。
             if (numeric) silhouetteColor = j["silhouetteColor"].get<std::array<float, 4>>();
         }
         auto read = [&](const char* key, float& v) {
+            // 数値設定は指定キーが存在して数値型の場合だけ反映する。範囲補正は末尾で行う。
             if (j.contains(key) && j[key].is_number()) v = j[key].get<float>();
         };
         read("radius", radius); read("minimumOpacity", minimumOpacity); read("feather", feather);

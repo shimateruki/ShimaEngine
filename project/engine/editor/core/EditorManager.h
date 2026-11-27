@@ -23,8 +23,8 @@ public:
     /// シングルトンインスタンスを取得する。
     /// </summary>
     static EditorManager* GetInstance() {
-        static EditorManager instance;
-        return &instance;
+        static EditorManager sInstance;
+        return &sInstance;
     }
 
     // 選択状態の設定、取得、解除。

@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "Model.h"
 #include "Object3DCommon.h"
 #include "Transform.h"
@@ -20,7 +21,6 @@ namespace engine {
 class MeshRenderer {
 public:
     /// <summary>モデル描画時にGPUへ渡す座標変換行列。</summary>
-    // 関連：MeshRenderer（この型を使う機能の本体）
     struct TransformationMatrix {
         engine::Matrix4x4 wvp;
         engine::Matrix4x4 world;
@@ -29,15 +29,13 @@ public:
     };
 
     /// <summary>GPUへ渡す平行光源の色、向き、強度。</summary>
-    // 関連：MeshRenderer（この型を使う機能の本体）
     struct DirectionalLight {
         engine::Vector4 color;
         engine::Vector3 direction;
         float intensity;
     };
 
-    /// <summary>GPUへ渡すカメラのワールド位置。</summary>
-    // 関連：MeshRenderer（この型を使う機能の本体）
+    /// <summary>GPUに渡す視点のワールド位置と遮蔽物の透過範囲。</summary>
     struct CameraForGpu {
         engine::Vector3 worldPosition;
         float visibilityPadding = 0;
@@ -46,7 +44,6 @@ public:
     };
 
     /// <summary>色、PBR、ポータル演出を含むGPUマテリアル定数。</summary>
-    // 関連：MeshRenderer（この型を使う機能の本体）
     struct MaterialData {
         engine::Vector4 color;
         int32_t enableLighting;
@@ -88,12 +85,11 @@ public:
         friend class MeshRenderer;
         MaterialData parameters_{};
         engine::Vector4 authoringColor_{1, 1, 1, 1};
-        BlendMode blendMode_ = BlendMode::None;
+        BlendMode blendMode_ = BlendMode::kNone;
         bool valid_ = false;
     };
 
     /// <summary>ポータル・形成・消滅で使うクリップ面の設定。</summary>
-    // 関連：MeshRenderer（この型を使う機能の本体）
     struct PortalClipSettings {
         bool enabled = false;
         float progress = 0.0f;
@@ -105,7 +101,6 @@ public:
     };
 
     /// <summary>GPUへ渡す点光源の位置、色、減衰パラメータ。</summary>
-    // 関連：MeshRenderer（この型を使う機能の本体）
     struct PointLight {
         engine::Vector4 color;
         engine::Vector3 position;
@@ -116,7 +111,6 @@ public:
     };
 
     /// <summary>GPUへ渡すスポットライトの位置、方向、照射角と減衰。</summary>
-    // 関連：MeshRenderer（この型を使う機能の本体）
     struct SpotLight {
         engine::Vector4 color;
         engine::Vector3 position;
@@ -130,7 +124,6 @@ public:
     };
 
     /// <summary>ローカルフォグの密度、光散乱、カメラ逆行列などのGPU定数。</summary>
-    // 関連：MeshRenderer（この型を使う機能の本体）
     struct LocalFogData {
         engine::Vector4 fogColor = { 0.2f, 0.8f, 0.5f, 1.0f };
         engine::Vector3 cameraPos;
@@ -150,7 +143,6 @@ public:
     };
 
     /// <summary>水面と特殊マテリアルで共用する時間、変形、照明パラメータ。</summary>
-    // 関連：MeshRenderer（この型を使う機能の本体）
     struct WaterParamForGpu {
         float time;
         float waveSpeed;
@@ -192,6 +184,7 @@ public:
     };
 
 public:
+    // 所有側からTransformを借用する。GPU用の定数バッファはInitialize()で生成する。
     MeshRenderer(Transform* transform);
 
     ~MeshRenderer() = default;
@@ -218,37 +211,37 @@ public:
     void Draw(ID3D12Resource* pointLightResource, ID3D12Resource* spotLightResource);
 
     // 演出用カメラPreview専用。通常描画のWVP/Camera定数を汚さず、別バッファで描画します。
-    void DrawForCamera(engine::Camera* camera, ID3D12Resource* pointLightResource, ID3D12Resource* spotLightResource, int previewBufferIndex = 0);
+    void DrawForCamera(engine::Camera* camera, ID3D12Resource* pointLightResource, ID3D12Resource* spotLightResource, std::int32_t previewBufferIndex = 0);
 
     // 特殊マテリアルも通常描画用WVPを上書きせず、Camera Preview専用定数で描画します。
-    void DrawSpecialMaterialForCamera(int materialType, engine::Camera* camera, uint32_t depthSrvHandle, uint32_t colorSrvHandle, int previewBufferIndex = 0);
+    void DrawSpecialMaterialForCamera(std::int32_t materialType, engine::Camera* camera, uint32_t depthSrvHandle, uint32_t colorSrvHandle, std::int32_t previewBufferIndex = 0);
 
     /// <summary>現在の材質番号に対応する特殊描画を、通常カメラの定数で実行する。</summary>
     void DrawSpecialMaterial(uint32_t depthSrvHandle, uint32_t colorSrvHandle);
 
     // モデル設定。
-    /// <summary>既存のModelを描画対象に設定する。</summary>
+    /// <summary>借用したモデルへ切り替え、従来のモデル名と描画用の差し替えを解除する。</summary>
     void SetModel(Model* model);
 
-    /// <summary>名前に対応するモデルを描画対象に設定する。</summary>
+    /// <summary>ModelManagerから名前でモデルを取得し、以前の描画用差し替えを解除する。</summary>
     void SetModel(const std::string& modelName);
 
     /// <summary>現在の描画モデルを返す。</summary>
     Model* GetModel() const { return model_; }
 
     // 元モデル・材質・コライダーを維持して、描画と影だけを一時的な形状に差し替えます。
-    // 所有者は解除までModelを保持し、別モデルへの変更時は自動解除します。
+    // 指定したモデルは呼出元が解除まで保持する。nullptrの指定またはSetModel()で解除できる。
     void SetVisualModelOverride(Model* model) { visualModelOverride_ = model; }
     Model* GetVisualModelOverride() const { return visualModelOverride_; }
 
-    /// <summary>現在の描画モデル名を返す。</summary>
+    /// <summary>名前で指定した元モデルの登録名。ポインターで直接指定したときは空。</summary>
     const std::string& GetModelName() const { return modelName_; }
 
     /// <summary>描画メッシュ番号を設定する。-1なら全メッシュ。</summary>
-    void SetMeshDrawIndex(int meshIndex) { meshDrawIndex_ = meshIndex; }
+    void SetMeshDrawIndex(std::int32_t meshIndex) { meshDrawIndex_ = meshIndex; }
 
     /// <summary>描画メッシュ番号を返す。</summary>
-    int GetMeshDrawIndex() const { return meshDrawIndex_; }
+    std::int32_t GetMeshDrawIndex() const { return meshDrawIndex_; }
 
     /// <summary>特定メッシュだけを描画する設定か返す。</summary>
     bool IsMeshDrawFiltered() const { return meshDrawIndex_ >= 0; }
@@ -269,7 +262,7 @@ public:
     /// <summary>平行光源の強度を設定する。</summary>
     void SetIntensity(float intensity);
 
-    /// <summary>描画マテリアルの色を返す。</summary>
+    /// <summary>色空間を変換する前の入力色を返す。編集や保存ではこの値を使う。</summary>
     engine::Vector4 GetColor() const;
 
     /// <summary>現在のマテリアル種類を返す。</summary>
@@ -289,10 +282,13 @@ public:
     void SetPortalClip(const PortalClipSettings& settings);
     // クリップの有効フラグだけ解除し、他の材質調整値は保持する。
     void ClearPortalClip();
+    // シェーダーが参照する時刻を秒で指定する。有限値だけを反映する。
     void SetMaterialTime(float time);
     // 正の有限な経過秒だけを加算する。描画時刻とゲームの経過時間を明示的に同期する。
     void AdvanceMaterialTime(float deltaTime);
+    // 有限の光沢指数を使用し、負の指定は0に補正する。
     void SetShininess(float shininess);
+    // 初期化済み材質に、シェーダーが選択する照明方式の番号を渡す。
     void SetSelectedLighting(int32_t type);
 
     /// <summary>平行光源定数の編集用ポインタを返す。</summary>
@@ -355,8 +351,10 @@ public:
     /// <summary>自動UV繰り返しが有効か返す。</summary>
     bool GetAutoTextureTiling() const { return autoTextureTiling_; }
 
+    // 材質定数の書き込み先がある場合だけ、GPU用の照明フラグへ真偽を反映する。
     void SetEnableLighting(bool enable) { if (materialData_) materialData_->enableLighting = enable ? 1 : 0; }
 
+    // 定数が未初期化の場合は照明無効として扱う。
     bool GetEnableLighting() const { return materialData_ ? (materialData_->enableLighting != 0) : false; }
 
     /// <summary>環境マップ反射の使用を切り替える。</summary>
@@ -389,7 +387,7 @@ public:
     ID3D12Resource* GetWvpResource() const { return wvpResource_.Get(); }
 
     // 専用シェーダーのプレビュー描画にも、通常の3D描画と同じ独立WVPを渡す。
-    bool PreparePreviewCameraData(engine::Camera* camera, int previewBufferIndex, ID3D12Resource*& wvpResource,
+    bool PreparePreviewCameraData(engine::Camera* camera, std::int32_t previewBufferIndex, ID3D12Resource*& wvpResource,
                                   ID3D12Resource*& cameraResource);
 
     ID3D12Resource* GetCameraResource() const { return cameraResource_.Get(); }
@@ -400,6 +398,7 @@ public:
     /// <summary>自己発光の強度を返す。</summary>
     float GetEmissive() const;
 
+    // UIの撮影・プレビューではゲーム視点の遮蔽物透過を適用しない。
     void SetIsUiPreview(bool isPreview) { isUiPreview_ = isPreview; }
 
     // エディターの材質撮影だけで使う平行光源。所有権は呼び出し側にある。
@@ -417,11 +416,12 @@ public:
     /// <summary>描画に使う最終ワールド行列。装着物も身体変形・シアー・演出姿勢へ追従させる。</summary>
     engine::Matrix4x4 GetRenderWorldMatrix() const { return BuildRenderWorldMatrix(); }
 
-    // 指定したローカルY座標を支点に、上側だけを水平方向へ傾けます。
+    // ローカルYの支点を固定し、その支点との高さの差に比例してX・Z方向へずらす。
     void SetVisualShear(const engine::Vector3& horizontalShear, float pivotY);
 
     const engine::Vector3& GetVisualShear() const { return visualShear_; }
 
+    // 水平シアーで位置を固定する支点のローカルY座標を返す。
     float GetVisualShearPivotY() const { return visualShearPivotY_; }
 
     /// <summary>描画専用姿勢とシアーを初期値へ戻す。</summary>
@@ -481,7 +481,7 @@ private:
 
     // 次の描画補助関数はwvpResourceを指定し、通常描画とカメラプレビューの両方から呼ぶ。
     // depthSrvHandleはシーン深度、colorSrvHandleはシーンカラーのSRV番号。
-    // waterResourceを指定した場合のみ、水面パラメータの通常バッファを差し替える。
+    // waterResourceを指定した場合は、その描画に通常の水面定数の代わりにバッファを渡す。
     void DrawWaterWithWvp(ID3D12Resource* wvpResource, uint32_t depthSrvHandle, uint32_t colorSrvHandle, ID3D12Resource* waterResource = nullptr);
 
     // マグマ・氷・炎はそれぞれ専用パイプラインでモデルまたは代理モデルを描画する。
@@ -495,7 +495,7 @@ private:
 
     // 指定パイプラインで特殊マテリアルを描画する。useProxyModelは代理形状の使用、
     // bakedTextureModeは使用するベイク済みテクスチャ組（0:既定、1:ゲート）を選ぶ。
-    void DrawSpecialMaterialWithWvp(ID3D12Resource* wvpResource, uint32_t depthSrvHandle, uint32_t colorSrvHandle, void (engine::Object3DCommon::*setGraphicsCommand)(), bool useProxyModel = false, int bakedTextureMode = 0, ID3D12Resource* effectResource = nullptr);
+    void DrawSpecialMaterialWithWvp(ID3D12Resource* wvpResource, uint32_t depthSrvHandle, uint32_t colorSrvHandle, void (engine::Object3DCommon::*setGraphicsCommand)(), bool useProxyModel = false, std::int32_t bakedTextureMode = 0, ID3D12Resource* effectResource = nullptr);
 
     // ワールド行列が前回と同じなら法線変換行列のキャッシュを返す。
     const engine::Matrix4x4& GetCachedWorldInverseTranspose(const engine::Matrix4x4& worldMatrix);
@@ -516,7 +516,7 @@ private:
     void InitializeGateBarrierCylinderProxyModel();
 
     // 通常描画用WVPから共通の特殊マテリアル描画へ委譲する。
-    void DrawSpecialMaterial(uint32_t depthSrvHandle, uint32_t colorSrvHandle, void (engine::Object3DCommon::*setGraphicsCommand)(), bool useProxyModel = false, int bakedTextureMode = 0, ID3D12Resource* effectResource = nullptr);
+    void DrawSpecialMaterial(uint32_t depthSrvHandle, uint32_t colorSrvHandle, void (engine::Object3DCommon::*setGraphicsCommand)(), bool useProxyModel = false, std::int32_t bakedTextureMode = 0, ID3D12Resource* effectResource = nullptr);
 
     // 表示用の差し替えがあれば優先し、実際に描画するモデルを選ぶ。
     Model* ResolveDrawModel() const;
@@ -528,9 +528,9 @@ private:
     engine::Object3DCommon* common_ = nullptr;
     Transform* transform_ = nullptr;
     engine::Vector3 visualScale_ = { 1.0f, 1.0f, 1.0f };
-    engine::Vector3 visualRotation_ = engine::Vector3::ZERO;
-    engine::Vector3 visualOffset_ = engine::Vector3::ZERO;
-    engine::Vector3 visualShear_ = engine::Vector3::ZERO;
+    engine::Vector3 visualRotation_ = engine::Vector3::kZero;
+    engine::Vector3 visualOffset_ = engine::Vector3::kZero;
+    engine::Vector3 visualShear_ = engine::Vector3::kZero;
     float visualShearPivotY_ = 0.0f;
 
     // タイムラインが所有する追加姿勢への弱参照。再生終了後は寿命を延ばさない。
@@ -540,10 +540,10 @@ private:
     Model* model_ = nullptr;
     Model* visualModelOverride_ = nullptr;
     std::string modelName_;
-    int meshDrawIndex_ = -1;
+    std::int32_t meshDrawIndex_ = -1;
 
     // 通常材質を描くときの合成方式。
-    BlendMode blendMode_ = BlendMode::Normal;
+    BlendMode blendMode_ = BlendMode::kNormal;
     std::string shaderMaterialId_;
 
     // ワールド/View/Projection行列のGPUバッファとマップ済み書込先。
@@ -563,7 +563,7 @@ private:
     CameraForGpu* cameraData_ = nullptr;
 
     // Camera Preview用の一時描画定数です。右パネルPreviewと演出用Previewを分けて、GPU実行時の上書きを防ぎます。
-    static constexpr int kPreviewBufferCount = 2;
+    static constexpr std::int32_t kPreviewBufferCount = 2;
     std::array<Microsoft::WRL::ComPtr<ID3D12Resource>, kPreviewBufferCount> previewWvpResources_;
     std::array<TransformationMatrix*, kPreviewBufferCount> previewWvpData_{};
     std::array<Microsoft::WRL::ComPtr<ID3D12Resource>, kPreviewBufferCount> previewCameraResources_;
@@ -575,7 +575,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> materialResource_;
     MaterialData* materialData_ = nullptr;
     // 編集時の入力色。作業色空間に変換した値はGPU用の materialData_ に保持する。
-    engine::Vector4 materialColor_ = engine::Colors::White;
+    engine::Vector4 materialColor_ = engine::colors::kWhite;
 
     // 法線・ORM・基本画像のパスとTextureManagerのハンドルを対で保持する。
     std::string normalMapPath_ = "";

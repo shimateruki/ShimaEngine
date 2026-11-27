@@ -1,5 +1,6 @@
 #define NOMINMAX
 #include "game/scene/editor/SceneAssetEditorScene.h"
+#include "engine/graphics/3d/light/SceneLighting.h"
 #include "game/scene/GameSceneDrawing.h"
 #include "ScenePreloader.h"
 
@@ -36,17 +37,20 @@ namespace fs = std::filesystem;
 
 // SceneAssetが指定した配置JSONと表示用の共通画像を非同期先読み対象に登録します。
 SceneLoadManifest SceneAssetEditorScene::BuildAsyncLoadManifest() const {
-    // SceneAssetが指定した配置JSONだけを先読み対象へ登録する。
+    // シーン資産が指定した配置と描画に使う画像を先読み一覧へ登録する。
     SceneLoadManifest manifest;
 
+    // オブジェクト配置の指定がある場合だけ、そのJSONを先読みする。
     if (!GetSceneLoadContext().objectLayoutPath.empty()) {
         manifest.AddObjectLayout(GetSceneLoadContext().objectLayoutPath);
     }
 
+    // スプライト配置の指定がある場合だけ、そのJSONを先読みする。
     if (!GetSceneLoadContext().spriteLayoutPath.empty()) {
         manifest.AddSpriteLayout(GetSceneLoadContext().spriteLayoutPath);
     }
 
+    // 共通の白画像は常に使用する。空の画像が未指定なら既定のキューブマップを加える。
     manifest.AddTexture("Resources/sprite/common/white.png");
     manifest.AddTexture(GetSceneLoadContext().skyboxPath.empty() ? "Resources/output_skybox.dds"
                                                                  : GetSceneLoadContext().skyboxPath);
@@ -71,26 +75,28 @@ void SceneAssetEditorScene::Initialize() {
     // オブジェクトと配置ファイルの管理を用意し、編集シーンで使う弾の衝突管理も接続します。
     objectManager_ = std::make_unique<ObjectManager>();
     levelLoader_ = std::make_unique<LevelLoader>();
-    BulletManager::GetInstance()->Initialize(GetObject3DCommon(), CollisionManager::GetInstance());
+    BulletManager::GetInstance()->Initialize(GetObject3DCommon(), engine::CollisionManager::GetInstance());
 
     PrepareGpuParticles();
-    gpuParticleTextureHandle_ = TextureManager::GetInstance()->Load("Resources/sprite/common/white.png");
+    gpuParticleTextureHandle_ = engine::TextureManager::GetInstance()->Load("Resources/sprite/common/white.png");
 
     const uint32_t skyboxTexture =
-        TextureManager::GetInstance()->Load(ResolveSceneSkyboxPath("Resources/output_skybox.dds"));
+        engine::TextureManager::GetInstance()->Load(ResolveSceneSkyboxPath("Resources/output_skybox.dds"));
     skybox_ = std::make_unique<Skybox>();
     skybox_->Initialize(GetObject3DCommon(), skyboxTexture);
 
     const std::string objectLayoutPath = GetSceneManager() ? GetSceneManager()->GetEditorSceneAssetObjectPath() : std::string();
     const std::string spriteLayoutPath = GetSceneManager() ? GetSceneManager()->GetEditorSceneAssetSpritePath() : std::string();
 
-    // 配置元がない新規シーンにも保存用の仮ファイル名を持たせます。
+    // オブジェクト配置のパスが指定され、ファイルが実在するときは既存の配置を展開する。
     if (!objectLayoutPath.empty() && fs::exists(objectLayoutPath)) {
         levelLoader_->LoadObjectLayout(this, objectLayoutPath);
+    // 配置が未指定か見つからない場合は、保存先の仮ファイル名を用意する。
     } else {
         SetLoadedFilename("untitled_scene.json");
     }
 
+    // スプライト配置は、パスが指定されファイルが実在する場合だけ展開する。
     if (!spriteLayoutPath.empty() && fs::exists(spriteLayoutPath)) {
         levelLoader_->LoadSpriteLayout(this, spriteLayoutPath);
     }
@@ -99,12 +105,12 @@ void SceneAssetEditorScene::Initialize() {
     engine::LightManager::GetInstance()->LoadState(ResolveSceneLightPath("Resources/json/light/light_layout.json"));
     CameraEditor::GetInstance()->Initialize();
     CameraEditor::GetInstance()->LoadFile(ResolveSceneCameraPath("game_camera.json"));
-    CameraEditor::GetInstance()->SetMode(CameraEditor::Mode::Editor);
+    CameraEditor::GetInstance()->SetMode(CameraEditor::Mode::kEditor);
 }
 
 void SceneAssetEditorScene::Finalize() {
     // シーン内の接触登録と弾を先に片付け、エディターから古い実体を参照させない。
-    CollisionManager::GetInstance()->ClearObjects();
+    engine::CollisionManager::GetInstance()->ClearObjects();
     BulletManager::GetInstance()->Finalize();
     player_ = nullptr;
     sprites_.clear();
@@ -121,11 +127,12 @@ void SceneAssetEditorScene::Update(float deltaTime) {
     CameraEditor::GetInstance()->Update(player_, false);
     CameraManager::GetInstance()->Update(deltaTime);
 
-    // ビューの設定を反映した後に、配置物・CPU粒子・GPU粒子・Spriteを順に更新します。
+    // 配置管理が準備できている間だけ、配置オブジェクトの状態を進める。
     if (objectManager_) {
         objectManager_->Update(deltaTime);
     }
 
+    // シーンのCPU粒子システムを生成済みなら、GPU粒子に先立って更新する。
     if (particleSystem_) {
         particleSystem_->Update(deltaTime);
     }
@@ -133,6 +140,7 @@ void SceneAssetEditorScene::Update(float deltaTime) {
     GpuParticleManager::GetInstance()->Update(deltaTime);
 
     for (auto& sprite : sprites_) {
+        // 実体を保持しているスプライトだけ、新しいフレームの姿勢へ更新する。
         if (sprite) {
             sprite->Update();
         }
@@ -140,7 +148,7 @@ void SceneAssetEditorScene::Update(float deltaTime) {
 
     // 弾の位置を進めた後で、このフレームの接触を計算します。
     BulletManager::GetInstance()->Update(deltaTime);
-    CollisionManager::GetInstance()->Update();
+    engine::CollisionManager::GetInstance()->Update();
 }
 
 void SceneAssetEditorScene::Draw() {
@@ -151,21 +159,17 @@ void SceneAssetEditorScene::Draw() {
 
     engine::Camera* camera = CameraManager::GetInstance()->GetActiveCamera();
 
-    // 有効な空だけ先に描き、以降の配置物の背後へ置きます。
-    if (skybox_ && camera && engine::LightManager::GetInstance()->IsSkyboxEnabled()) {
-        skybox_->SetTextureHandle(engine::LightManager::GetInstance()->GetSkyboxTextureHandle());
-        skybox_->Draw(camera->GetConstantBuffer());
-    }
+    BeginWorldObjectDrawing(skybox_.get(), camera);
 
     // 通常の3Dパスでライト付きの配置物・予兆・弾を描き、ライトの編集表示も重ねます。
-    ID3D12Resource* pointLight = engine::LightManager::GetInstance()->GetPointLightResource();
-    ID3D12Resource* spotLight = engine::LightManager::GetInstance()->GetSpotLightResource();
-    GetObject3DCommon()->SetGraphicsCommand();
-    objectManager_->Draw(pointLight, spotLight);
-    DrawEnemyTelegraphs(*this, pointLight, spotLight);
-    BulletManager::GetInstance()->Draw(pointLight, spotLight);
+    // この描画で使う点光源とスポットライトを一度借り、後続の描画に渡す。
+    const auto lighting = engine::SceneLighting::Capture();
+    lighting.Draw(*objectManager_, &ObjectManager::Draw);
+    DrawEnemyTelegraphs(*this, lighting);
+    lighting.Draw(*BulletManager::GetInstance(), &BulletManager::Draw);
     LightEditor::GetInstance()->Draw3D();
 
+    // シーンのCPU粒子システムが用意されていれば、設置物と一緒に描く。
     if (particleSystem_) {
         particleSystem_->Draw();
     }
@@ -179,6 +183,7 @@ void SceneAssetEditorScene::Draw() {
     bool hasAttachedEffects = false;
 
     for (const auto& object : objects) {
+        // 付属エフェクトのいずれかが指定されたオブジェクトを一つでも見つけたら走査を終える。
         if (object && (!object->GetMeshEffect1Name().empty() || !object->GetMeshEffect2Name().empty())) {
             hasAttachedEffects = true;
             break;
@@ -187,13 +192,15 @@ void SceneAssetEditorScene::Draw() {
 
     // カメラのプレビュー外で、付属エフェクトが必要なフレームだけ画面コピーを補います。
     if (!dxCommon_->IsCameraPreviewRendering() && hasAttachedEffects) {
+        // 前の描画パスで背景コピーを済ませていない場合だけ、ここで取得する。
         if (!grabUpdated) {
             dxCommon_->UpdateGrabTexture();
         }
 
         for (const auto& object : objects) {
+            // 存在して表示中のオブジェクトだけ、その付属エフェクトに描画を依頼する。
             if (object && object->GetIsVisible()) {
-                object->DrawAttachedEffects(pointLight, spotLight);
+                lighting.Draw(*object, &engine::Object3D::DrawAttachedEffects);
             }
         }
     }
@@ -208,6 +215,7 @@ void SceneAssetEditorScene::DrawUi() {
     BeginSpriteDrawing();
 
     for (const auto& sprite : sprites_) {
+        // 実体があるスプライトだけ、共通スプライトパイプラインで描画する。
         if (sprite) {
             sprite->Draw();
         }

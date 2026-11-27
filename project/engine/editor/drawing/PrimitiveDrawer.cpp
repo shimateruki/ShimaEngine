@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "PrimitiveDrawer.h"
 #include <numbers>
 #include "RenderStats.h"
@@ -9,6 +10,7 @@ PrimitiveDrawer::~PrimitiveDrawer() {
     Finalize();
 }
 
+// 線のパイプラインと、箱・球・円柱が共用する定数バッファを初期化します。
 void PrimitiveDrawer::Initialize(engine::DirectXCommon* dxCommon) {
     dxCommon_ = dxCommon;
     assert(dxCommon_);
@@ -30,6 +32,7 @@ void PrimitiveDrawer::Initialize(engine::DirectXCommon* dxCommon) {
     Microsoft::WRL::ComPtr<ID3DBlob> sigBlob, errBlob;
     hr = D3D12SerializeRootSignature(&rsDesc, D3D_ROOT_SIGNATURE_VERSION_1, &sigBlob, &errBlob);
 
+    // ルートシグネチャのシリアル化に失敗したら、DirectXの出力をログに出し、assertで検出する。
     if (FAILED(hr)) {
         OutputDebugStringA((char*)errBlob->GetBufferPointer());
         assert(false);
@@ -37,6 +40,7 @@ void PrimitiveDrawer::Initialize(engine::DirectXCommon* dxCommon) {
     hr = device->CreateRootSignature(0, sigBlob->GetBufferPointer(), sigBlob->GetBufferSize(), IID_PPV_ARGS(&primitiveRootSignature_));
     assert(SUCCEEDED(hr));
 
+    // 一点に四成分の位置だけを持たせ、面のカリングをしないライン描画を組み立てる。
     D3D12_INPUT_ELEMENT_DESC inputElems[] = { { "POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 } };
     D3D12_INPUT_LAYOUT_DESC inputLayout = { inputElems, _countof(inputElems) };
     D3D12_RASTERIZER_DESC rasterDesc{};
@@ -69,6 +73,7 @@ void PrimitiveDrawer::Initialize(engine::DirectXCommon* dxCommon) {
     hr = device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&primitivePipelineState_));
     assert(SUCCEEDED(hr));
 
+    // 箱の枠は原点中心、一辺1の八頂点を基に、十二辺を線分で結ぶ。
     engine::Vector4 cubeVerts[] = { {-0.5f,-0.5f,-0.5f,1}, {0.5f,-0.5f,-0.5f,1}, {-0.5f,0.5f,-0.5f,1}, {0.5f,0.5f,-0.5f,1}, {-0.5f,-0.5f,0.5f,1}, {0.5f,-0.5f,0.5f,1}, {-0.5f,0.5f,0.5f,1}, {0.5f,0.5f,0.5f,1} };
     uint32_t cubeIdx[] = { 0,1, 1,3, 3,2, 2,0, 4,5, 5,7, 7,6, 6,4, 0,4, 1,5, 2,6, 3,7 };
     cubeVertexBuffer_ = dxCommon_->CreateBufferResource(sizeof(cubeVerts));
@@ -86,14 +91,15 @@ void PrimitiveDrawer::Initialize(engine::DirectXCommon* dxCommon) {
     memcpy(ibData, cubeIdx, sizeof(cubeIdx));
     cubeIndexBuffer_->Unmap(0, nullptr);
 
+    // 表示色を書き込む定数バッファを描画番号ごとに分け、描画の度にCPUから更新できるようマップする。
     primitiveColorBuffer_ = dxCommon_->CreateBufferResource(sizeof(AlignedVector4) * kMaxInstances);
     hr = primitiveColorBuffer_->Map(0, nullptr, (void**)&primitiveColorData_);
     assert(SUCCEEDED(hr));
-    const int kSegments = 36; // 36分割で円を作る。
+    const std::int32_t kSegments = 36; // 36分割で円を作る。
     engine::Vector4 sphereVerts[kSegments * 3];
     uint32_t sphereIdx[kSegments * 6];
 
-    for (int i = 0; i < kSegments; ++i) {
+    for (std::int32_t i = 0; i < kSegments; ++i) {
         float theta = (2.0f * std::numbers::pi_v<float> * i) / kSegments;
         float cosT = std::cos(theta) * 0.5f; // 半径0.5の基準球
         float sinT = std::sin(theta) * 0.5f;
@@ -103,7 +109,7 @@ void PrimitiveDrawer::Initialize(engine::DirectXCommon* dxCommon) {
         sphereVerts[kSegments + i] = { 0.0f, cosT, sinT, 1.0f };
         sphereVerts[kSegments * 2 + i] = { sinT, 0.0f, cosT, 1.0f };
 
-        // インデックス結線
+        // 頂点は各円内の次の番号と結ぶ。末尾の次は先頭へ折り返す。
         sphereIdx[i * 2] = i;
         sphereIdx[i * 2 + 1] = (i + 1) % kSegments;
 
@@ -130,16 +136,17 @@ void PrimitiveDrawer::Initialize(engine::DirectXCommon* dxCommon) {
     memcpy(sibData, sphereIdx, sizeof(sphereIdx));
     sphereIndexBuffer_->Unmap(0, nullptr);
 
+    // 色と同じ番号で参照する行列バッファを作り、CPUからの書き込み先を保持する。
     primitiveWvpBuffer_ = dxCommon_->CreateBufferResource(sizeof(AlignedMatrix4x4) * kMaxInstances);
     hr = primitiveWvpBuffer_->Map(0, nullptr, (void**)&primitiveWvpData_);
     assert(SUCCEEDED(hr));
 
     // --- 円柱のバッファ作成 ---
-    const int kCylinderSegments = 16; // 16角柱で円柱を表現
+    const std::int32_t kCylinderSegments = 16; // 16角柱で円柱を表現
     engine::Vector4 cylinderVerts[kCylinderSegments * 2];
     uint32_t cylinderIdx[kCylinderSegments * 6];
 
-    for (int i = 0; i < kCylinderSegments; ++i) {
+    for (std::int32_t i = 0; i < kCylinderSegments; ++i) {
         float theta = (2.0f * std::numbers::pi_v<float> * i) / kCylinderSegments;
         float cosT = std::cos(theta) * 0.5f; // 半径0.5
         float sinT = std::sin(theta) * 0.5f;
@@ -150,7 +157,7 @@ void PrimitiveDrawer::Initialize(engine::DirectXCommon* dxCommon) {
         // 底面の頂点 (Y = -0.5)
         cylinderVerts[kCylinderSegments + i] = { cosT, -0.5f, sinT, 1.0f };
 
-        // インデックス結線
+        // 上面・底面の輪と、同じ角度の上下頂点を結ぶ線をそれぞれ登録する。
         // ① 上面の円の線分
         cylinderIdx[i * 2] = i;
         cylinderIdx[i * 2 + 1] = (i + 1) % kCylinderSegments;
@@ -184,17 +191,19 @@ void PrimitiveDrawer::Initialize(engine::DirectXCommon* dxCommon) {
 }
 
 void PrimitiveDrawer::Finalize() {
-    // 書き込み用に保持したCPUマップを閉じ、以後の参照を無効にします。GPUリソース参照はメンバーのComPtrが保持します。
+    // 行列バッファをマップ済みの場合だけ解放し、CPU側の書込参照を外す。
     if (primitiveWvpData_) {
         primitiveWvpBuffer_->Unmap(0, nullptr);
         primitiveWvpData_ = nullptr;
     }
+    // 色バッファもマップ済みの場合にだけ、書き込み先を外す。
     if (primitiveColorData_) {
         primitiveColorBuffer_->Unmap(0, nullptr);
         primitiveColorData_ = nullptr;
     }
 }
 
+// ライン用PSOと入力形式を設定し、既定の形状として箱の頂点・インデックスを結び付けます。
 void PrimitiveDrawer::PreDraw(ID3D12GraphicsCommandList* commandList) {
     commandList->SetPipelineState(primitivePipelineState_.Get());
     commandList->SetGraphicsRootSignature(primitiveRootSignature_.Get());
@@ -206,10 +215,11 @@ void PrimitiveDrawer::PreDraw(ID3D12GraphicsCommandList* commandList) {
 namespace {
 // 指定したスロットのWVPと色をGPUへ渡す。カメラが未設定なら描画できない。
 bool BindWireDrawConstants(ID3D12GraphicsCommandList* commandList, const engine::Matrix4x4& worldMatrix,
-    const engine::Vector4& color, int instanceIndex, AlignedMatrix4x4* wvpData, AlignedVector4* colorData,
+    const engine::Vector4& color, std::int32_t instanceIndex, AlignedMatrix4x4* wvpData, AlignedVector4* colorData,
     ID3D12Resource* wvpBuffer, ID3D12Resource* colorBuffer) {
     engine::Math math;
     const engine::Camera* camera = CameraManager::GetInstance()->GetMainCamera();
+    // メインカメラが無ければ描画に必要なビュー投影を作れないため、失敗を返す。
     if (!camera)
         return false;
 
@@ -230,7 +240,7 @@ bool BindWireDrawConstants(ID3D12GraphicsCommandList* commandList, const engine:
 }
 }
 
-void PrimitiveDrawer::DrawWireCube(ID3D12GraphicsCommandList* commandList, const engine::Matrix4x4& worldMatrix, const engine::Vector4& color, int instanceIndex) {
+void PrimitiveDrawer::DrawWireCube(ID3D12GraphicsCommandList* commandList, const engine::Matrix4x4& worldMatrix, const engine::Vector4& color, std::int32_t instanceIndex) {
     // インスタンスごとの行列・色を定数バッファへ書き、枠線用の24インデックスを描く。
     if (!BindWireDrawConstants(commandList, worldMatrix, color, instanceIndex,
         primitiveWvpData_, primitiveColorData_, primitiveWvpBuffer_.Get(), primitiveColorBuffer_.Get())) {
@@ -241,7 +251,8 @@ void PrimitiveDrawer::DrawWireCube(ID3D12GraphicsCommandList* commandList, const
     engine::RenderStats::GetInstance()->RecordIndexedDraw(24);
 }
 
-void PrimitiveDrawer::DrawWireSphere(ID3D12GraphicsCommandList* commandList, const engine::Matrix4x4& worldMatrix, const engine::Vector4& color, int instanceIndex) {
+void PrimitiveDrawer::DrawWireSphere(ID3D12GraphicsCommandList* commandList, const engine::Matrix4x4& worldMatrix, const engine::Vector4& color, std::int32_t instanceIndex) {
+    // カメラを使って行列と色を用意できなければ、球の描画は行わない。
     if (!BindWireDrawConstants(commandList, worldMatrix, color, instanceIndex,
         primitiveWvpData_, primitiveColorData_, primitiveWvpBuffer_.Get(), primitiveColorBuffer_.Get())) {
         return;
@@ -261,7 +272,8 @@ void PrimitiveDrawer::DrawWireSphere(ID3D12GraphicsCommandList* commandList, con
 }
 
 
-void PrimitiveDrawer::DrawWireCylinder(ID3D12GraphicsCommandList* commandList, const engine::Matrix4x4& worldMatrix, const engine::Vector4& color, int instanceIndex) {
+void PrimitiveDrawer::DrawWireCylinder(ID3D12GraphicsCommandList* commandList, const engine::Matrix4x4& worldMatrix, const engine::Vector4& color, std::int32_t instanceIndex) {
+    // カメラを使って行列と色を用意できなければ、円柱の描画は行わない。
     if (!BindWireDrawConstants(commandList, worldMatrix, color, instanceIndex,
         primitiveWvpData_, primitiveColorData_, primitiveWvpBuffer_.Get(), primitiveColorBuffer_.Get())) {
         return;

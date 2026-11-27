@@ -29,12 +29,13 @@ class PlayerAttackInputBuffer {
 
     // この押下を状態開始に使用済みとし、同じ入力の再消費を防ぐ。
     void MarkUsedForStateStart() {
+        // 押下を保持している場合だけ、同じ入力を状態開始で消費済みにする。
         if (state_.buffered)
             state_.usedForStateStart = true;
     }
 
-    // 使用済みフラグだけで消費可否を決める。timer 値はここでは判定しない。
     bool Consume() {
+        // 未使用の押下を保持している場合だけ消費する。ここでは経過時間を判定しない。
         if (state_.buffered && !state_.usedForStateStart) {
             state_.buffered = false;
             state_.inputBufferTimer = 0.0f;
@@ -50,8 +51,6 @@ class PlayerAttackInputBuffer {
         state_.buffered = false;
         state_.inputBufferTimer = 0.0f;
 
-        // 既存の解除処理と同じく使用済みフラグは保持します。
-        // 次のRecordで解除され、途中状態のリプレイ復元にも影響しません。
     }
 
     Snapshot Capture() const { return state_; }

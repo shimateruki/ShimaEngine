@@ -35,15 +35,18 @@ class EnemyMagmaSlime final : public BaseEnemy {
     /// 本体と所有する通常描画の演出を描く。
     void Draw(ID3D12Resource* pointLightResource, ID3D12Resource* spotLightResource) override;
 
+    // 描画対象のボスが持つ詠唱、炎柱の紋章、連結線を半透明パスで描く。
     void DrawOwnedTransparentVisuals(ID3D12Resource* pointLightResource,
                                      ID3D12Resource* spotLightResource) override;
 
+    // 指定カメラへ可視のボス本体を描く。半透明の所有演出は専用入口を使う。
     void DrawForCamera(engine::Camera* camera, ID3D12Resource* pointLightResource,
-                       ID3D12Resource* spotLightResource, int previewBufferIndex = 0) override;
+                       ID3D12Resource* spotLightResource, std::int32_t previewBufferIndex = 0) override;
 
+    // 半透明の所有演出を指定カメラへ描く。previewBufferIndex はビュー用の描画データを選ぶ番号。
     void DrawOwnedTransparentVisualsForCamera(engine::Camera* camera, ID3D12Resource* pointLightResource,
                                               ID3D12Resource* spotLightResource,
-                                              int previewBufferIndex = 0) override;
+                                              std::int32_t previewBufferIndex = 0) override;
 
     /// スイッチの有効化に合わせて登場状態を切り替える。
     void OnSwitchEvent(bool active) override;
@@ -54,9 +57,10 @@ class EnemyMagmaSlime final : public BaseEnemy {
     /// 配置スケールを攻撃判定と登場演出の基準にする。
     void ApplyManagedScale(const engine::Vector3& scale) override;
 
+    // ボスはフックが当たっても、運搬と引き寄せの対象にはならない。
     bool IsPullImmune() const override { return true; }
 
-    /// 特殊材質で描く溶岩表示を所有するか返す。
+    /// 本体が可視で、溶岩弾・床・柱・波・突進などの描画物を所有するときに true を返す。
     bool HasOwnedSpecialMaterialVisuals() const override;
 
     /// 所有する特殊材質の溶岩表示を指定バッファで描く。
@@ -79,33 +83,33 @@ class EnemyMagmaSlime final : public BaseEnemy {
     /// HUD の分母となる最大 HP を返す。
     float GetEncounterMaximumHp() const;
 
-    /// 登場演出の進行率を HUD 向けに返す。
+    /// 登場前は0、登場中は0〜1、戦闘中は1を遭遇 HUD に渡す。
     float GetEncounterAppearanceProgress() const;
 
   private:
     enum class EncounterState {
-        Normal,
-        Dormant,
-        Appearing,
-        Active,
+        kNormal,
+        kDormant,
+        kAppearing,
+        kActive,
     };
 
     enum class AttackKind {
-        None,
-        MagmaMortar,
-        LavaRush,
-        VolcanicSlam,
-        EruptionField,
-        LavaSpiral,
-        FireColumn,
-        MagmaFlood,
+        kNone,
+        kMagmaMortar,
+        kLavaRush,
+        kVolcanicSlam,
+        kEruptionField,
+        kLavaSpiral,
+        kFireColumn,
+        kMagmaFlood,
     };
 
     enum class AttackState {
-        Idle,
-        Windup,
-        Active,
-        Recovery,
+        kIdle,
+        kWindup,
+        kActive,
+        kRecovery,
     };
 
     // 放物線を飛ぶマグマ弾の、着弾までの位置と時間を保持します。
@@ -140,7 +144,7 @@ class EnemyMagmaSlime final : public BaseEnemy {
         float damageTimer = 0.0f;
     };
 
-    // 火山プレスから広がる波。previousRadius は高速フレームでの判定抜けを防ぎます。
+    // 火山プレスから広がる波。フレーム間で半径が大きく変わっても、前回半径を使って接触の通り過ぎを防ぐ。
     struct MagmaRing {
         std::unique_ptr<engine::Object3D> visual;
         engine::Vector3 position{};
@@ -239,6 +243,7 @@ class EnemyMagmaSlime final : public BaseEnemy {
 
     /// <summary>標的距離と現在フェーズから、移動速度と攻撃開始を決めます。</summary>
     void UpdateBehavior(float deltaTime, const engine::Vector3& targetDirection, float targetDistance, engine::Vector3& velocity);
+    // 専用移動が位置を確定したフレームは接地と座標を直接反映し、基底モーター用の速度を0にする。
     void UpdateLocomotion(float deltaTime, const engine::Vector3& targetDirection, engine::Vector3& velocity);
 
     /// <summary>攻撃状態と予備動作を初期化します。</summary>
@@ -269,7 +274,7 @@ class EnemyMagmaSlime final : public BaseEnemy {
     AttackKind ResolveDebugAttack() const;
 
     /// 本編とプレビューが共有する攻撃種別・IDの対応表を返す。
-    std::span<const EnemyAttackSelection::Entry<AttackKind>> GetAttackEntries() const;
+    std::span<const enemyAttackSelection::Entry<AttackKind>> GetAttackEntries() const;
 
     /// 内部の攻撃種別を JSON プロファイルの ID へ変換する。
     const char* GetAttackId(AttackKind kind) const;
@@ -359,10 +364,10 @@ class EnemyMagmaSlime final : public BaseEnemy {
     /// 炎柱の連続発生を開始する。
     void BeginFireColumn();
 
-    /// 各炎柱の発生間隔と寿命を更新する。
+    /// 外周3本を時差で立て、紋章が完成する時刻から中央の主柱を表示する。
     void UpdateFireColumn(float deltaTime);
 
-    // マグマ流は複数セルを順番に出し、最後のセルまで攻撃を維持します。
+    // マグマ流は複数セルを時間差で立ち上げ、命中の間隔は全セルで共有する。
     void BeginMagmaFlood();
 
     /// セルを順に発生させてマグマ流を進める。
@@ -372,7 +377,7 @@ class EnemyMagmaSlime final : public BaseEnemy {
     void UpdateChantVisual(float deltaTime);
 
     /// <summary>攻撃用モデルを作り、描画材質・色・発光を設定します。</summary>
-    std::unique_ptr<engine::Object3D> CreateMagmaVisual(const std::string& name, const std::string& model, int materialType,
+    std::unique_ptr<engine::Object3D> CreateMagmaVisual(const std::string& name, const std::string& model, std::int32_t materialType,
                                                 const engine::Vector4& color, float emissive) const;
 
     /// 指定位置の下にある地面上の座標を探す。
@@ -404,7 +409,7 @@ class EnemyMagmaSlime final : public BaseEnemy {
     void EmitDirectedPreset(const char* presetName, const engine::Vector3& position, const engine::Vector3& direction,
                             float speedScale) const;
 
-    /// <summary>見た目のスケールを本体の衝突半径へ反映します。</summary>
+    /// <summary>そのフレームの最大スケールでローカル半径を補正し、伸縮中もワールド判定半径を保つ。</summary>
     void SyncCollisionRadius();
 
     /// <summary>中断・形態変更時に残った攻撃オブジェクトを破棄します。</summary>
@@ -440,9 +445,9 @@ class EnemyMagmaSlime final : public BaseEnemy {
 
     // 攻撃中の位置・弾・演出オブジェクトです。
     // 攻撃の種類。技ごとの設定や更新処理を選ぶ。
-    AttackKind currentAttack_ = AttackKind::None;
+    AttackKind currentAttack_ = AttackKind::kNone;
     // 現在の技が予備動作・実行・硬直のどの段階にいるか。
-    AttackState attackState_ = AttackState::Idle;
+    AttackState attackState_ = AttackState::kIdle;
 
     engine::Vector3 baseScale_{1.0f, 1.0f, 1.0f}; // 攻撃・被弾の変形を重ねる前の基準倍率。
 
@@ -521,14 +526,14 @@ class EnemyMagmaSlime final : public BaseEnemy {
     // 洪水セル全体で共有するダメージ間隔の残り秒数。
     float floodDamageTimer_ = 0.0f;
 
-    int actionIndex_ = 0; // 技内で次に発生させる弾・着弾点の番号。
-    int automaticAttackSerial_ = 0; // 自動選択した技の通算番号。攻撃周期をまたいで進む。
+    std::int32_t actionIndex_ = 0; // 技内で次に発生させる弾・着弾点の番号。
+    std::int32_t automaticAttackSerial_ = 0; // 自動選択した技の通算番号。攻撃周期をまたいで進む。
     // 一巡でAIが選ぶ技の並び。候補を使い切ると組み直す。
     std::array<AttackKind, 7> attackCycle_{};
     // 配列の末尾に達したら、次の自動攻撃選択で周期を作り直す。
     std::size_t attackCycleIndex_ = attackCycle_.size();
     // 最後にAIが選んだ技。次の候補を決めるときに連続使用を避けるため参照する。
-    AttackKind lastAutomaticAttack_ = AttackKind::None;
+    AttackKind lastAutomaticAttack_ = AttackKind::kNone;
     // AIの攻撃候補を並べ替えるための乱数生成器。
     std::mt19937 attackRandom_{std::random_device{}()};
     bool hasBaseScale_ = false; // モデルの基準倍率を一度取得したか。
@@ -544,7 +549,7 @@ class EnemyMagmaSlime final : public BaseEnemy {
 
     // Editorで指定した登場前の状態。Playの開始・停止で安全に復元します。
     // 待機・登場中・戦闘中のどの段階か。通常AIを実行するかの判定にも使う。
-    EncounterState encounterState_ = EncounterState::Normal;
+    EncounterState encounterState_ = EncounterState::kNormal;
 
     engine::Vector3 encounterBasePosition_{}; // Editorで設定された登場前の位置。Playの退避・復帰に使う。
     engine::Vector3 encounterBaseScale_{1.0f, 1.0f, 1.0f}; // 登場演出で縮める前の配置倍率。
@@ -559,7 +564,7 @@ class EnemyMagmaSlime final : public BaseEnemy {
     uint32_t encounterCollisionMask_ = 0; // 登場待機中に無効化する前の衝突マスク。
 
     // 登場演出で材質を切り替える前に退避した材質番号。
-    int encounterMaterialType_ = 0;
+    std::int32_t encounterMaterialType_ = 0;
 
     // 登場を開始してからの経過秒数。演出時間で割って進捗を求める。
     float encounterTimer_ = 0.0f;

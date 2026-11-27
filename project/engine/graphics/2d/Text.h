@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "Sprite.h"
 #include <string>
 #include <vector>
@@ -21,12 +22,12 @@ public:
     void Draw();
 
     /// <summary>
-    /// 表示する文字列と必要な文字Sprite数を設定する。
+    /// 表示する文字列を設定する。フォント画像への割り当ては1バイトにつき1セル。
     /// </summary>
     void SetString(const std::string& str);
 
     /// <summary>
-    /// テキスト全体の左上基準位置を設定する。
+    /// 先頭文字のSpriteのアンカー位置を画面ピクセルで指定する。
     /// </summary>
     void SetPosition(const engine::Vector2& position);
 
@@ -40,17 +41,19 @@ private:
     engine::SpriteCommon* common_ = nullptr; // 文字Spriteが使う共有描画基盤。
     uint32_t fontTextureHandle_ = 0; // 文字を切り出すフォント画像のハンドル。
 
-    // 1文字あたりのスプライトを保持する
+    // 文字列の各バイトに対応する描画用のSprite。
     std::vector<std::unique_ptr<engine::Sprite>> sprites_;
 
     std::string text_ = "";
-    engine::Vector2 position_ = engine::Vector2::ZERO;
+    // 先頭文字のアンカーに使う画面座標。
+    engine::Vector2 position_ = engine::Vector2::kZero;
+    // 文字の大きさと横の間隔に適用する倍率。
     engine::Vector2 scale_ = { 1.0f, 1.0f };
 
     // フォントテクスチャの1文字分のサイズ
-    int fontWidth_ = 16;
-    int fontHeight_ = 16; // 一文字の元画像の高さ（ピクセル）。
+    std::int32_t fontWidth_ = 16;
+    std::int32_t fontHeight_ = 16; // 一文字の元画像の高さ（ピクセル）。
 
     // フォントテクスチャの横に並んでいる文字数
-    int fontCharsPerRow_ = 7;
+    std::int32_t fontCharsPerRow_ = 7;
 };

@@ -6,6 +6,7 @@
 // 主な入口：CalculateVelocity
 class MoveStrategy2D : public IMoveStrategy {
   public:
+    // A・D入力をワールドX方向の速度にする。両方押した場合はDを優先する。
     engine::Vector3 CalculateVelocity(Player* player) override;
 
   private:

@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "engine/editor/assets/JsonAssetBrowser.h"
 #include "GpuParticleConfig.h"
 #include "GpuParticleManager.h"
@@ -38,9 +39,9 @@ private:
     bool isPreviewMode_ = true;
     float previewDistance_ = 5.0f;
     float previewTime_ = 0.0f;
-    int lastStagePlayRequestSerial_ = 0; // 前回処理したプレビュー再生要求の番号。
-    int lastStageStopRequestSerial_ = 0; // 前回処理したプレビュー停止要求の番号。
-    int lastStageSeekRequestSerial_ = 0; // 前回処理したプレビューシーク要求の番号。
+    std::int32_t lastStagePlayRequestSerial_ = 0; // 前回処理したプレビュー再生要求の番号。
+    std::int32_t lastStageStopRequestSerial_ = 0; // 前回処理したプレビュー停止要求の番号。
+    std::int32_t lastStageSeekRequestSerial_ = 0; // 前回処理したプレビューシーク要求の番号。
 
         // 現在の設定で一度発生させ、見た目を即確認できるようにします。
 void EmitWithPreview();

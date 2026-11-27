@@ -27,7 +27,7 @@ public:
 
 private:
     // 材質固有の数値UIのみを担当。変更通知・保存・複数選択への反映は呼び出し元に残す。
-    void DrawEffectMaterialSettings(engine::Object3D* selectedObject, int currentMatType, bool& isGraphicsChanged);
+    void DrawEffectMaterialSettings(engine::Object3D* selectedObject, std::int32_t currentMatType, bool& isGraphicsChanged);
 
     // Inspector専用のUI描画ヘルパー。
     /// スポナーObject固有の出現対象や間隔などを編集する。

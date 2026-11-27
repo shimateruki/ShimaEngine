@@ -6,11 +6,11 @@
 
 BulletManager* BulletManager::GetInstance() {
     // 弾リストと衝突登録をシーン内で一箇所に集約する。
-    static BulletManager instance;
-    return &instance;
+    static BulletManager sInstance;
+    return &sInstance;
 }
 
-void BulletManager::Initialize(engine::Object3DCommon* common, CollisionManager* colManager) {
+void BulletManager::Initialize(engine::Object3DCommon* common, engine::CollisionManager* colManager) {
     // 新しいシーンの描画・衝突基盤へ付け替え、旧弾を残さない。
     common_ = common;
     colManager_ = colManager;
@@ -25,9 +25,10 @@ void BulletManager::Finalize() {
 }
 
 void BulletManager::Clear() {
-    // 生存中の弾も衝突リストから外し、ダングリング参照を防ぐ。
+    // 衝突管理の参照が有効な場合は、弾の所有権を消す前に衝突登録を外す。
     if (colManager_) {
         for (const auto& bullet : bullets_) {
+            // 実体がありプレビュー専用ではない弾だけ、登録していた衝突リストから外す。
             if (bullet && !bullet->IsPreviewOnly()) {
                 colManager_->RemoveObject(bullet.get());
             }
@@ -53,26 +54,30 @@ void BulletManager::Fire(const engine::Vector3& pos, const engine::Vector3& vel,
         return;
     }
 
+    // 編集用の発射だけ、砲台ごとと全体の同時表示数を確認する。
     if (visualConfig.previewOnly) {
-        // 既存弾を途中で消すと持続時間を確認できないため、上限時は新規生成を待ちます。
+        // 既存弾の持続を確認できるよう、上限に達していればその発射要求を見送る。
         // 最短プレビュー間隔0.8秒と設定可能な最大寿命20秒を一台分収容します。
         constexpr size_t kMaxPerCannon = 32;
         constexpr size_t kMaxTotal = 128;
         const auto isOwnerPreview = [&visualConfig](const std::unique_ptr<Bullet>& bullet) {
             return bullet->IsPreviewOnly() && bullet->GetPreviewOwner() == visualConfig.previewOwner;
         };
+        // 同じ砲台のプレビュー弾が上限に達していれば、新しい弾の生成を見送る。
         if (std::count_if(bullets_.begin(), bullets_.end(), isOwnerPreview) >= kMaxPerCannon) {
             return;
         }
         const auto isPreview = [](const std::unique_ptr<Bullet>& bullet) { return bullet->IsPreviewOnly(); };
+        // 全砲台を合わせたプレビュー弾数が上限に達している場合も、生成を見送る。
         if (std::count_if(bullets_.begin(), bullets_.end(), isPreview) >= kMaxTotal) {
             return;
         }
     }
 
-    // 発射前にモデルと共通材質を設定し、指定がある場合だけテクスチャを上書きします。
+    // 弾を登録する前に、モデルと共通の描画設定を初期化する。
     auto bullet = std::make_unique<Bullet>();
     bullet->Initialize(common_);
+    // プレビューなどから個別の確認用ラベルを渡された場合だけ、弾の名前を付ける。
     if (!visualConfig.debugLabel.empty())
         bullet->SetName(visualConfig.debugLabel);
     bullet->SetModel(model);
@@ -82,12 +87,14 @@ void BulletManager::Fire(const engine::Vector3& pos, const engine::Vector3& vel,
     bullet->SetColor(visualConfig.color);
     bullet->SetEmissive(visualConfig.emissive);
 
+    // テクスチャパスが指定された弾だけ、モデルの元のテクスチャを上書きする。
     if (!visualConfig.texturePath.empty()) {
         bullet->SetTexture(visualConfig.texturePath);
     }
 
-    // 描画側に材質パラメータがある場合は、弾の形状や発光に使う設定を渡します。
+    // メッシュを持つ弾だけ、材質の追加パラメーターを調べる。
     if (engine::MeshRenderer* renderer = bullet->GetMeshRenderer()) {
+        // 材質のパラメーター領域がある場合は、波や発光などの表示設定を渡す。
         if (auto* param = renderer->GetWaterParamData()) {
             param->waveSpeed = visualConfig.waveSpeed;
             param->waveHeight = visualConfig.waveHeight;
@@ -98,33 +105,36 @@ void BulletManager::Fire(const engine::Vector3& pos, const engine::Vector3& vel,
             param->effectIntensity = visualConfig.effectIntensity;
             param->billboardScale = visualConfig.billboardScale;
 
+            // マグマ弾の表示を使う場合は、発射位置と半径から液面のクリップ高さを渡す。
             if (visualConfig.magmaHopperPresentation) {
-                // 通常弾と同じ描画経路で、液面より下だけを隠す。
                 param->effectScaleY = pos.y - radius * 0.5f;
             }
         }
     }
 
     // 球の当たり判定を設定します。半径がワールド単位の場合はモデルの拡縮を判定に掛けません。
-    bullet->SetColliderType(ColliderType::Sphere);
+    bullet->SetColliderType(engine::ColliderType::kSphere);
     bullet->SetCollisionRadius(radius);
     bullet->SetCollisionSize({radius, radius, radius});
-    // 見た目を二倍にしても、ワールド半径を指定した弾の接触範囲は二倍にしない。
+    // ワールド半径を指定され、コライダーがある場合は、モデルの拡縮を判定半径に掛けない。
     if (visualConfig.collisionRadiusIsWorld && bullet->GetCollider())
         bullet->GetCollider()->SetScaleOverride({1.0f, 1.0f, 1.0f});
+    // マグマ弾のコライダーがあれば、表示の伸縮を判定に掛けず、弾の影も止める。
     if (visualConfig.magmaHopperPresentation && bullet->GetCollider()) {
         bullet->GetCollider()->SetScaleOverride({1.0f, 1.0f, 1.0f});
         bullet->SetCastShadow(false);
     }
 
-    // プレビューでは属性・マスク・ダメージをゼロで渡し、実戦用の衝突や被害を発生させません。
-    bullet->Fire(pos, vel, life,
-                 visualConfig.previewOnly ? 0 : attr, visualConfig.previewOnly ? 0 : mask,
-                 visualConfig.previewOnly ? 0.0f : damage, statusEffect, damageType);
-    if (visualConfig.previewOnly)
+    // プレビューは発射時の属性・マスク・ダメージを無効にし、発射後に所有する砲台を記録する。
+    if (visualConfig.previewOnly) {
+        bullet->Fire(pos, vel, life, 0, 0, 0.0f, statusEffect, damageType);
         bullet->SetPreviewOnly(visualConfig.previewOwner);
+    } else {
+        bullet->Fire(pos, vel, life, attr, mask, damage, statusEffect, damageType);
+    }
     bullet->SetMagmaHopperPresentation(visualConfig.magmaHopperPresentation);
     bullet->SetExplosionRadius(visualConfig.explosionRadius);
+    // 爆発半径を持つ弾は、コライダーがあれば直撃判定のサイズを表示倍率から独立させる。
     if (visualConfig.explosionRadius > 0.0f && bullet->GetCollider())
         bullet->GetCollider()->SetScaleOverride({1.0f, 1.0f, 1.0f});
     // ここで受け取る重力は下向き加速度の大きさ。負の値は加速なしとして扱う。
@@ -147,7 +157,7 @@ void BulletManager::Fire(const engine::Vector3& pos, const engine::Vector3& vel,
     bullets_.push_back(std::move(bullet));
 }
 
-// 弾の寿命と衝突を更新してから消滅対象を整理します。処理中の弾リスト変更を避けます。
+// 全弾の位置と寿命を先に進め、終了した弾の衝突登録と所有を後から解除します。
 void BulletManager::Update(float deltaTime) {
     // 当たり判定マネージャーがない間は弾の更新と登録を行わない。
     if (!colManager_) {
@@ -160,9 +170,11 @@ void BulletManager::Update(float deltaTime) {
         bullet->UpdateWorldMatrix();
     }
 
-    // 全弾を更新した後で、消滅した実戦弾の衝突登録を解除してから削除します。
+    // 全弾の位置を更新した後で、回収する弾を判定する。
     bullets_.remove_if([this](const std::unique_ptr<Bullet>& bullet) {
+        // 寿命切れや着弾で終了した弾だけ、所有リストから回収する。
         if (bullet->IsDead()) {
+            // 終了した実戦弾は、破棄前に衝突リストからも外す。
             if (!bullet->IsPreviewOnly())
                 colManager_->RemoveObject(bullet.get());
             return true;
@@ -179,6 +191,7 @@ void BulletManager::UpdatePreview(float deltaTime) {
     }
 
     for (auto& bullet : bullets_) {
+        // 実体がありプレビュー専用に設定された弾だけ、編集時の時間で位置と寿命を進める。
         if (bullet && bullet->IsPreviewOnly()) {
             bullet->Update(deltaTime);
             bullet->UpdateLocalMatrix();
@@ -192,6 +205,7 @@ void BulletManager::UpdatePreview(float deltaTime) {
     });
 }
 
+// 確認用として発射した弾が管理リストに一つでも存在するかを返します。
 bool BulletManager::HasPreviewBullets() const {
     return std::any_of(bullets_.begin(), bullets_.end(), [](const std::unique_ptr<Bullet>& bullet) {
         return bullet && bullet->IsPreviewOnly();
@@ -202,7 +216,8 @@ bool BulletManager::HasPreviewBullets() const {
 void BulletManager::Draw(ID3D12Resource* pointLightResource, ID3D12Resource* spotLightResource) {
     // 特殊マテリアル弾は後段で描くため、この不透明描画から除く。
     for (auto& bullet : bullets_) {
-        if (MaterialRenderPolicy::IsSpecial(bullet->GetMaterialType())) {
+        // 専用マテリアルの弾は、通常パスから外して後段のDrawSpecial()に渡す。
+        if (materialRenderPolicy::IsSpecial(bullet->GetMaterialType())) {
             continue;
         }
 
@@ -213,7 +228,8 @@ void BulletManager::Draw(ID3D12Resource* pointLightResource, ID3D12Resource* spo
 bool BulletManager::HasSpecialMaterialBullets() const {
     // 専用描画パスが必要な生存弾の有無を問い合わせる。
     for (const auto& bullet : bullets_) {
-        if (!bullet->IsDead() && MaterialRenderPolicy::IsSpecial(bullet->GetMaterialType())) {
+        // 終了前で専用マテリアルを使う弾が一つでもあれば、専用パスが必要と返す。
+        if (!bullet->IsDead() && materialRenderPolicy::IsSpecial(bullet->GetMaterialType())) {
             return true;
         }
     }
@@ -224,7 +240,8 @@ bool BulletManager::HasSpecialMaterialBullets() const {
 void BulletManager::DrawSpecial(uint32_t depthSrvHandle, uint32_t grabSrvHandle) {
     // 深度や画面コピーが揃った段階で特殊マテリアル弾だけ描く。
     for (auto& bullet : bullets_) {
-        if (bullet->IsDead() || !MaterialRenderPolicy::IsSpecial(bullet->GetMaterialType())) {
+        // 終了済みの弾や通常マテリアルの弾は、このパスの対象から外す。
+        if (bullet->IsDead() || !materialRenderPolicy::IsSpecial(bullet->GetMaterialType())) {
             continue;
         }
 
@@ -234,12 +251,12 @@ void BulletManager::DrawSpecial(uint32_t depthSrvHandle, uint32_t grabSrvHandle)
 
 #ifdef USE_IMGUI
 void BulletManager::BeginEditorSession() {
-    // ゲーム中の弾を退避し、エディターの一時弾と同じリストで更新しないようにします。
+    // すでに編集セッション中なら、実戦弾を退避したリストを入れ替え直さない。
     if (editorSession_) return;
     bullets_.swap(savedEditorBullets_); editorSession_ = true;
 }
 void BulletManager::EndEditorSession() {
-    // 編集中の弾を片付けてから、退避したゲーム中の弾を元のリストに戻します。
+    // 編集セッションを開始していない場合は、削除する編集弾や復元対象がないので戻る。
     if (!editorSession_) return;
     Clear(); bullets_.swap(savedEditorBullets_); editorSession_ = false;
 }

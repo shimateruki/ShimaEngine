@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "8e68a8c3ee0e446cbcc8820e79b6ec53",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/sprite/ui/control_guide/video_posters/27-slime-whip.png",
+  "version": 1
+}

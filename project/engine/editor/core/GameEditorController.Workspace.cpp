@@ -1,11 +1,13 @@
+#include <cstdint>
 #include "engine/editor/core/GameEditorController.Internal.h"
 
 #ifdef USE_IMGUI
 #include "engine/editor/assets/JsonAssetBrowser.h"
-using namespace GameEditorControllerImplementation;
+using namespace gameEditorControllerImplementation;
 
 // ワークスペース配置の保存と復元。
 void GameEditorController::ApplyWorkspacePreset(WorkspacePreset preset) {
+    // エディターを使えなければ選択状態を変えられないため、切り替えを見送る。
     if (!debugEditor_) {
         return;
     }
@@ -13,7 +15,7 @@ void GameEditorController::ApplyWorkspacePreset(WorkspacePreset preset) {
     showDebugWindows_ = true;
 
     // 前の対象選択を残すと、新しいワークスペースのInspectorに別用途の編集対象が混ざる。
-    if (preset == WorkspacePreset::Vfx) {
+    if (preset == WorkspacePreset::kVfx) {
         debugEditor_->SetSelectedObject(nullptr);
         EditorManager::GetInstance()->ClearSelection();
     }
@@ -22,29 +24,30 @@ void GameEditorController::ApplyWorkspacePreset(WorkspacePreset preset) {
     IEditable* target = nullptr;
 
     switch (preset) {
-    case WorkspacePreset::Vfx:
+    case WorkspacePreset::kVfx:
         target = vfxSequencerEditor_.get();
         break;
 
-    case WorkspacePreset::Animation:
+    case WorkspacePreset::kAnimation:
         target = debugEditor_.get();
         break;
     }
 
+    // 用途に対応するエディターが存在する場合だけ、共通の選択対象を変更する。
     if (target) {
         EditorManager::GetInstance()->SetSelectedObject(target);
     }
 
-    activeWorkspacePreset_ = static_cast<int>(preset);
+    activeWorkspacePreset_ = static_cast<std::int32_t>(preset);
     const char* key = "vfx";
     const char* displayName = "VFX編集";
 
     switch (preset) {
-    case WorkspacePreset::Vfx: key = "vfx";
+    case WorkspacePreset::kVfx: key = "vfx";
     displayName = "VFX編集";
     break;
 
-    case WorkspacePreset::Animation: key = "animation";
+    case WorkspacePreset::kAnimation: key = "animation";
     displayName = "アニメーション編集";
     break;
 
@@ -56,7 +59,7 @@ void GameEditorController::ApplyWorkspacePreset(WorkspacePreset preset) {
         std::filesystem::path("output/editor_state/workspaces") / (std::string(key) + ".ini");
     std::error_code error;
     pendingWorkspaceLayout_ = std::filesystem::exists(layoutPath, error)
-        ? static_cast<int>(preset)
+        ? static_cast<std::int32_t>(preset)
         : -1;
     dockspaceInitialized_ = false;
     workspaceStatus_ = std::string(displayName) +
@@ -70,11 +73,11 @@ void GameEditorController::SaveWorkspacePreset(WorkspacePreset preset) {
     const char* displayName = "VFX編集";
 
     switch (preset) {
-    case WorkspacePreset::Vfx: key = "vfx";
+    case WorkspacePreset::kVfx: key = "vfx";
     displayName = "VFX編集";
     break;
 
-    case WorkspacePreset::Animation: key = "animation";
+    case WorkspacePreset::kAnimation: key = "animation";
     displayName = "アニメーション編集";
     break;
 
@@ -85,6 +88,7 @@ void GameEditorController::SaveWorkspacePreset(WorkspacePreset preset) {
     std::error_code error;
     std::filesystem::create_directories(directory, error);
 
+    // 保存用のフォルダーを用意できなければ、iniを書かず状態とログに失敗を出す。
     if (error) {
         workspaceStatus_ = "レイアウト保存先を作成できませんでした。";
         DebugConsole::GetInstance()->AddLog("Workspace Error: " + workspaceStatus_);
@@ -109,10 +113,10 @@ void GameEditorController::ProcessPendingWorkspaceLayout() {
     const char* key = "vfx";
 
     switch (preset) {
-    case WorkspacePreset::Vfx: key = "vfx";
+    case WorkspacePreset::kVfx: key = "vfx";
     break;
 
-    case WorkspacePreset::Animation: key = "animation";
+    case WorkspacePreset::kAnimation: key = "animation";
     break;
 
     default: break;
@@ -122,33 +126,36 @@ void GameEditorController::ProcessPendingWorkspaceLayout() {
         std::filesystem::path("output/editor_state/workspaces") / (std::string(key) + ".ini");
     std::error_code error;
 
+    // 予約後もiniがあり、パスの確認に成功した場合だけ配置を読み戻す。
     if (std::filesystem::exists(layoutPath, error) && !error) {
         ImGui::LoadIniSettingsFromDisk(layoutPath.string().c_str());
     }
 }
 
 void GameEditorController::DrawWorkspaceMenu() {
-    // 保存先が決まるのは既存ワークスペースを選択している場合だけ。
+    // ワークスペースメニューが開いている間だけ、切替と保存の選択肢を描く。
     if (!ImGui::BeginMenu(ICON_FA_COLUMNS " ワークスペース")) {
         return;
     }
 
     DrawEditorCommandMenuItem(
-        EditorCommandId::WorkspaceVfx, nullptr,
-        activeWorkspacePreset_ == static_cast<int>(WorkspacePreset::Vfx));
+        editorCommandId::kWorkspaceVfx, nullptr,
+        activeWorkspacePreset_ == static_cast<std::int32_t>(WorkspacePreset::kVfx));
     DrawEditorCommandMenuItem(
-        EditorCommandId::WorkspaceAnimation, nullptr,
-        activeWorkspacePreset_ == static_cast<int>(WorkspacePreset::Animation));
+        editorCommandId::kWorkspaceAnimation, nullptr,
+        activeWorkspacePreset_ == static_cast<std::int32_t>(WorkspacePreset::kAnimation));
 
     ImGui::Separator();
     ImGui::BeginDisabled(activeWorkspacePreset_ < 0);
 
+    // 保存項目が押されたら、選択中の用途名で現在の配置を保存する。
     if (ImGui::MenuItem(ICON_FA_SAVE " 現在の配置をこのワークスペースへ保存")) {
         SaveWorkspacePreset(static_cast<WorkspacePreset>(activeWorkspacePreset_));
     }
 
     ImGui::EndDisabled();
 
+    // 切替や保存の結果が残っている場合だけ、メニューに表示する。
     if (!workspaceStatus_.empty()) {
         ImGui::TextDisabled("%s", workspaceStatus_.c_str());
     }
@@ -165,9 +172,11 @@ void GameEditorController::SetupDefaultDockspace() {
     // Asset一覧の拡大要求は、既存の上下分割を再利用できる場合だけ局所調整する。
     const bool expandAssets = PresetEditor::GetInstance()->ConsumeLibraryDockExpandRequest();
 
+    // この条件だけでは何も行わない。拡大要求は後続の既存配置の調整と初期配置の高さに使う。
     if (expandAssets) {
     }
 
+    // 既存のドックがあり拡大要求が来た場合は、現在のドック構造から下段を特定する。
     if (dockspaceInitialized_ && expandAssets) {
         ImGuiWindow* project = ImGui::FindWindowByName("Project (Assets)");
         ImGuiWindow* console = ImGui::FindWindowByName("Debug Console");
@@ -180,6 +189,7 @@ void GameEditorController::SetupDefaultDockspace() {
         }
 
         ImGuiWindow* gameView = ImGui::FindWindowByName("Game View");
+        // 下段とGame Viewが同じ親の直下にある場合にだけ、その場で下段の配置と高さを更新する。
         if (bottom && gameView && gameView->DockNode && bottom->ParentNode &&
             bottom->ParentNode == gameView->DockNode->ParentNode) {
             const ImGuiID bottomId = bottom->ID;
@@ -206,6 +216,7 @@ void GameEditorController::SetupDefaultDockspace() {
         }
     }
 
+    // 既存のドック配置が有効なら、既定値では上書きしない。
     if (dockspaceInitialized_) {
         return;
     }
@@ -236,21 +247,27 @@ void GameEditorController::SetupDefaultDockspace() {
 	// 下段を使う専用タイムラインは攻撃・エフェクト・アニメーションまたは演出の順に選び、同時に複数の領域へ分割しない。
 	if (showEnemyAttackTimeline_) {
         ImGui::DockBuilderDockWindow("攻撃・能力プレビュー - Timeline", dockBottomId);
+		// 下段のノードが得られた場合は、攻撃タイムラインの追加分割を禁止する。
 		if (ImGuiDockNode* timelineNode = ImGui::DockBuilderGetNode(dockBottomId)) {
 			timelineNode->LocalFlags |= ImGuiDockNodeFlags_NoDockingSplit;
 		}
+	// 攻撃の時間軸が出ておらずエフェクトが有効なら、下段をエフェクト用にする。
 	} else if (showEffectPreviewTimeline_) {
 		ImGui::DockBuilderDockWindow("エフェクトプレビュー - Timeline", dockBottomId);
 
+		// 下段のノードが得られた場合は、エフェクトの時間軸の追加分割を禁止する。
 		if (ImGuiDockNode* timelineNode = ImGui::DockBuilderGetNode(dockBottomId)) {
 			timelineNode->LocalFlags |= ImGuiDockNodeFlags_NoDockingSplit;
 		}
+	// 攻撃やエフェクトを出さず制作タイムラインを使う場合は、アニメーションを優先する。
 	} else if (showAnimationTimeline_ || showCinematicTimeline_) {
         ImGui::DockBuilderDockWindow(showAnimationTimeline_ ?
             "アニメーション制作 - Timeline" : "演出制作 - Timeline", dockBottomId);
+        // 下段のノードが得られた場合は、制作タイムラインの追加分割を禁止する。
         if (ImGuiDockNode* node = ImGui::DockBuilderGetNode(dockBottomId)) {
             node->LocalFlags |= ImGuiDockNodeFlags_NoDockingSplit;
         }
+	// 専用タイムラインが不要な場合は、下段をアセット一覧やログの共用領域にする。
 	} else {
         // Asset一覧は下部の横幅を使い、ログ・計測は同じ領域のタブで切り替えます。
         ImGui::DockBuilderDockWindow("Project (Assets)", dockBottomId);

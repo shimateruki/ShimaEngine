@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include <cstdint>
 #include "DebugEditor.h"
 #include <numbers>
 #include "SceneManager.h"    
@@ -60,16 +61,20 @@ namespace {
     // 新規配置位置の持ち上げ量をCollider優先、次にTransformから求めます。
     float GetCreateYOffsetForObject(const engine::Object3D* object) {
         // 当たり判定の高さを優先し、未設定ならモデルの倍率から置く高さを推定する。
+        // 候補が無ければ既定の高さを使う。
         if (!object)
             return 1.0f;
 
         const auto& collider = object->GetColliderConfig();
+        // コライダーのY方向が正なら、配置の高さとして優先する。
         if (collider.size.y > 0.0f)
             return collider.size.y;
+        // 高さの指定が無い場合は、正のX側のサイズを高さの代わりに使う。
         if (collider.size.x > 0.0f)
             return collider.size.x;
 
         const Transform& transform = object->GetTransform();
+        // コライダーから高さを取れない場合は、正のY倍率を代用する。
         if (transform.scale.y > 0.0f)
             return transform.scale.y;
         return 1.0f;
@@ -96,6 +101,7 @@ namespace {
 
     // 交差面の法線を単位長にそろえる。向きが定まらない場合は床と同じ +Y を使う。
     engine::Vector3 NormalizeOrUp(const engine::Vector3& value) {
+        // 法線の全成分がほぼゼロなら正規化せず、上向きに置き換える。
         if (IsNearlyZero(value)) {
             return { 0.0f, 1.0f, 0.0f };
         }
@@ -105,10 +111,12 @@ namespace {
 
     void ApplyEditorPreviewLightOverride(engine::Object3D* object) {
         // 配置プレビューはシーン照明の暗さに埋もれないよう自己発光で表示する。
+        // 対象がなければ照明を上書きできない。
         if (!object) {
             return;
         }
 
+        // 材質を編集できる場合だけ、シーン照明を切って発光量を補う。
         if (auto* material = object->GetMaterialData()) {
             object->SetEnableLighting(false);
             object->SetSelectedLighting(0);
@@ -116,18 +124,23 @@ namespace {
         }
     }
 
+    // 配置物の原点から、接地面の法線方向へ離す距離を返す。
     float GetSurfaceOffset(const engine::Object3D* object, const engine::Vector3& normal) {
+        // デカールは投影対象との距離を自身のdepthOffsetで指定する。
         if (object && object->IsDecal()) return object->GetDecalSettings().depthOffset;
+        // 物体が指定されていない場合は既定の距離を返す。
         if (!object) return 1.0f;
         const auto world = object->GetWorldMatrix();
         auto* model = object->GetModel();
         engine::Vector3 lo, hi;
+        // モデルを取得できる場合は、最初にモデル全体の境界を採用する。
         if (model) {
             lo = model->GetLocalAabbMin(); hi = model->GetLocalAabbMax();
             // 分割されたモデルは、表示中のメッシュだけを配置物の寸法に使う。
-            const int index = object->GetMeshDrawIndex();
+            const std::int32_t index = object->GetMeshDrawIndex();
             const auto& meshes = model->GetModelData().meshes;
-            if (index >= 0 && index < static_cast<int>(meshes.size()) && !meshes[index].vertices.empty()) {
+            // 表示対象のメッシュ番号が有効で頂点もある場合だけ、そのメッシュの境界を作り直す。
+            if (index >= 0 && index < static_cast<std::int32_t>(meshes.size()) && !meshes[index].vertices.empty()) {
                 lo = {(std::numeric_limits<float>::max)(), (std::numeric_limits<float>::max)(), (std::numeric_limits<float>::max)()};
                 hi = -lo;
                 for (const auto& vertex : meshes[index].vertices) {
@@ -136,6 +149,7 @@ namespace {
                     lo.z = (std::min)(lo.z, vertex.position.z); hi.z = (std::max)(hi.z, vertex.position.z);
                 }
             }
+        // モデルが無ければ、コライダーの中心と半寸法で境界を代用する。
         } else {
             const auto extents = GetPlacementExtents(object);
             const auto center = object->GetColliderConfig().center;
@@ -144,7 +158,7 @@ namespace {
         // 原点から各隅までのベクトルを面法線へ投影し、最も面へ近い底面を求める。
         // 位置の平行移動を除くことで、親の拡大・回転・モデルの原点ずれを保持する。
         float minimum = (std::numeric_limits<float>::max)();
-        for (int bits = 0; bits < 8; ++bits) {
+        for (std::int32_t bits = 0; bits < 8; ++bits) {
             const engine::Vector3 corner{bits & 1 ? hi.x : lo.x, bits & 2 ? hi.y : lo.y, bits & 4 ? hi.z : lo.z};
             minimum = (std::min)(minimum, engine::Math::Dot(engine::Math::TransformNormal(corner, world), normal));
         }
@@ -156,7 +170,9 @@ namespace {
         constexpr float kHalfPi = std::numbers::pi_v<float> * 0.5f;
         engine::Vector3 n = NormalizeOrUp(normal);
 
+        // Yの成分が最大の面は床か天井として扱う。
         if (std::abs(n.y) >= std::abs(n.x) && std::abs(n.y) >= std::abs(n.z)) {
+            // 下向き法線の天井に対しては、上下を反転させる。
             if (n.y < 0.0f) {
                 return { std::numbers::pi_v<float>, currentRotation.y, 0.0f };
             }
@@ -164,10 +180,12 @@ namespace {
             return { 0.0f, currentRotation.y, 0.0f };
         }
 
+        // 横向きでX成分が主なら、法線が向く側に応じてZ軸の回転を決める。
         if (std::abs(n.x) >= std::abs(n.z)) {
             return { 0.0f, currentRotation.y, n.x > 0.0f ? -kHalfPi : kHalfPi };
         }
 
+        // 残るZ方向の面はX軸回転で合わせる。
         return { n.z > 0.0f ? kHalfPi : -kHalfPi, currentRotation.y, 0.0f };
     }
 
@@ -177,14 +195,17 @@ namespace {
             return;
 
         const auto beforeSnap = position;
+        // 面がないか、X方向が面にほぼ沿う場合はXを格子へ丸める。
         if (!hasSurface || std::abs(normal.x) < 0.5f) {
             position.x = std::round(position.x / snapValue) * snapValue;
         }
 
+        // Yは床なしの仮位置では固定する。壁面などY方向が面に沿う場合に丸める。
         if (hasSurface && std::abs(normal.y) < 0.5f) {
             position.y = std::round(position.y / snapValue) * snapValue;
         }
 
+        // 面がないか、Z方向が面にほぼ沿う場合はZを格子へ丸める。
         if (!hasSurface || std::abs(normal.z) < 0.5f) {
             position.z = std::round(position.z / snapValue) * snapValue;
         }
@@ -201,9 +222,6 @@ namespace {
     }
 }
 
-// ========================================================================
-// 初期化
-// ========================================================================
 
 void DebugEditor::SetPreviewObject(std::unique_ptr<engine::Object3D> obj, const std::string& label) {
     // 前のプレビューの子と見た目を捨て、新しい候補の元状態を確定前に退避する。
@@ -212,9 +230,10 @@ void DebugEditor::SetPreviewObject(std::unique_ptr<engine::Object3D> obj, const 
     previewObject_ = std::move(obj);
     previewCreateCommandLabel_ = label;
 
+    // 配置候補を取り消された場合は、前の候補の退避値と接点を空に戻す。
     if (!previewObject_) {
         previewObjectOriginalColor_ = { 1.0f, 1.0f, 1.0f, 1.0f };
-        previewObjectOriginalBlendMode_ = BlendMode::Normal;
+        previewObjectOriginalBlendMode_ = BlendMode::kNormal;
         previewObjectOriginalMaterialType_ = 0;
         previewObjectOriginalSelectedLighting_ = 2;
         previewObjectOriginalEnableLighting_ = 1;
@@ -228,14 +247,17 @@ void DebugEditor::SetPreviewObject(std::unique_ptr<engine::Object3D> obj, const 
         return;
     }
 
+    // 候補があるときは、半透明のプレビューへ変える前に元の表示設定を保存する。
     previewObjectOriginalColor_ = previewObject_->GetColor();
     previewObjectOriginalBlendMode_ = previewObject_->GetBlendMode();
     previewObjectOriginalMaterialType_ = previewObject_->GetMaterialType();
 
+    // 材質データがある場合は、照明フラグの実値を退避する。
     if (auto* material = previewObject_->GetMaterialData()) {
         previewObjectOriginalSelectedLighting_ = material->selectedLighting;
         previewObjectOriginalEnableLighting_ = material->enableLighting;
     }
+    // 材質を持たない場合は、復元用の照明値に既定値を使う。
     else {
         previewObjectOriginalSelectedLighting_ = 2;
         previewObjectOriginalEnableLighting_ = 1;
@@ -254,10 +276,13 @@ void DebugEditor::SetPreviewObject(std::unique_ptr<engine::Object3D> obj, const 
 void DebugEditor::OpenGameViewCreateContextMenu() {
 #ifdef USE_IMGUI
     // 配置・ブラシ・経路編集中は右クリックメニューを重ねない。
+    // 配置先のシーンがまだなければメニューを要求しない。
     if (!sceneManager_ || !sceneManager_->GetCurrentScene())
         return;
+    // プレイ中はGame Viewの右クリックを編集用に使わない。
     if (sceneManager_->IsPlaying())
         return;
+    // 配置候補や連続配置、経路編集中は別の操作を優先する。
     if (previewObject_ || isPresetBrushMode_ || isPathEditMode_)
         return;
 
@@ -275,11 +300,14 @@ void DebugEditor::OpenGameViewCreateContextMenu() {
 void DebugEditor::StartGameViewCreatePreview(std::unique_ptr<engine::Object3D> object, const std::string& label) {
 #ifdef USE_IMGUI
     // メニューを開いた位置へ初回の候補を置き、次フレーム以降はマウスへ追従させる。
+    // 候補と配置先のどちらかが無ければ、プレビューを作らない。
     if (!object || !sceneManager_ || !sceneManager_->GetCurrentScene())
         return;
+    // ゲームをプレイ中は編集用の配置を開始しない。
     if (sceneManager_->IsPlaying())
         return;
 
+    // 連続配置中なら終了させて、単発の候補だけを残す。
     if (isPresetBrushMode_) {
         StopPresetBrush();
     }
@@ -287,6 +315,7 @@ void DebugEditor::StartGameViewCreatePreview(std::unique_ptr<engine::Object3D> o
     gameViewMousePos_ = gameViewCreateMenuMousePos_;
     SetPreviewObject(std::move(object), label);
 
+    // 候補を保持できた場合は、メニューを開いた位置から初回の接点を求める。
     if (previewObject_) {
         PlacementResult placement = CalculateGameViewPlacement(previewObject_.get(), gameViewCreateMenuMousePos_, false);
         ApplyGameViewPlacement(previewObject_.get(), placement, true);
@@ -307,12 +336,14 @@ void DebugEditor::StartGameViewCreatePreview(std::vector<std::unique_ptr<engine:
 
     std::unique_ptr<engine::Object3D> root = std::move(objects.front());
     StartGameViewCreatePreview(std::move(root), label);
+    // ルートの開始に失敗した場合は、残りの候補を取り込まない。
     if (!previewObject_)
         return;
 
     previewChildObjects_.reserve(objects.size() > 0 ? objects.size() - 1 : 0);
 
     for (size_t index = 1; index < objects.size(); ++index) {
+        // 有効な子だけを候補として保持し、表示をプレビュー用に変える。
         if (objects[index]) {
             previewChildObjects_.push_back(std::move(objects[index]));
             ApplyPreviewVisual(previewChildObjects_.back().get());
@@ -335,6 +366,7 @@ void DebugEditor::DrawGameViewCreateContextMenu() {
 
     constexpr const char* kPopupName = "GameViewCreateContextMenu";
 
+    // 新規の表示要求を消費したときだけポップアップを開く。
     if (requestGameViewCreateMenu_) {
         ImGui::OpenPopup(kPopupName);
         requestGameViewCreateMenu_ = false;
@@ -344,18 +376,22 @@ void DebugEditor::DrawGameViewCreateContextMenu() {
         ImVec2(gameViewCreateMenuScreenPos_.x, gameViewCreateMenuScreenPos_.y),
         ImGuiCond_Appearing);
 
+    // ポップアップが描画可能な場合だけ、作成項目を階層画面と共通の処理で描く。
     if (ImGui::BeginPopup(kPopupName)) {
         hierarchyWindow_.DrawCreateContextMenu(sceneManager_->GetCurrentScene(), true);
 
+        // 試験プレイ開始の入口がセットされているときだけ、開始方法を表示する。
         if (playFromPositionCallback_) {
             ImGui::Separator();
 
+            // クリック地点の試験プレイを選んだ場合は、配置候補点の1単位上から開始する。
             if (ImGui::MenuItem("プレイヤーをここから開始")) {
                 engine::Vector3 position = CalculateGameViewCreatePosition(nullptr);
                 position.y += 1.0f;
                 playFromPositionCallback_(position, "GameView指定位置");
             }
 
+            // 選択中のオブジェクトがあり、項目を押した場合は、その近くを開始点にする。
             if (selectedObject_ && ImGui::MenuItem("選択Object付近から開始")) {
                 engine::Vector3 position = selectedObject_->GetWorldPosition();
                 position.y += 1.0f;
@@ -368,17 +404,20 @@ void DebugEditor::DrawGameViewCreateContextMenu() {
                 bool found = false;
 
                 for (const auto& object : sceneManager_->GetCurrentScene()->GetObjects()) {
-                    if (!object || object->GetEventType() != EventType::Checkpoint)
+                    // 空の項目とCheckpointイベントを持たない項目は一覧に含めない。
+                    if (!object || object->GetEventType() != EventType::kCheckpoint)
                         continue;
                     found = true;
                     engine::Vector3 position = object->GetWorldPosition();
                     position.y += 1.0f;
 
+                    // Checkpointの名前を選んだ場合は、その位置の1単位上へプレイヤーを置く。
                     if (ImGui::MenuItem(object->GetName().c_str())) {
                         playFromPositionCallback_(position, "Checkpoint: " + object->GetName());
                     }
                 }
 
+                // 該当するCheckpointを移動先として表示できなかった場合は、その旨を案内する。
                 if (!found)
                     ImGui::TextDisabled("Checkpoint EventのObjectがありません");
                 ImGui::EndMenu();
@@ -393,6 +432,7 @@ void DebugEditor::DrawGameViewCreateContextMenu() {
 engine::Vector3 DebugEditor::CalculateGameViewCreatePosition(const engine::Object3D* object) {
     // レイで配置先を得られない場合だけ、Object 固有の生成高さへ戻す。
     PlacementResult placement = CalculateGameViewPlacement(object, gameViewCreateMenuMousePos_, false);
+    // 利用できる位置を得た場合は、レイの仮位置も含めてその計算結果を返す。
     if (placement.found)
         return placement.position;
     return { 0.0f, GetCreateYOffsetForObject(object), 0.0f };
@@ -404,6 +444,7 @@ DebugEditor::PlacementResult DebugEditor::CalculateGameViewPlacement(const engin
     // 選択と同じ可視モデルの面を使い、Colliderや仮の単位箱を配置先にしない。
     PlacementResult result;
 
+    // シーンがない場合でも候補を表示できるよう、原点近くの既定位置を返す。
     if (!sceneManager_ || !sceneManager_->GetCurrentScene()) {
         result.position = { 0.0f, GetCreateYOffsetForObject(object), 0.0f };
         result.found = true;
@@ -414,6 +455,7 @@ DebugEditor::PlacementResult DebugEditor::CalculateGameViewPlacement(const engin
     // 画面上のカーソルをワールドレイへ変換し、方向を作れない場合は配置点を決めない。
     engine::Ray ray = ScreenPointToRay(mousePos);
 
+    // レイの方向が作れないときは、配置に失敗した結果を返す。
     if (IsNearlyZero(ray.diff)) {
         return result;
     }
@@ -422,12 +464,14 @@ DebugEditor::PlacementResult DebugEditor::CalculateGameViewPlacement(const engin
     RaycastSceneSurface(ray, best, nullptr, object, false, ignoredRootGuids);
 
     auto offsetForSurface = [&](const engine::Vector3& normal) {
+        // 対象が無いかグループを使わない場合は、単体用の接地判定へ渡します。
         if (!object || !group) return GetSurfaceOffset(object, normal);
         const auto origin = object->GetWorldPosition();
         float offset = (std::numeric_limits<float>::lowest)();
         bool hasModel = false;
         // 空の親を持つPrefabも、見えている子全体の底面を面へ合わせる。
         for (const auto& child : *group) {
+            // 描画可能なモデルを持つ子だけを、合成した接地寸法に含める。
             if (!child || !child->GetModel() || !child->GetIsRenderVisible()) continue;
             hasModel = true;
             // 子の原点と親の原点の差を面の法線へ射影する。全ての子を面の外に置ける最大の移動量を採用する。
@@ -440,6 +484,7 @@ DebugEditor::PlacementResult DebugEditor::CalculateGameViewPlacement(const engin
     float surfaceOffset = 0.0f;
 
     // 何にも当たらなければ基準平面、平面にも届かなければレイ上の仮位置を使う。
+    // シーン内の面に当たったときは、その点と法線で配置を決める。
     if (best.isHit) {
         result.normal = NormalizeOrUp(best.normal);
         result.contactPosition = best.point;
@@ -448,6 +493,7 @@ DebugEditor::PlacementResult DebugEditor::CalculateGameViewPlacement(const engin
         result.found = true;
         result.hasSurface = true;
     }
+    // シーンの面に当たらないときは、基準平面を床として使う。
     else if (IntersectRayPlane(ray, result.contactPosition)) {
         result.normal = { 0.0f, 1.0f, 0.0f };
         surfaceOffset = offsetForSurface(result.normal);
@@ -455,6 +501,7 @@ DebugEditor::PlacementResult DebugEditor::CalculateGameViewPlacement(const engin
         result.found = true;
         result.hasSurface = true;
     }
+    // 基準平面にも当たらないときは、面なしの仮位置を使う。
     else {
         result.normal = { 0.0f, 1.0f, 0.0f };
         // 面が見つからない場合は、レイの始点から10ワールド単位だけ進んで配置プレビューを残す。
@@ -478,6 +525,7 @@ DebugEditor::PlacementResult DebugEditor::PlaceGameViewObjects(
     auto* root = objects.front().get();
     root->UpdateWorldMatrix();
     const auto placement = CalculateGameViewPlacement(root, mousePos, useGridSnap, &objects, ignoredRootGuids);
+    // 配置結果が有効なときだけ、グループのルートへ姿勢を適用する。
     if (placement.found)
         ApplyGameViewPlacement(root, placement, root->IsDecal());
     return placement;
@@ -495,6 +543,7 @@ void DebugEditor::ApplyGameViewPlacement(engine::Object3D* object, const Placeme
         DecalSystem::AlignToSurface(
             *object, placement.contactPosition, placement.normal, 0.0f,
             object->GetDecalSettings().depthOffset);
+        // 未確定の候補であれば、デカールの接点を画面上の印に使えるよう控える。
         if (object == previewObject_.get()) {
             previewPlacementContactPosition_ = placement.contactPosition;
             hasPreviewPlacementContact_ = placement.found;
@@ -503,6 +552,7 @@ void DebugEditor::ApplyGameViewPlacement(engine::Object3D* object, const Placeme
         return;
     }
 
+    // 通常のオブジェクトでも面合わせが選ばれていれば、法線に合わせて回す。
     if (alignToSurface && placement.hasSurface) {
         object->SetRotation(GetSurfaceAlignedRotation(object->GetTransform()->rotate, placement.normal));
         // 回転後の姿勢でモデル下端を計り直す。回転前の厚みを使うと面へ食い込む。
@@ -510,14 +560,17 @@ void DebugEditor::ApplyGameViewPlacement(engine::Object3D* object, const Placeme
         object->SetTranslate(placement.contactPosition + placement.normal * GetSurfaceOffset(object, placement.normal));
     }
 
+    // このオブジェクトが表示中の候補なら、接点の履歴を更新する。
     if (object == previewObject_.get()) {
         previewPlacementContactPosition_ = placement.contactPosition;
         hasPreviewPlacementContact_ = placement.found;
     }
 
+    // 次の表示が新しい配置を参照できるよう、ローカル・ワールドの行列を更新する。
     object->UpdateLocalMatrix();
     object->UpdateWorldMatrix();
 
+    // 描画担当が存在する場合は、新しい姿勢をフレームの描画へ渡す。
     if (object->GetMeshRenderer()) {
         object->GetMeshRenderer()->Update();
     }
@@ -550,6 +603,7 @@ void DebugEditor::ConfirmPreviewPlacement() {
     createdObjects.push_back(std::move(previewObject_));
 
     for (auto& child : previewChildObjects_) {
+        // 有効な子個体は見た目と行列を復元し、同じ作成命令へ移す。
         if (child) {
             RestorePreviewVisual(child.get());
             child->UpdateLocalMatrix();
@@ -581,11 +635,14 @@ void DebugEditor::CancelPreviewPlacement() {
 void DebugEditor::StartPresetBrush(const std::string& presetName) {
 #ifdef USE_IMGUI
     // 単発配置の候補を消してから連続配置へ切り替え、前回の刻印間隔をリセットする。
+    // 名前のないプリセットや配置先のないシーンではブラシを開始しない。
     if (presetName.empty() || !sceneManager_ || !sceneManager_->GetCurrentScene())
         return;
+    // ゲームのプレイ中や経路の編集中はブラシ操作へ切り替えない。
     if (sceneManager_->IsPlaying() || isPathEditMode_)
         return;
 
+    // 単発の候補が残っていれば、先に未確定の表示を終了する。
     if (previewObject_) {
         CancelPreviewPlacement();
     }
@@ -595,6 +652,7 @@ void DebugEditor::StartPresetBrush(const std::string& presetName) {
     isPresetBrushMode_ = true;
     hasLastBrushStamp_ = false;
     RebuildPresetBrushPreview();
+    // 見本の再作成中にブラシが停止された場合は、開始ログを出さない。
     if (!isPresetBrushMode_)
         return;
 
@@ -624,23 +682,26 @@ void DebugEditor::RebuildPresetBrushPreview() {
     brushPlacement_ = {};
     brushPresetSource_ = {};
     brushPreviewObjects_.clear();
+    // 対象シーンと名前が揃うまでは、古い見本を残さず再作成を見送る。
     if (!sceneManager_ || !sceneManager_->GetCurrentScene() || brushPresetName_.empty())
         return;
 
     BaseScene* scene = sceneManager_->GetCurrentScene();
     engine::Object3DCommon* common = scene->GetObject3DCommon();
+    // 3Dオブジェクトを初期化できる共通資源がない場合は作成を保留する。
     if (!common)
         return;
 
     brushPreviewObjects_ = PresetManager::GetInstance()->CreateObjectsFromPreset(brushPresetName_, common);
 
+    // プリセットから個体を一つも作れなければ、ブラシ自体を停止する。
     if (brushPreviewObjects_.empty()) {
         StopPresetBrush();
         return;
     }
 
     brushPresetSource_ = PresetManager::GetInstance()->GetPresets().at(brushPresetName_);
-    AssignPresetInstanceNames(scene, brushPresetName_, brushPreviewObjects_, PresetRootName::DisplayName);
+    AssignPresetInstanceNames(scene, brushPresetName_, brushPreviewObjects_, PresetRootName::kDisplayName);
 
     for (auto& object : brushPreviewObjects_) {
         ApplyBrushPreviewVisual(object.get());
@@ -650,8 +711,10 @@ void DebugEditor::RebuildPresetBrushPreview() {
 void DebugEditor::UpdatePresetBrush() {
 #ifdef USE_IMGUI
     // カーソルへの追従と刻印を分け、Gizmo 操作中は誤配置しない。
+    // 連続配置が有効なフレームだけ専用の入力を確認する。
     if (!isPresetBrushMode_)
         return;
+    // シーンがなくなったかプレイに切り替わった場合は、連続配置も終了する。
     if (!sceneManager_ || !sceneManager_->GetCurrentScene() || sceneManager_->IsPlaying()) {
         StopPresetBrush();
         return;
@@ -659,29 +722,35 @@ void DebugEditor::UpdatePresetBrush() {
 
     engine::InputManager* input = engine::InputManager::GetInstance();
 
+    // Eの押下を取得した場合は、カーソル位置に関係なくブラシを終了する。
     if (input && input->IsKeyTriggered(DIK_E)) {
         StopPresetBrush();
         return;
     }
 
+    // Game View上での右クリックは、ブラシを終了する操作として扱う。
     if (isGameViewHovered_ && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
         StopPresetBrush();
         return;
     }
 
+    // 見本がないときは、今のプリセット設定から作り直す。
     if (brushPreviewObjects_.empty()) {
         RebuildPresetBrushPreview();
     }
 
+    // 再作成後も見本がなければ、接点を計算せず終了する。
     if (brushPreviewObjects_.empty())
         return;
 
     // 範囲外・他のUI・Gizmo操作中は古い位置へ刻印しない。
     brushPlacement_ = {};
+    // カーソルが画像外かGizmoの操作範囲内なら、刻印も追従も行わない。
     if (!isGameViewHovered_ || ImGuizmo::IsOver() || ImGuizmo::IsUsing()) return;
 
     engine::Object3D* root = brushPreviewObjects_.front().get();
     brushPlacement_ = PlaceGameViewObjects(brushPreviewObjects_, gameViewMousePos_, true, &brushStampedRootGuids_);
+    // 正しい配置位置を得られないフレームでは、描画状態や刻印入力を進めない。
     if (!brushPlacement_.found) return;
 
     for (auto& object : brushPreviewObjects_) {
@@ -690,6 +759,7 @@ void DebugEditor::UpdatePresetBrush() {
 
     bool clicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
     bool dragging = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    // 左ボタンのクリックも押し続けも無ければ、見本だけを更新する。
     if (!clicked && !dragging)
         return;
 
@@ -707,6 +777,7 @@ void DebugEditor::UpdatePresetBrush() {
 
 void DebugEditor::StampPresetBrush() {
     // プレビューそのものは再利用し、実配置用のインスタンスを別に生成する。
+    // 有効な接点・見本・名前と編集中の安定したシーンが揃う場合だけ配置を確定する。
     if (!isPresetBrushMode_ || !brushPlacement_.found || !sceneManager_ || !sceneManager_->GetCurrentScene() ||
         sceneManager_->IsPlaying() || sceneManager_->IsTransitioning() || brushPresetName_.empty() || brushPreviewObjects_.empty())
         return;
@@ -714,6 +785,7 @@ void DebugEditor::StampPresetBrush() {
     // Asset編集が見本の作成後に入ったら、先に表示を更新してから次の刻印を待つ。
     const auto& presets = PresetManager::GetInstance()->GetPresets();
     const auto source = presets.find(brushPresetName_);
+    // 元のプリセットが消えたか内容が変わっていれば、古い見本を確定せずに表示を更新する。
     if (source == presets.end() || source->second != brushPresetSource_) {
         RebuildPresetBrushPreview();
         return;
@@ -721,14 +793,17 @@ void DebugEditor::StampPresetBrush() {
 
     BaseScene* scene = sceneManager_->GetCurrentScene();
     engine::Object3DCommon* common = scene->GetObject3DCommon();
+    // オブジェクトの初期化に使う3D共通資源がなければ、確定用の個体を作れない。
     if (!common)
         return;
 
     auto objects = PresetManager::GetInstance()->CreateObjectsFromPreset(brushPresetName_, common);
+    // プリセットから個体を生成できなければ、作成命令を積まない。
     if (objects.empty())
         return;
 
-    AssignPresetInstanceNames(scene, brushPresetName_, objects, PresetRootName::DisplayName);
+    AssignPresetInstanceNames(scene, brushPresetName_, objects, PresetRootName::kDisplayName);
+    // 見本と個体数が違う場合は対応付けができないため、見本を作り直して次の入力を待つ。
     if (objects.size() != brushPreviewObjects_.size()) {
         RebuildPresetBrushPreview();
         return;
@@ -758,6 +833,7 @@ void DebugEditor::DrawPresetBrushOverlay() {
     // 見本用の立方体をObjectへ付けず、接地寸法と表示用の印を分離する。
     if (brushPlacement_.found) {
         const auto point = WorldToScreen(brushPlacement_.contactPosition);
+        // 接点がカメラの前に投影できたときだけ、画像の内側へ印を描く。
         if (point.z >= 0) {
             auto* draw = ImGui::GetWindowDrawList();
             draw->PushClipRect({gameViewOffset_.x, gameViewOffset_.y},
@@ -777,11 +853,13 @@ void DebugEditor::DrawPresetBrushOverlay() {
         ImGuiWindowFlags_AlwaysAutoResize |
         ImGuiWindowFlags_NoSavedSettings;
 
+    // ブラシのウィンドウを開けたときだけ、現在の対象・間隔・終了操作を描く。
     if (ImGui::Begin("プリセットブラシ", nullptr, flags)) {
         ImGui::Text("対象: %s", brushPresetName_.c_str());
         ImGui::SliderFloat("配置間隔", &brushSpacing_, 0.0f, 10.0f, "%.2f");
         ImGui::TextDisabled("左ドラッグ: 配置 / 右クリック or E: 終了");
 
+        // 終了ボタンが選ばれたフレームは、見本とブラシの入力を解除する。
         if (ImGui::Button("ブラシ終了")) {
             StopPresetBrush();
         }
@@ -798,7 +876,7 @@ void DebugEditor::ApplyBrushPreviewVisual(engine::Object3D* object) {
 
     // クラスとモデルは元のまま保つ。面合わせに必要なDecal判定も維持する。
     object->SetMaterialType(0);
-    object->SetBlendMode(BlendMode::Normal);
+    object->SetBlendMode(BlendMode::kNormal);
     engine::Vector4 color = object->GetColor();
     object->SetColor({ color.x, color.y, color.z, 0.45f });
     object->SetEmissive(std::max(object->GetEmissive(), 1.4f));
@@ -806,6 +884,7 @@ void DebugEditor::ApplyBrushPreviewVisual(engine::Object3D* object) {
     object->UpdateLocalMatrix();
     object->UpdateWorldMatrix();
 
+    // 描画担当を取得できれば、見本の色と行列をその描画へ反映する。
     if (object->GetMeshRenderer()) {
         object->GetMeshRenderer()->Update();
     }
@@ -816,12 +895,14 @@ void DebugEditor::ApplyPreviewVisual(engine::Object3D* object) {
     if (!object)
         return;
 
+    // モデルなしの候補では、仮モデルをまだ適用していない場合だけ表示用の箱を使う。
     if (!previewObjectUsesFallbackModel_ && !object->GetModel()) {
         object->SetModel("Primitives/cube");
         object->SetColliderConfig(previewObjectOriginalColliderConfig_);
         previewObjectUsesFallbackModel_ = true;
     }
 
+    // この候補の状態が未記録なら、見た目を書き換える前に退避する。
     if (previewVisualStates_.find(object) == previewVisualStates_.end()) {
         PreviewVisualState state;
         state.className = object->GetClassName();
@@ -830,6 +911,7 @@ void DebugEditor::ApplyPreviewVisual(engine::Object3D* object) {
         state.materialType = object->GetMaterialType();
         state.emissive = object->GetEmissive();
 
+        // 元の材質データが存在する場合だけ、現在の照明フラグを記録する。
         if (auto* material = object->GetMaterialData()) {
             state.selectedLighting = material->selectedLighting;
             state.enableLighting = material->enableLighting;
@@ -839,7 +921,7 @@ void DebugEditor::ApplyPreviewVisual(engine::Object3D* object) {
     }
 
     object->SetMaterialType(0);
-    object->SetBlendMode(BlendMode::Normal);
+    object->SetBlendMode(BlendMode::kNormal);
     object->SetEmissive(1.25f);
     object->SetColor({ 0.45f, 1.0f, 0.68f, 0.46f });
     ApplyEditorPreviewLightOverride(object);
@@ -850,10 +932,13 @@ void DebugEditor::RestorePreviewVisual(engine::Object3D* object) {
     if (!object)
         return;
 
+    // 仮モデルが使われていれば、材質を戻す前に元のモデルと判定へ戻す。
     if (previewObjectUsesFallbackModel_) {
+        // 元のモデル名が記録されている場合は、その名前から復元する。
         if (!previewObjectOriginalModelName_.empty()) {
             object->SetModel(previewObjectOriginalModelName_);
         }
+        // 名前を持たない場合は、退避したモデルへの参照で復元する。
         else {
             object->SetModel(previewObjectOriginalModel_);
         }
@@ -866,12 +951,14 @@ void DebugEditor::RestorePreviewVisual(engine::Object3D* object) {
     // 確定する個体ごとの退避があれば優先する。なければ単体プレビューの開始時に控えた設定を使う。
     const auto stateIt = previewVisualStates_.find(object);
 
+    // 候補ごとの退避を見つけた場合は、その候補専用の設定を適用する。
     if (stateIt != previewVisualStates_.end()) {
         const PreviewVisualState& state = stateIt->second;
         object->SetClassName(state.className);
         object->SetMaterialType(state.materialType);
         object->SetBlendMode(state.blendMode);
 
+        // 復元先の材質データが存在する場合だけ、個別に記録した照明を設定する。
         if (auto* material = object->GetMaterialData()) {
             object->SetSelectedLighting(state.selectedLighting);
             object->SetEnableLighting(state.enableLighting != 0);
@@ -882,10 +969,12 @@ void DebugEditor::RestorePreviewVisual(engine::Object3D* object) {
         return;
     }
 
+    // 個別の退避を持たない場合は、プレビュー開始時に控えた共通の退避値を使う。
     object->SetClassName(previewObjectOriginalClassName_);
     object->SetMaterialType(previewObjectOriginalMaterialType_);
     object->SetBlendMode(previewObjectOriginalBlendMode_);
 
+    // 復元先に材質データがあれば、開始時に控えた照明も戻す。
     if (auto* material = object->GetMaterialData()) {
         object->SetSelectedLighting(previewObjectOriginalSelectedLighting_);
         object->SetEnableLighting(previewObjectOriginalEnableLighting_ != 0);
@@ -895,17 +984,19 @@ void DebugEditor::RestorePreviewVisual(engine::Object3D* object) {
     object->SetColor(previewObjectOriginalColor_);
 }
 
-void DebugEditor::DrawPreviewWire(ID3D12GraphicsCommandList* commandList, int& instanceCount, int maxDrawLimit) {
+void DebugEditor::DrawPreviewWire(ID3D12GraphicsCommandList* commandList, std::int32_t& instanceCount, std::int32_t maxDrawLimit) {
     // プレビュー形状の Aabb が無効ならモデルの境界を代用し、描画上限を守る。
     if (!previewObject_ || !commandList || instanceCount >= maxDrawLimit)
         return;
 
-    Aabb aabb = previewObject_->GetAabb();
+    engine::Aabb aabb = previewObject_->GetAabb();
 
+    // 当たり判定から有効な境界を取れなければ、モデルのワールド境界を使う。
     if (!IsValidAabb(aabb)) {
         aabb = previewObject_->GetModelWorldAabb();
     }
 
+    // 代替の境界も無効であればワイヤーを作れない。
     if (!IsValidAabb(aabb))
         return;
 
@@ -933,6 +1024,7 @@ void DebugEditor::DrawPreviewMarker() {
         ? previewPlacementContactPosition_
         : previewObject_->GetWorldPosition();
     engine::Vector3 screen = WorldToScreen(markerWorld);
+    // 接点がカメラの背後にある場合は、画面の印を描かない。
     if (screen.z < 0.0f)
         return;
 
@@ -945,6 +1037,7 @@ void DebugEditor::DrawPreviewMarker() {
     ImU32 innerColor = IM_COL32(255, 255, 255, 220);
     constexpr float kRadius = 13.0f;
 
+    // オブジェクトの原点も画面へ投影できる場合にだけ、接点との距離を線で示せる。
     if (canDrawObjectLine) {
         ImVec2 objectCenter(objectScreen.x, objectScreen.y);
         float dx = objectCenter.x - center.x;

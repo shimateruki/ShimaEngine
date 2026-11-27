@@ -2,14 +2,15 @@
 #include <utility>
 
 EventManager* EventManager::GetInstance() {
-    static EventManager instance;
-    return &instance;
+    static EventManager sInstance;
+    return &sInstance;
 }
 
 template <typename Event>
 // 空のCallbackは登録せず、解除に使う一意のIDを返します。
 EventManager::SubscriptionId EventManager::SubscribeTo(
     ListenerList<Event>& listeners, std::function<void(const Event&)> callback) {
+    // 呼び出せる関数がない要求は登録せず、無効な解除IDを返す。
     if (!callback)
         return kInvalidSubscriptionId;
     const SubscriptionId id = nextSubscriptionId_++;
@@ -33,6 +34,7 @@ void EventManager::DispatchTo(ListenerList<Event>& listeners, const Event& event
     // 例外で途中終了しても深さを戻し、最外層であれば解除済みの購読を消してから例外を伝えます。
     } catch (...) {
         --dispatchDepth_;
+        // 例外で抜ける配信が一番外側なら、走査中には消せなかった購読をここで削除する。
         if (dispatchDepth_ == 0)
             PruneInactiveListeners();
         throw;
@@ -40,6 +42,7 @@ void EventManager::DispatchTo(ListenerList<Event>& listeners, const Event& event
 
     // 正常終了でも、配信中の走査が全て終わった時点で登録リストを整理します。
     --dispatchDepth_;
+    // 正常終了した配信が一番外側なら、無効化した購読を削除できる。
     if (dispatchDepth_ == 0)
         PruneInactiveListeners();
 }
@@ -48,6 +51,7 @@ template <typename Event>
 // 配信中でもイテレータを無効にしないよう、対象を削除せず非アクティブにします。
 void EventManager::MarkInactive(ListenerList<Event>& listeners, SubscriptionId id) {
     for (auto& listener : listeners) {
+        // 一致した解除IDだけを非アクティブにし、それ以外の購読を残す。
         if (listener.id == id) {
             listener.active = false;
             return;
@@ -111,6 +115,7 @@ void EventManager::Dispatch(const PlayerJumpEvent& event) {
 
 // 指定IDを全種別から無効化し、配信中でなければ直ちに整理します。
 void EventManager::Unsubscribe(SubscriptionId id) {
+    // 無効IDはどのイベント種別にも登録されていないため、探索を省く。
     if (id == kInvalidSubscriptionId)
         return;
     MarkInactive(playerHitListeners_, id);
@@ -118,6 +123,7 @@ void EventManager::Unsubscribe(SubscriptionId id) {
     MarkInactive(damageListeners_, id);
     MarkInactive(playerDeathListeners_, id);
     MarkInactive(playerJumpListeners_, id);
+    // 配信が進行中でない場合だけ、解除した購読をその場でリストから消す。
     if (dispatchDepth_ == 0)
         PruneInactiveListeners();
 }
@@ -138,6 +144,7 @@ void EventManager::ClearAllListeners() {
 
     for (auto& listener : playerJumpListeners_)
         listener.active = false;
+    // 配信の途中なら無効化だけを行い、現在の走査が全て終わるまで物理削除を保留する。
     if (dispatchDepth_ == 0)
         PruneInactiveListeners();
 }

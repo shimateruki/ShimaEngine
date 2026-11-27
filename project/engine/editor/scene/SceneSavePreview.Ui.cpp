@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include <cstdint>
 #include "SceneSavePreview.h"
 
 #ifdef USE_IMGUI
@@ -17,10 +18,11 @@ SceneSavePreview::Action SceneSavePreview::Draw() {
 #ifdef USE_IMGUI
     // 保存候補の差分を確認してから、保存・取消の選択だけ呼び出し側へ返します。
     if (!isOpen_)
-        return Action::None;
+        return Action::kNone;
 
     const char* popupName = "Scene Save Preview###SceneSavePreview";
 
+    // 開く要求が保留中の場合だけモーダルを開き、同じ要求を次のフレームへ持ち越さない。
     if (requestOpenPopup_) {
         ImGui::OpenPopup(popupName);
         requestOpenPopup_ = false;
@@ -28,8 +30,9 @@ SceneSavePreview::Action SceneSavePreview::Draw() {
 
     ImGui::SetNextWindowSize(ImVec2(980.0f, 680.0f), ImGuiCond_Appearing);
     bool keepOpen = true;
-    Action action = Action::None;
+    Action action = Action::kNone;
 
+    // モーダルを描けるフレームに限り、差分と決定ボタンを出す。
     if (ImGui::BeginPopupModal(popupName, &keepOpen, ImGuiWindowFlags_NoCollapse)) {
         ImGui::TextColored(ImVec4(0.35f, 0.8f, 1.0f, 1.0f), ICON_FA_SAVE " %s", title_.c_str());
         ImGui::SameLine();
@@ -44,13 +47,16 @@ SceneSavePreview::Action SceneSavePreview::Draw() {
         ImGui::Checkbox("変更なしのオブジェクトも表示", &showUnchanged_);
         ImGui::SameLine();
 
+        // ファイルやオブジェクトの増減・変更が無い場合は、その旨を表示する。
         if (!summary_.HasChanges()) {
             ImGui::TextColored(ImVec4(0.45f, 1.0f, 0.6f, 1.0f), ICON_FA_CHECK_CIRCLE " 差分はありません");
         }
+        // 差分がある場合は、詳細行を開くよう案内する。
         else {
             ImGui::TextDisabled("詳細を開くと、変更されたプロパティを確認できます");
         }
 
+        // 差分一覧の子領域を描ける場合は、ファイルごとの内容を並べる。
         if (ImGui::BeginChild("SceneSavePreviewDiffList", ImVec2(0, -52.0f), true)) {
             for (auto& diff : fileDiffs_) {
                 DrawFileDiff(diff);
@@ -61,8 +67,9 @@ SceneSavePreview::Action SceneSavePreview::Draw() {
 
         ImGui::Separator();
 
+        // キャンセルが押された場合は、保存せず閉じる結果を返す。
         if (ImGui::Button(ICON_FA_TIMES " キャンセル", ImVec2(160.0f, 34.0f))) {
-            action = Action::Cancel;
+            action = Action::kCancel;
             ImGui::CloseCurrentPopup();
         }
 
@@ -75,7 +82,7 @@ SceneSavePreview::Action SceneSavePreview::Draw() {
 
         // ここでは確定を返すだけ。ファイルの書き込みには事前に組み立てた保存候補を呼び出し側が使う。
         if (ImGui::Button(ICON_FA_CHECK " この内容で保存", ImVec2(170.0f, 34.0f))) {
-            action = Action::Confirm;
+            action = Action::kConfirm;
             ImGui::CloseCurrentPopup();
         }
 
@@ -84,14 +91,14 @@ SceneSavePreview::Action SceneSavePreview::Draw() {
         ImGui::EndPopup();
     }
 
-    if (!keepOpen && action == Action::None) {
+    if (!keepOpen && action == Action::kNone) {
         // タイトルバーの閉じる操作も明示的なキャンセルと同じ結果にする。
-        action = Action::Cancel;
+        action = Action::kCancel;
     }
 
     return action;
 #else
-    return Action::None;
+    return Action::kNone;
 #endif
 }
 
@@ -145,16 +152,19 @@ void SceneSavePreview::DrawFileSummaryTable() const {
 
         // 保存前に存在しない場合は追加、読めない場合は無効を優先し、通常差分と区別する。
         if (!diff.oldFileExists) {
-            DrawChangeBadge(ChangeKind::FileAdded);
+            DrawChangeBadge(ChangeKind::kFileAdded);
         }
+        // 置き換え前のファイルがあってもJSONが無効なら、読込不能の状態を表示する。
         else if (!diff.oldJsonValid) {
-            DrawChangeBadge(ChangeKind::FileInvalid);
+            DrawChangeBadge(ChangeKind::kFileInvalid);
         }
+        // 有効な旧ファイルに対してオブジェクトの追加・削除・変更があれば、変更済みとして表示する。
         else if (diff.addedCount > 0 || diff.removedCount > 0 || diff.modifiedCount > 0) {
-            DrawChangeBadge(ChangeKind::FileModified);
+            DrawChangeBadge(ChangeKind::kFileModified);
         }
+        // 以上のどれにも当てはまらなければ、変更なしを表示する。
         else {
-            DrawChangeBadge(ChangeKind::FileUnchanged);
+            DrawChangeBadge(ChangeKind::kFileUnchanged);
         }
 
         ImGui::TableSetColumnIndex(2);
@@ -172,16 +182,18 @@ void SceneSavePreview::DrawFileSummaryTable() const {
 
 void SceneSavePreview::DrawFileDiff(FileDiff& diff) {
     // 変更Objectを優先表示し、必要な場合だけ未変更行も展開します。
-    int visibleChanges = 0;
+    std::int32_t visibleChanges = 0;
 
     for (const auto& change : diff.objects) {
-        if (showUnchanged_ || change.kind != ChangeKind::Unchanged) {
+        // 未変更を含める設定か変更行の場合だけ、一覧に現れる件数に加える。
+        if (showUnchanged_ || change.kind != ChangeKind::kUnchanged) {
             visibleChanges++;
         }
     }
 
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanAvailWidth;
 
+    // 差分や追加ファイル、読み込めない既存ファイルがある場合は、詳細を初期状態で開く。
     if (diff.addedCount > 0 || diff.removedCount > 0 || diff.modifiedCount > 0 || !diff.oldFileExists || !diff.oldJsonValid) {
         flags |= ImGuiTreeNodeFlags_DefaultOpen;
     }
@@ -195,6 +207,7 @@ void SceneSavePreview::DrawFileDiff(FileDiff& diff) {
     header += std::to_string(diff.modifiedCount);
     header += ")";
 
+    // ファイルの見出しが閉じていれば、内容とオブジェクト行を描画しない。
     if (!ImGui::CollapsingHeader(header.c_str(), flags)) {
         return;
     }
@@ -208,11 +221,13 @@ void SceneSavePreview::DrawFileDiff(FileDiff& diff) {
         return;
     }
 
+    // フィルターを通った差分が無ければ、状態だけを示して空の表は作らない。
     if (visibleChanges == 0) {
         ImGui::TextDisabled("表示対象の変更はありません。");
         return;
     }
 
+    // 表を開始できない場合は、オブジェクトの行を出さない。
     if (!ImGui::BeginTable(("SceneSavePreviewObjects_" + diff.target.path).c_str(), 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp)) {
         return;
     }
@@ -223,10 +238,11 @@ void SceneSavePreview::DrawFileDiff(FileDiff& diff) {
     ImGui::TableSetupColumn("Details", ImGuiTableColumnFlags_WidthStretch);
     ImGui::TableHeadersRow();
 
-    int rowId = 0;
+    std::int32_t rowId = 0;
 
     for (const auto& change : diff.objects) {
-        if (!showUnchanged_ && change.kind == ChangeKind::Unchanged)
+        // 未変更を隠す設定なら、未変更の行を飛ばす。
+        if (!showUnchanged_ && change.kind == ChangeKind::kUnchanged)
             continue;
 
         ImGui::PushID(rowId++);
@@ -242,14 +258,18 @@ void SceneSavePreview::DrawFileDiff(FileDiff& diff) {
 
         ImGui::TableSetColumnIndex(3);
 
+        // 項目別の説明が空なら、詳細欄には空欄の目印だけを置く。
         if (change.details.empty()) {
             ImGui::TextDisabled("-");
         }
+        // 説明があれば、最初の一行を表に出す。
         else {
             // 差分の一行目は常時表示し、残りはセルを展開した場合だけ描く。
             ImGui::TextWrapped("%s", change.details[0].c_str());
 
+            // 補足が二行目以降にもある場合にだけ、展開できる詳細欄を置く。
             if (change.details.size() > 1) {
+                // 詳細欄が開いているフレームだけ、二行目以降を箇条書きで描く。
                 if (ImGui::TreeNode("詳細")) {
                     for (size_t i = 1; i < change.details.size(); ++i) {
                         ImGui::BulletText("%s", change.details[i].c_str());
@@ -271,26 +291,26 @@ void SceneSavePreview::DrawChangeBadge(ChangeKind kind) const {
     ImVec4 color = ImVec4(0.75f, 0.75f, 0.75f, 1.0f);
 
     switch (kind) {
-    case ChangeKind::Added:
-    case ChangeKind::FileAdded:
+    case ChangeKind::kAdded:
+    case ChangeKind::kFileAdded:
         color = ImVec4(0.35f, 1.0f, 0.55f, 1.0f);
         break;
 
-    case ChangeKind::Removed:
+    case ChangeKind::kRemoved:
         color = ImVec4(1.0f, 0.35f, 0.35f, 1.0f);
         break;
 
-    case ChangeKind::Modified:
-    case ChangeKind::FileModified:
+    case ChangeKind::kModified:
+    case ChangeKind::kFileModified:
         color = ImVec4(1.0f, 0.78f, 0.22f, 1.0f);
         break;
 
-    case ChangeKind::FileInvalid:
+    case ChangeKind::kFileInvalid:
         color = ImVec4(1.0f, 0.25f, 0.75f, 1.0f);
         break;
 
-    case ChangeKind::Unchanged:
-    case ChangeKind::FileUnchanged:
+    case ChangeKind::kUnchanged:
+    case ChangeKind::kFileUnchanged:
     default:
         color = ImVec4(0.72f, 0.72f, 0.72f, 1.0f);
         break;
@@ -302,26 +322,26 @@ void SceneSavePreview::DrawChangeBadge(ChangeKind kind) const {
 const char* SceneSavePreview::GetKindLabel(ChangeKind kind) const {
     // 差分種別を画面内で共通の短いラベルへ変換します。
     switch (kind) {
-    case ChangeKind::Added:
+    case ChangeKind::kAdded:
         return "Added";
 
-    case ChangeKind::Removed:
+    case ChangeKind::kRemoved:
         return "Removed";
 
-    case ChangeKind::Modified:
+    case ChangeKind::kModified:
         return "Modified";
 
-    case ChangeKind::FileAdded:
+    case ChangeKind::kFileAdded:
         return "New File";
 
-    case ChangeKind::FileModified:
+    case ChangeKind::kFileModified:
         return "Changed";
 
-    case ChangeKind::FileInvalid:
+    case ChangeKind::kFileInvalid:
         return "Invalid";
 
-    case ChangeKind::Unchanged:
-    case ChangeKind::FileUnchanged:
+    case ChangeKind::kUnchanged:
+    case ChangeKind::kFileUnchanged:
     default:
         return "No Change";
     }

@@ -6,6 +6,7 @@
 // 主な入口：CalculateVelocity
 class MoveStrategy3D : public IMoveStrategy {
   public:
+    // 現在のメインカメラの水平前方と右方向を基準に、操作入力をワールド速度へ変換する。
     engine::Vector3 CalculateVelocity(Player* player) override;
 
   private:

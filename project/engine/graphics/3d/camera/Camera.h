@@ -17,7 +17,6 @@ namespace engine {
 // 主な入口：Initialize / Update / SetFollowTarget / StartOverride
 class Camera {
 public:
-    // 自由操作を使うゲームと、構図をゲーム側で決めるゲームを同じカメラで扱う。
     // ボス戦の構図設定。CameraEditorが保存し、シーンが対象を指定した間だけ使用する。
     struct BossFramingSettings {
         bool enabled = true;
@@ -32,15 +31,17 @@ public:
     };
     // bossの位置・範囲をコピーする。ポインターは保持せず、nullptrで通常構図へ戻す。
     void ConfigureBossFraming(const BossFramingSettings& settings, const engine::Object3D* boss);
+    // ボスが指定され、検証済みの構図設定で有効になっている場合にtrueを返す。
     bool IsBossFramingActive() const { return bossFramingActive_; }
 
-    enum class GameplayStyle { Free, Guided };
-    enum class ObstacleResponse { ShortenDistance, PreserveComposition };
+    enum class GameplayStyle { kFree, kGuided };
+    enum class ObstacleResponse { kShortenDistance, kPreserveComposition };
+    // 操作スタイルを切り替えると以前の追従・衝突履歴を破棄する。旋回限度は度、画角はラジアンで指定する。
     void ConfigureGameplayStyle(GameplayStyle style, ObstacleResponse obstacles,
         float yawLimitDegrees, float pitchLimitDegrees, float returnResponse, float fov);
-    bool IsGuidedGameplay() const { return gameplayStyle_ == GameplayStyle::Guided; }
+    bool IsGuidedGameplay() const { return gameplayStyle_ == GameplayStyle::kGuided; }
     // 誘導カメラで、障害物に対して構図を維持する設定か返す。
-    bool PreservesComposition() const { return IsGuidedGameplay() && visibilitySettings_.enabled && obstacleResponse_ == ObstacleResponse::PreserveComposition; }
+    bool PreservesComposition() const { return IsGuidedGameplay() && visibilitySettings_.enabled && obstacleResponse_ == ObstacleResponse::kPreserveComposition; }
     engine::Vector2 GetGuidedLookOffset() const { return guidedLookOffset_; }
     // 余白は画面半幅/半高に対する比率、先読みはワールド距離、応答は毎秒。
     void ConfigureGuidedFraming(float lookAhead, float deadZoneWidth, float deadZoneHeight, float response);
@@ -50,6 +51,7 @@ public:
     engine::Vector3 GetGuidedFocusAnchor() const { return guidedFocusAnchor_; }
     engine::Vector3 GetGuidedLeadOffset() const { return guidedLeadOffset_; }
 
+    // フェード距離と時間などを対応範囲へ補正してから、カメラ設定に記録する。
     void SetVisibilitySettings(CameraVisibilitySettings value) { value.Validate(); visibilitySettings_ = value; }
     const CameraVisibilitySettings& GetVisibilitySettings() const { return visibilitySettings_; }
     // 遮蔽物が近づく側は安全距離を即時採用し、離れる側だけ時間補間する。
@@ -57,78 +59,80 @@ public:
 
     /// <summary>追従対象に対して視点をどう動かすかを表す。</summary>
     enum class FollowMode {
-        Fixed,       // 対象に固定オフセットで追従する。
-        Aimable,     // 三人称視点で、入力により回転できる。
-        FirstPerson, // 一人称視点。
-        LockOn,      // ロックオン対象も見る視点。
-        Orbit,       // 対象の周囲を回る視点。
-        FixedPoint,  // 固定位置と角度を使う視点。
+        kFixed,       // 対象に固定オフセットで追従する。
+        kAimable,     // 三人称視点で、入力により回転できる。
+        kFirstPerson, // 一人称視点。
+        kLockOn,      // ロックオン対象も見る視点。
+        kOrbit,       // 対象の周囲を回る視点。
+        kFixedPoint,  // 固定位置と角度を使う視点。
     };
 
     // 演出カメラへ切り替える際の時間補間です。
     enum class OverrideEasing {
-        Linear,
-        EaseIn,
-        EaseOut,
-        EaseInOut,
-        SmootherStep,
+        kLinear,
+        kEaseIn,
+        kEaseOut,
+        kEaseInOut,
+        kSmootherStep,
     };
 
     // EyeとTargetを固定値またはシーンObjectから取得します。
     enum class OverrideEyeSource {
-        Fixed,
-        SceneObject,
-        SceneObjectRelativeToReference,
+        kFixed,
+        kSceneObject,
+        kSceneObjectRelativeToReference,
     };
 
     /// <summary>演出カメラが注視点をどこから取得するか。</summary>
     enum class OverrideTargetSource {
-        Fixed,
-        SceneObject,
-        EyeObjectForward,
+        kFixed,
+        kSceneObject,
+        kEyeObjectForward,
     };
 
     // 完全追従と、少し遅れて追従するモードを分けます。
     enum class OverrideFollowMode {
-        Snap,
-        Smooth,
+        kSnap,
+        kSmooth,
     };
 
     /// <summary>カットシーンなどで通常カメラを一時的に差し替える設定。</summary>
-    // 関連：Camera（この型を使う機能の本体）
     struct CameraOverrideParams {
-        float duration = 1.0f; // 演出レイヤーまたは上書きの継続秒数。
+        float duration = 1.0f; // 現在の構図から演出構図へ移る秒数。
         float exitDuration = 0.35f; // 通常カメラへ戻すブレンド秒数。
-        OverrideEasing easing = OverrideEasing::SmootherStep;
+        OverrideEasing easing = OverrideEasing::kSmootherStep;
 
-        OverrideEyeSource eyeSource = OverrideEyeSource::Fixed;
+        OverrideEyeSource eyeSource = OverrideEyeSource::kFixed;
         std::string eyeObjectName;
         engine::Object3D* eyeObject = nullptr; // CameraEditorが再生開始時に解決する非所有ポインタ。
-        engine::Vector3 eyeObjectOffset = engine::Vector3::ZERO;
+        engine::Vector3 eyeObjectOffset = engine::Vector3::kZero;
         std::string eyeReferenceObjectName;
         engine::Object3D* eyeReferenceObject = nullptr; // 相対方向を決める非所有参照。
-        OverrideFollowMode eyeFollowMode = OverrideFollowMode::Snap;
+        OverrideFollowMode eyeFollowMode = OverrideFollowMode::kSnap;
+        // 視点を滑らかに追従させる場合の応答（毎秒）。
         float eyeFollowResponse = 12.0f;
 
         // Eye位置を通常カメラに追従させる軸と、固定する場合の値。
         bool trackEyeX = false;
         bool trackEyeY = false;
         bool trackEyeZ = false;
-        engine::Vector3 fixedEyePos = engine::Vector3::ZERO;
+        engine::Vector3 fixedEyePos = engine::Vector3::kZero;
 
-        OverrideTargetSource targetSource = OverrideTargetSource::Fixed;
+        OverrideTargetSource targetSource = OverrideTargetSource::kFixed;
         std::string targetObjectName;
         engine::Object3D* targetFollowObject = nullptr; // CameraEditorが再生開始時に解決する非所有ポインタ。
-        engine::Vector3 targetObjectOffset = engine::Vector3::ZERO;
+        engine::Vector3 targetObjectOffset = engine::Vector3::kZero;
+        // 視点オブジェクトの前方を注視する場合に使うワールド距離。
         float eyeForwardDistance = 10.0f;
-        OverrideFollowMode targetFollowMode = OverrideFollowMode::Snap;
+        OverrideFollowMode targetFollowMode = OverrideFollowMode::kSnap;
+        // 注視点を滑らかに追従させる場合の応答（毎秒）。
         float targetFollowResponse = 14.0f;
 
         // 注視点を通常カメラに追従させる軸と、固定する場合の値。
         bool trackTargetX = true;
         bool trackTargetY = true;
         bool trackTargetZ = true;
-        engine::Vector3 fixedTargetPos = engine::Vector3::ZERO;
+        engine::Vector3 fixedTargetPos = engine::Vector3::kZero;
     };
 
 public:
@@ -189,7 +193,7 @@ public:
             guidedFocusInitialized_ = false;
             hasFollowHeight_ = false;
             collisionDistance_ = -1.0f;
-            followTargetGrounded_ = true; // 追従対象の接地状態。
+            followTargetGrounded_ = true;
         }
         followObject_ = target;
     }
@@ -202,6 +206,7 @@ public:
     engine::Vector3 UpdateFollowReferencePosition();
 
     /// <summary>ジャンプ中の上下追従を抑え、通常の横追従と手動回転は維持する。</summary>
+    // maxRiseは空中で追従基準より上に許容するワールド距離。
     void SetJumpHeightStabilization(bool enabled, float maxRise = 8.0f) {
         stabilizeJumpHeight_ = enabled;
         jumpHeightAllowance_ = std::clamp(maxRise, 1.0f, 30.0f);
@@ -231,7 +236,7 @@ public:
     /// <summary>次の追従計算に使う回転角を設定する。</summary>
     void SetRotation(const engine::Vector3& rotation) { rotation_ = rotation; }
 
-    /// <summary>カメラ位置だけを固定し、ターゲット計算と切り離す。</summary>
+    /// <summary>固定を有効にした時点の視点位置を保持し、注視点は別に更新する。</summary>
     void SetFreezeEye(bool freeze);
 
     /// <summary>通常の照準カメラへの切り替えを一時的に抑制する。</summary>
@@ -243,7 +248,7 @@ public:
     float GetFovY() const { return fovY_; }
 
     /// <summary>現在の画角から指定画角へ、カメラ更新時に補間する。</summary>
-    void BlendFovY(float targetFov, float duration, OverrideEasing easing = OverrideEasing::SmootherStep);
+    void BlendFovY(float targetFov, float duration, OverrideEasing easing = OverrideEasing::kSmootherStep);
 
     /// <summary>近遠クリップ面を設定する。近距離は0.001以上、遠距離は近距離より0.01以上に制限する。</summary>
     void SetClipRange(float nearClip, float farClip) {
@@ -278,6 +283,7 @@ public:
     void SnapToThirdPerson(float distance, float height, float pitch);
 
     /// <summary>周回モードの半径、高さ、回転速度を設定する。</summary>
+    // radiusとheightはワールド距離、speedは一回の更新で進めるラジアン数。
     void SetOrbitParams(float radius, float height, float speed) {
         orbitRadius_ = radius;
         orbitHeight_ = height;
@@ -326,9 +332,10 @@ public:
     /// <summary>指定秒数で演出カメラから通常視点へ戻す。終了時点の構図を補間開始値にする。</summary>
     void EndOverride(float duration);
 
-    /// <summary>演出カメラの有効状態と通常視点への混合率を取得する。</summary>
+    /// <summary>演出構図への移行中または適用中かを返す。復帰補間を始めるとfalseになる。</summary>
     bool IsOverridden() const { return isOverridden_; }
 
+    // 演出構図を混ぜる割合。通常構図は0、演出構図のみなら1。
     float GetOverrideWeight() const { return overrideWeight_; }
 
     /// 開始番号で範囲カメラと外部演出の所有権を区別する。
@@ -343,6 +350,7 @@ public:
         // 範囲へ入った時点で画面に出ている投影値を補間の始点にする。同じ範囲を更新中は始点を保持する。
         if (!regionProjectionActive_) regionProjectionStart_ = renderedProjection_;
         regionProjection_ = {fov, nearClip, farClip};
+        // 安全位置を検査する対象が変わった場合は、以前の対象に対する位置の履歴を破棄する。
         if (regionSafetySubject_ != subject) hasRegionSafeEye_ = false;
         regionSafetySubject_ = subject;
         regionProjectionActive_ = true;
@@ -352,18 +360,19 @@ public:
     /// 手動操作へ戻る初回は、見えている視点を追従補間の始点へ引き継ぐ。
     void ResumeManualView() {
         collisionDistance_ = -1.0f;
+        // 画面に出ていた視点・注視点と回転を引き継ぎ、手動の回転をそこから再開できるようにする。
         SyncRotationToCurrentView(); smoothEye_ = eye_; smoothTarget_ = target_;
         // 手動復帰で画角だけが瞬間的に変わらないよう、見えていた画角から戻す。
         const float followFov = fovY_;
         fovY_ = renderedProjection_.x;
-        BlendFovY(followFov, 0.3f, OverrideEasing::SmootherStep);
+        BlendFovY(followFov, 0.3f, OverrideEasing::kSmootherStep);
     }
     // 手動視点入力の有無を返し、その通知を消費する。
     bool ConsumeManualLookInput() { const bool value = manualLookInput_; manualLookInput_ = false; return value; }
     // 配置カメラの解除には、追従カメラが実際に照準へ入る条件を使います。
     bool IsAimCameraRequested() const { return IsFollowAimInputActive(); }
 
-    /// <summary>現在の視点行列から抽出した視錐台を返す。</summary>
+    /// <summary>現在のビュー射影行列から抽出した視錐台を返す。</summary>
     const engine::Frustum& GetFrustum() const { return frustum_; }
 
     /// <summary>指定時間の画面揺れを追加する。axisWeightで各軸の揺れ幅を調整する。</summary>
@@ -389,6 +398,7 @@ public:
     ID3D12Resource* GetConstantBuffer() const { return constBuffer_.Get(); }
 
 private:
+    // 追従・入力が使え、照準抑止やロックオン中でなく、追従対象がPlayer以外の場合の照準要求を調べる。
     bool IsFollowAimInputActive() const;
     // プレイヤー足元と保存済みボス範囲から、共通補間へ渡す視点を計算する。dtは秒。
     void UpdateBossFraming(const engine::Vector3& player, float dt,
@@ -413,8 +423,8 @@ private:
     float guidedLookAhead_ = 6.0f;
     float guidedDeadZoneWidth_ = 0.10f, guidedDeadZoneHeight_ = 0.10f;
     float guidedFramingResponse_ = 3.0f;
-    GameplayStyle gameplayStyle_ = GameplayStyle::Free;
-    ObstacleResponse obstacleResponse_ = ObstacleResponse::ShortenDistance;
+    GameplayStyle gameplayStyle_ = GameplayStyle::kFree;
+    ObstacleResponse obstacleResponse_ = ObstacleResponse::kShortenDistance;
     engine::Vector2 guidedLookOffset_{}; // X=左右、Y=上下。保存する基準角度とは分離する。
     float guidedYawLimit_ = 0.174532925f;
     float guidedPitchLimit_ = 0.087266463f;
@@ -430,7 +440,6 @@ private:
     void RefreshDerivedMatrices();
 
     /// <summary>GPUへ送るビュー行列と射影行列。</summary>
-    // 関連：Camera（この型を使う機能の本体）
     struct CameraVP {
         engine::Matrix4x4 view;
         engine::Matrix4x4 projection;
@@ -439,6 +448,7 @@ private:
 private:
     uint64_t overrideRevision_ = 0;
     bool regionProjectionActive_ = false;
+    // 範囲の目標値、入りの開始値、画面に反映された値を、それぞれ縦画角・近距離・遠距離の順で保持する。
     engine::Vector3 regionProjection_ = {0.45f, 0.1f, 1000.0f};
     engine::Vector3 regionProjectionStart_ = {0.45f, 0.1f, 1000.0f};
     engine::Vector3 renderedProjection_ = {0.45f, 0.1f, 1000.0f};
@@ -450,7 +460,7 @@ private:
 
     // 現在の視点位置、注視点、上方向。View行列の入力値。
     engine::Vector3 eye_ = { 0.0f, 0.0f, -10.0f };
-    engine::Vector3 target_ = engine::Vector3::ZERO;
+    engine::Vector3 target_ = engine::Vector3::kZero;
     engine::Vector3 up_ = { 0.0f, 1.0f, 0.0f };
 
     // 垂直画角・画面比・描画する奥行き範囲。Projection行列の入力値。
@@ -459,7 +469,7 @@ private:
     float fovBlendTarget_ = 0.45f; // 画角ブレンドの目標値（ラジアン）。
     float fovBlendElapsed_ = 0.0f; // 画角ブレンドの経過秒数。
     float fovBlendDuration_ = 0.0f; // 画角ブレンド全体の秒数。
-    OverrideEasing fovBlendEasing_ = OverrideEasing::SmootherStep;
+    OverrideEasing fovBlendEasing_ = OverrideEasing::kSmootherStep;
     bool fovBlendActive_ = false;
     float aspectRatio_ = 16.0f / 9.0f;
     float nearClip_ = 0.1f; // 近クリップ面までの距離。
@@ -477,14 +487,14 @@ private:
     engine::Object3D* targetObject_ = nullptr; // 注視・ロックオン対象。借用参照。
 
     // 追従・一人称などの計算方式と、手動カメラ入力の許可状態。
-    FollowMode followMode_ = FollowMode::Aimable;
+    FollowMode followMode_ = FollowMode::kAimable;
     bool isInputEnabled_ = true;
 
     // 追従対象へ滑らかに寄せる途中の視点と注視点。初回だけ即時合わせする。
-    engine::Vector3 smoothTarget_ = engine::Vector3::ZERO;
-    engine::Vector3 smoothEye_ = engine::Vector3::ZERO;
+    engine::Vector3 smoothTarget_ = engine::Vector3::kZero;
+    engine::Vector3 smoothEye_ = engine::Vector3::kZero;
     bool isCameraInitialized_ = false;
-    engine::Vector3 previousLockOnPlayerPosition_ = engine::Vector3::ZERO;
+    engine::Vector3 previousLockOnPlayerPosition_ = engine::Vector3::kZero;
     bool hasLockOnPlayerPosition_ = false;
 
     // 接地時の高さを空中へ引き継ぐ。大きな落下と上昇は追い、画面外への離脱を防ぐ。
@@ -500,19 +510,19 @@ private:
     float minDistance_ = 3.0f;
     float maxDistance_ = 20.0f;
     engine::Vector3 firstPersonOffset_ = { 0.0f, 1.5f, 0.0f }; // 一人称視点の位置補正。
-    engine::Vector3 rotation_ = engine::Vector3::ZERO;
+    engine::Vector3 rotation_ = engine::Vector3::kZero;
     engine::Vector3 lockOnOffset_ = { 0.0f, 3.0f, -8.0f }; // ロックオン時の位置補正。
 
     // 通常の照準カメラの距離・高さ・向きと、一時的な視点固定状態。
     float aimDistance_ = 15.0f;
     float aimHeight_ = 5.0f;
-    engine::Vector3 aimAngle_ = engine::Vector3::ZERO; // 手動照準の回転（ラジアン）。
+    engine::Vector3 aimAngle_ = engine::Vector3::kZero; // 手動照準の回転（ラジアン）。
     bool isEyeFrozen_ = false;
     bool isAimCameraSuppressed_ = false; // 照準カメラへの移行を一時抑止するか。
 
     // 周回カメラの軌道・角速度と、固定位置カメラの配置。
     float orbitRadius_ = 15.0f;
-    engine::Vector3 orbitCenterOffset_ = engine::Vector3::ZERO;
+    engine::Vector3 orbitCenterOffset_ = engine::Vector3::kZero;
     float orbitCenterHeight_ = 5.0f;
     float orbitHeight_ = 5.0f;
     // 周回角の1更新あたりの増分（ラジアン）。
@@ -527,31 +537,29 @@ private:
     float overrideTimer_ = 0.0f; // カメラ上書きの経過秒数。
     float overrideDuration_ = 0.0f; // 現在の上書き区間の秒数。
     float overrideWeight_ = 0.0f;
-    engine::Vector3 overrideStartEye_ = engine::Vector3::ZERO;
-    engine::Vector3 overrideStartTarget_ = engine::Vector3::ZERO;
-    engine::Vector3 overrideFollowEye_ = engine::Vector3::ZERO;
-    engine::Vector3 overrideFollowTarget_ = engine::Vector3::ZERO;
+    engine::Vector3 overrideStartEye_ = engine::Vector3::kZero;
+    engine::Vector3 overrideStartTarget_ = engine::Vector3::kZero;
+    engine::Vector3 overrideFollowEye_ = engine::Vector3::kZero;
+    engine::Vector3 overrideFollowTarget_ = engine::Vector3::kZero;
     bool overrideFollowInitialized_ = false;
 
     // 固定位置カメラの向きと、現在のView/Projectionから作った視錐台。
-    engine::Vector3 fixedPointAngle_ = engine::Vector3::ZERO;
+    engine::Vector3 fixedPointAngle_ = engine::Vector3::kZero;
     engine::Frustum frustum_;
 
     // 複数の演出要求を加算し、同時発火でも後から来た要求で上書きしません。
-    // 関連：Camera（この型を使う機能の本体）
     struct ShakeLayer {
         float elapsed = 0.0f;
-        float duration = 0.01f; // 演出レイヤーまたは上書きの継続秒数。
+        float duration = 0.01f; // 揺れが終了するまでの秒数。
         float amplitude = 0.0f;
         float frequency = 24.0f;
         engine::Vector3 axisWeight = { 1.0f, 1.0f, 0.5f };
     };
 
     /// <summary>画角変化の経過時間と大きさを保持する演出レイヤー。</summary>
-    // 関連：Camera（この型を使う機能の本体）
     struct FovPulseLayer {
         float elapsed = 0.0f;
-        float duration = 0.01f; // 演出レイヤーまたは上書きの継続秒数。
+        float duration = 0.01f; // 画角に対する効果が終了するまでの秒数。
         float amountRadians = 0.0f;
         float attackRatio = 0.12f;
     };

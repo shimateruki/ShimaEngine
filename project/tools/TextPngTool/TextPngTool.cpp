@@ -1,5 +1,6 @@
 #define NOMINMAX
 
+#include <cstdint>
 #include <Windows.h>
 #include <d2d1.h>
 #include <dwrite.h>
@@ -111,8 +112,8 @@ struct RenderConfig {
     float fontSize = 72.0f;
     float padding = 16.0f;
     bool autoCanvas = true;
-    int canvasWidth = 512;
-    int canvasHeight = 256;
+    std::int32_t canvasWidth = 512;
+    std::int32_t canvasHeight = 256;
     bool bold = true;
     D2D1_COLOR_F textColor = D2D1::ColorF(1.0f, 1.0f, 1.0f, 1.0f);
     bool textGradientEnabled = false;
@@ -132,8 +133,8 @@ struct RenderConfig {
 
 // 確定した画像のピクセル寸法と実際のフォント。指定フォントを使えなかったかも報告する。
 struct RenderResult {
-    int width = 1;
-    int height = 1;
+    std::int32_t width = 1;
+    std::int32_t height = 1;
     std::wstring usedFontFamily;
     bool fallbackUsed = false;
 };
@@ -141,7 +142,7 @@ struct RenderResult {
 std::wstring Utf8ToWide(const std::string& text) {
     if (text.empty())
         return L"";
-    int size = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, nullptr, 0);
+    std::int32_t size = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, nullptr, 0);
     if (size <= 0)
         return L"";
     std::wstring result(size - 1, L'\0');
@@ -152,7 +153,7 @@ std::wstring Utf8ToWide(const std::string& text) {
 std::string WideToUtf8(const std::wstring& text) {
     if (text.empty())
         return "";
-    int size = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    std::int32_t size = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), -1, nullptr, 0, nullptr, nullptr);
     if (size <= 0)
         return "";
     std::string result(size - 1, '\0');
@@ -205,10 +206,10 @@ float ReadFloat(const nlohmann::json& json, const char* name, float fallback) {
     return json[name].get<float>();
 }
 
-int ReadInt(const nlohmann::json& json, const char* name, int fallback) {
+std::int32_t ReadInt(const nlohmann::json& json, const char* name, std::int32_t fallback) {
     if (!json.contains(name) || !json[name].is_number_integer())
         return fallback;
-    return json[name].get<int>();
+    return json[name].get<std::int32_t>();
 }
 
 bool ReadBool(const nlohmann::json& json, const char* name, bool fallback) {
@@ -536,12 +537,12 @@ RenderResult RenderToPng(const RenderConfig& cfg, const fs::path& outputPath) {
     const float measuredWidth = std::max(metrics.widthIncludingTrailingWhitespace, metrics.width);
     const float measuredHeight = std::max(metrics.height, cfg.fontSize);
 
-    int width = cfg.canvasWidth;
-    int height = cfg.canvasHeight;
+    std::int32_t width = cfg.canvasWidth;
+    std::int32_t height = cfg.canvasHeight;
 
     if (cfg.autoCanvas) {
-        width = static_cast<int>(std::ceil(measuredWidth + edgePadding * 2.0f + shadowPadX));
-        height = static_cast<int>(std::ceil(measuredHeight + edgePadding * 2.0f + shadowPadY));
+        width = static_cast<std::int32_t>(std::ceil(measuredWidth + edgePadding * 2.0f + shadowPadX));
+        height = static_cast<std::int32_t>(std::ceil(measuredHeight + edgePadding * 2.0f + shadowPadY));
     }
 
     width = std::clamp(width, 1, 8192);
@@ -625,10 +626,10 @@ RenderResult RenderToPng(const RenderConfig& cfg, const fs::path& outputPath) {
 
     if (cfg.outlineEnabled && cfg.outlineWidth > 0.0f && cfg.outlineColor.a > 0.0f) {
         // 指定半径の円内へ文字をずらして重ね、画像としての太い縁を作る。
-        const int radius = std::clamp(static_cast<int>(std::ceil(cfg.outlineWidth)), 1, 64);
+        const std::int32_t radius = std::clamp(static_cast<std::int32_t>(std::ceil(cfg.outlineWidth)), 1, 64);
 
-        for (int y = -radius; y <= radius; ++y) {
-            for (int x = -radius; x <= radius; ++x) {
+        for (std::int32_t y = -radius; y <= radius; ++y) {
+            for (std::int32_t x = -radius; x <= radius; ++x) {
                 if (x == 0 && y == 0)
                     continue;
                 if (x * x + y * y > radius * radius)
@@ -692,8 +693,8 @@ void WriteReport(const fs::path& reportPath, const RenderResult& result, const f
     file << report.dump(2);
 }
 
-fs::path GetOptionValue(int argc, wchar_t** argv, const wchar_t* optionName) {
-    for (int i = 1; i + 1 < argc; ++i) {
+fs::path GetOptionValue(std::int32_t argc, wchar_t** argv, const wchar_t* optionName) {
+    for (std::int32_t i = 1; i + 1 < argc; ++i) {
         if (_wcsicmp(argv[i], optionName) == 0) {
             return fs::path(argv[i + 1]);
         }

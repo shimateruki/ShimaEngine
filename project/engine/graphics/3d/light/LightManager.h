@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "MeshRenderer.h"
 #include "DirectXCommon.h"
 #include <vector>
@@ -22,12 +23,12 @@ public:
     // 関連：LightManager（この型を使う機能の本体）
     struct EnvironmentPostSettings {
         bool bloomEnabled = true;
-        int bloomQuality = 2;
+        std::int32_t bloomQuality = 2;
         float threshold = 1.0f;
         float bloomIntensity = 0.0f;
         float spread = 1.0f;
 
-        int enableToneMapping = 0;
+        std::int32_t enableToneMapping = 0;
 
         float vignetteIntensity = 0.0f;
         float vignettePower = 1.0f;
@@ -51,7 +52,7 @@ public:
         DirectionalLight directionalLight{};
         engine::Vector4 clearColor = { 0.52f, 0.68f, 0.84f, 1.0f };
         // 影マップ一辺のピクセル数。影を描くワールド範囲の大きさは shadowAreaSize に別で持ちます。
-        int shadowMapResolution = 2048;
+        std::int32_t shadowMapResolution = 2048;
         float shadowAreaSize = 80.0f;
         bool skyboxEnabled = true;
         std::string skyboxTexturePath = "Resources/output_skybox.dds";
@@ -59,17 +60,17 @@ public:
     };
 
     // シェーダーで定義されている最大数と合わせる定数
-    static const int kMaxPointLights = 100;
-    static const int kMaxSpotLights = 100;
+    static const std::int32_t kMaxPointLights = 100;
+    static const std::int32_t kMaxSpotLights = 100;
 
     /// <summary>
     /// ライトの特殊挙動モード
     /// </summary>
     enum class LightMode {
-        None,       // 通常（変化なし）
-        Follow,     // 追従用途の保存値。位置追従自体はどのモードでもtargetの有無で決まります。
-        Flicker,    // チカチカと不規則に点滅（故障した蛍光灯など）
-        SineWave,   // 周期的に明滅（呼吸のような表現）
+        kNone,       // 通常（変化なし）
+        kFollow,     // 追従用途の保存値。位置追従自体はどのモードでもtargetの有無で決まります。
+        kFlicker,    // チカチカと不規則に点滅（故障した蛍光灯など）
+        kSineWave,   // 周期的に明滅（呼吸のような表現）
     };
 
     /// <summary>
@@ -82,9 +83,9 @@ public:
 
         // エディタ・制御用データ
         std::string name = "PointLight";   // 識別名
-        LightMode mode = LightMode::None;  // 現在の挙動モード
+        LightMode mode = LightMode::kNone;  // 現在の挙動モード
         engine::Object3D* target = nullptr;        // 追従対象のオブジェクト（nullptrなら追従なし）
-        engine::Vector3 offset = engine::Vector3::ZERO; // 追従時の位置ズレ補正
+        engine::Vector3 offset = engine::Vector3::kZero; // 追従時の位置ズレ補正
 
         // アニメーション用パラメータ
         float baseIntensity = 1.0f;        // 点滅時の基準となる明るさ
@@ -102,9 +103,9 @@ public:
 
         // エディタ・制御用データ
         std::string name = "SpotLight";
-        LightMode mode = LightMode::None;
+        LightMode mode = LightMode::kNone;
         engine::Object3D* target = nullptr;
-        engine::Vector3 offset = engine::Vector3::ZERO;
+        engine::Vector3 offset = engine::Vector3::kZero;
 
         // アニメーション用パラメータ
         float baseIntensity = 1.0f;
@@ -118,7 +119,7 @@ public:
     // 関連：LightManager（この型を使う機能の本体）
     struct PointLightConstData {
         MeshRenderer::PointLight lights[kMaxPointLights];
-        int activeCount;   // 現在有効なライトの数
+        std::int32_t activeCount;   // 現在有効なライトの数
         float padding[3];  // アライメント調整
     };
 
@@ -128,7 +129,7 @@ public:
     // 関連：LightManager（この型を使う機能の本体）
     struct SpotLightConstData {
         MeshRenderer::SpotLight lights[kMaxSpotLights];
-        int activeCount;
+        std::int32_t activeCount;
         float padding[3];
     };
 
@@ -197,9 +198,9 @@ public:
     const engine::Matrix4x4& GetDirectionalShadowViewProjection(const engine::Camera* camera);
 
     // シャドウマップ解像度と影を描く領域の大きさ。
-    int GetShadowMapResolution() const;
+    std::int32_t GetShadowMapResolution() const;
 
-    void SetShadowMapResolution(int resolution);
+    void SetShadowMapResolution(std::int32_t resolution);
 
     float GetShadowAreaSize() const { return shadowAreaSize_; }
 

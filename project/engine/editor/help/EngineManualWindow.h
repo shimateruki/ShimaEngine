@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 // 担当：Editor機能の目的・操作手順・保存先を検索して表示する。
 // 関連：GameEditorController / DebugEditor（呼出側）
@@ -22,6 +23,6 @@ public:
 
 private:
     bool isOpen_ = false;
-    int selectedIndex_ = 0;
+    std::int32_t selectedIndex_ = 0;
     char searchBuffer_[128] = {};
 };

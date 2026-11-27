@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "176c0179a5eea66020220d0ced997f5c",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/sprite/guide_sign/bomb_poster.png",
+  "version": 1
+}

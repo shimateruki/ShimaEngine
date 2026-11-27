@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "ad29a3e85139fb528d95e0d2d030c1ab",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/sprite/ui/result/clear/japanese/clear_time_digits.png",
+  "version": 1
+}

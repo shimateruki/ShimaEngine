@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "SceneAssetPanel.h"
 
@@ -55,11 +56,11 @@ private:
     engine::Object3D* lastHierarchySelection_ = nullptr;
     BaseScene* lastHierarchyScene_ = nullptr;
     std::vector<engine::Object3D*> revealPath_;
-    int revealFrames_ = 0;
+    std::int32_t revealFrames_ = 0;
 
     // 0: All, 1: Player, 2: Enemy, 3: Object, 4: Camera
-    int currentCategoryFilter_ = 0;
-    int currentLayerFilter_ = 0;
+    std::int32_t currentCategoryFilter_ = 0;
+    std::int32_t currentLayerFilter_ = 0;
 
     SceneAssetPanel sceneAssetPanel_;
 };

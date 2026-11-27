@@ -2,7 +2,7 @@
 
 #include <string_view>
 
-// 担当：Object3dに付加する機能の共通型と、保存用の種別IDを定義する。
+// Object3Dに付ける機能の共通基底型。派生機能を保存・復元するときの種別IDを定義する。
 // 関連：Object3D（保持）、PathMoverComponent / ParticleEmitterComponent（派生）
 // 主な入口：GetTypeId
 class ObjectComponent {

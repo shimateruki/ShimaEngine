@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "engine/editor/assets/JsonAssetBrowser.h"
 
 #include "IEditable.h"
@@ -41,7 +42,7 @@ void PlayPreview();
 void DrawTimelinePreview();
 
     // 指定のVFXイベントの設定欄を描画する。
-    void DrawEventEditor(int index, VfxEvent& event);
+    void DrawEventEditor(std::int32_t index, VfxEvent& event);
 
     // プリセット候補の一覧を表示し、選択名を更新する。
     void DrawPresetCombo(const char* label, std::string& value, const std::vector<std::string>& list);
@@ -57,8 +58,8 @@ void DrawTimelinePreview();
     std::string fileStatus_;
     bool openRequested_ = false;
 
-    int selectedEvent_ = -1; // 選択イベント。-1は未選択。
-    int draggingEvent_ = -1;
+    std::int32_t selectedEvent_ = -1; // 選択イベント。-1は未選択。
+    std::int32_t draggingEvent_ = -1;
     float dragStartTime_ = 0.0f;
     float dragTimelineDuration_ = 3.0f; // ドラッグ開始時の表示時間範囲（秒）。
 
@@ -75,7 +76,7 @@ void DrawTimelinePreview();
     float previewRootScale_ = 1.0f;
     float previewPlaybackSpeed_ = 1.0f;
 
-    int lastStagePlayRequestSerial_ = 0; // 前回処理したプレビュー再生要求の番号。
-    int lastStageStopRequestSerial_ = 0; // 前回処理したプレビュー停止要求の番号。
-    int lastStageSeekRequestSerial_ = 0; // 前回処理したプレビューシーク要求の番号。
+    std::int32_t lastStagePlayRequestSerial_ = 0; // 前回処理したプレビュー再生要求の番号。
+    std::int32_t lastStageStopRequestSerial_ = 0; // 前回処理したプレビュー停止要求の番号。
+    std::int32_t lastStageSeekRequestSerial_ = 0; // 前回処理したプレビューシーク要求の番号。
 };

@@ -18,6 +18,12 @@
         "impactVfx": "Resources/json/effect/shared/effect_pink_slime_landing_burst_ring.json",
         "audioCue": ""
       }
+    },
+    {
+      "id": "player_pink_bounce_recovery",
+      "displayName": "コピー跳ね上がり突進・着地",
+      "playerMovement": {"enabled": true, "duration": 0.26, "groundSpeedScale": 0, "airSpeedScale": 1, "airResponse": 6},
+      "sequence": { "enabled": false, "binding": "player_special" }
     }
   ]
 }

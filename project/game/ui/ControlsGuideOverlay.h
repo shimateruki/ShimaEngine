@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "engine/utility/math/Math.h"
 #include "json.hpp"
@@ -73,15 +74,15 @@ class ControlsGuideOverlay : public IEditable {
     void RestoreReplayState(const nlohmann::json& state);
 
   private:
-    static constexpr int kPageCount = 2;
-    static constexpr int kActionCount = 3;
+    static constexpr std::int32_t kPageCount = 2;
+    static constexpr std::int32_t kActionCount = 3;
 
     // 元のレイアウト値を保持し、アニメーション時も JSON の配置に戻せます。
     struct Element {
         engine::Sprite* sprite = nullptr;
-        engine::Vector2 basePosition = engine::Vector2::ZERO;
-        engine::Vector2 baseSize = engine::Vector2::ZERO;
-        engine::Vector4 baseColor = engine::Colors::White;
+        engine::Vector2 basePosition = engine::Vector2::kZero;
+        engine::Vector2 baseSize = engine::Vector2::kZero;
+        engine::Vector4 baseColor = engine::colors::kWhite;
     };
 
     // 基本操作ページと能力ページで共通する Sprite 群です。
@@ -98,9 +99,9 @@ class ControlsGuideOverlay : public IEditable {
         Element visual;
         std::string slot;
         bool scroll = false;
-        int row = -1;
+        std::int32_t row = -1;
         engine::Vector2 textureSize = {1.0f, 1.0f};
-        engine::Vector2 textureOrigin = engine::Vector2::ZERO;
+        engine::Vector2 textureOrigin = engine::Vector2::kZero;
     };
 
     // 図鑑の内容更新と、スクロール位置に応じた配置を分けます。
@@ -135,14 +136,14 @@ class ControlsGuideOverlay : public IEditable {
     void SetAllVisible(bool visible);
 
     /// 指定ページの表示を切り替える。
-    void SetPageVisible(int pageIndex, bool visible);
+    void SetPageVisible(std::int32_t pageIndex, bool visible);
 
     /// ページ遷移中の水平位置を反映する。
-    void SetPageOffset(int pageIndex, float offsetX);
+    void SetPageOffset(std::int32_t pageIndex, float offsetX);
 
     /// <summary>現在のページから左右どちらかのページへの移動を開始します。</summary>
     /// <param name="direction">負で左、正で右へ移動します。</param>
-    void StartSlide(int direction);
+    void StartSlide(std::int32_t direction);
 
     /// ページ間スライドを進め、完了時に対象ページへ切り替える。
     void UpdateSlide(float deltaTime);
@@ -185,10 +186,10 @@ class ControlsGuideOverlay : public IEditable {
     bool suppressToggleInput_ = false;
 
     bool isSliding_ = false;
-    int currentPage_ = 1;
-    int outgoingPage_ = 0;
-    int incomingPage_ = 0;
-    int slideDirection_ = 1;
+    std::int32_t currentPage_ = 1;
+    std::int32_t outgoingPage_ = 0;
+    std::int32_t incomingPage_ = 0;
+    std::int32_t slideDirection_ = 1;
 
     float slideTimer_ = 0.0f;
     float slideDuration_ = 0.34f;
@@ -213,7 +214,7 @@ class ControlsGuideOverlay : public IEditable {
     std::string previewPosterPath_;
     uint32_t previewPosterHandle_ = 0;
     uint32_t previewDescriptionHandle_ = 0;
-    int previewMoveIndex_ = 0;
+    std::int32_t previewMoveIndex_ = 0;
     bool previewPlaybackEnabled_ = true;
 #ifdef USE_IMGUI
     std::array<char, 1024> previewVideoInput_{};
@@ -224,7 +225,7 @@ class ControlsGuideOverlay : public IEditable {
 
     bool bookEnabled_ = false;
     bool bookVisible_ = false;
-    int bookMoveCount_ = 0;
+    std::int32_t bookMoveCount_ = 0;
 
     float bookScroll_ = 0.0f;
     float bookTargetScroll_ = 0.0f;

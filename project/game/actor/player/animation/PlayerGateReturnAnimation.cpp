@@ -19,11 +19,12 @@ constexpr float kSecondBounceHeight = 0.22f;
 } // namespace
 
 void PlayerGateReturnAnimation::Start(Player* player, const Route& route) {
-    // 前の演出で無効にした接触を戻してから、新しい経路と操作状態を記録する。
+    // 対象が存在し、前の演出による衝突停止が残っていれば復元してから開始する。
     if (player && collisionSuspended_) {
         RestoreCollision(player);
     }
 
+    // 新しい経路の水平方向を単位化し、時計と保存する操作可否を初期化する。
     route_ = route;
     route_.direction = NormalizeDirection(route.direction);
     timer_ = 0.0f;
@@ -31,6 +32,7 @@ void PlayerGateReturnAnimation::Start(Player* player, const Route& route) {
     finished_ = false;
     savedControlActive_ = player ? player->IsControlActive() : true;
 
+    // 対象がいなければ、表示・入力・速度・当たり判定を変更できない。
     if (!player) {
         return;
     }
@@ -44,7 +46,9 @@ void PlayerGateReturnAnimation::Start(Player* player, const Route& route) {
     ApplyPose(player, 0.0f);
 }
 
+// 経過秒数から帰還の位置と姿勢を進める。自然終了時は終点と衝突を戻し、操作の復帰は呼出側の Stop() に任せる。
 void PlayerGateReturnAnimation::Update(Player* player, float deltaTime) {
+    // 演出中でないかプレイヤーがいなければ、時計と姿勢を進めない。
     if (!active_ || !player) {
         return;
     }
@@ -53,11 +57,12 @@ void PlayerGateReturnAnimation::Update(Player* player, float deltaTime) {
     const float normalizedTime = Clamp01(timer_ / kDuration);
     ApplyPose(player, normalizedTime);
 
+    // 2.25秒の経路を最後まで進んだら、演出を終了して終点の姿勢を確定する。
     if (normalizedTime >= 1.0f) {
         active_ = false;
         finished_ = true;
 
-        // 帰還先の選択 UI が操作を解放するため、自然終了では衝突だけ戻す。
+        // 終点の姿勢と衝突だけを戻す。選択シーンとゲーム本編の入口演出は、それぞれの終了時に操作を戻す。
         ApplyFinishedPose(player, false);
     }
 }
@@ -70,10 +75,11 @@ void PlayerGateReturnAnimation::Stop(Player* player, bool restoreControl) {
 }
 
 engine::Vector3 PlayerGateReturnAnimation::NormalizeDirection(const engine::Vector3& direction) const {
-    // 経路の向きは水平面に限定し、ゼロ入力には前方向を使う。
+    // 渡された方向から高さ成分を取り除く。
     engine::Vector3 flat{direction.x, 0.0f, direction.z};
     const float lengthSq = flat.x * flat.x + flat.z * flat.z;
 
+    // 水平成分が小さく単位化できない場合は、正のZを既定方向に使う。
     if (lengthSq <= 0.000001f) {
         return {0.0f, 0.0f, 1.0f};
     }
@@ -90,7 +96,7 @@ engine::Vector3 PlayerGateReturnAnimation::Lerp(const engine::Vector3& a, const 
 
 engine::Vector3 PlayerGateReturnAnimation::Bezier(const engine::Vector3& p0, const engine::Vector3& p1, const engine::Vector3& p2, const engine::Vector3& p3,
                                           float t) const {
-    // 四点の三次Bezierでゲートへの曲線経路を作る。
+    // 開始位置と最初の接地点の間に二つの制御点を置き、ゲートを出る曲線を求める。
     t = Clamp01(t);
     const float inv = 1.0f - t;
     const float b0 = inv * inv * inv;
@@ -116,7 +122,9 @@ float PlayerGateReturnAnimation::EaseInOutCubic(float value) const {
     return Easing::InOutCubic01(value);
 }
 
+// 帰還経路の進行率を0〜1で受け取り、その時刻のワールド位置と変形を適用します。
 void PlayerGateReturnAnimation::ApplyPose(Player* player, float normalizedTime) {
+    // 対象がいなければ、その時刻の位置や姿勢を書き込めない。
     if (!player) {
         return;
     }
@@ -132,7 +140,7 @@ void PlayerGateReturnAnimation::ApplyPose(Player* player, float normalizedTime) 
     float pitch = 0.0f;
     float roll = 0.0f;
 
-    // ゲートを抜けてから地面に届くまで、水平の曲線移動と鉛直の落下を別に求めます。
+    // 全体の42%まではゲートから最初の接地点へ向かい、水平の曲線と鉛直の動きを別々に求める。
     if (normalizedTime < kLandingPhaseEnd) {
         const float phaseT = Clamp01(normalizedTime / kLandingPhaseEnd);
         const float moveT = EaseOutCubic(phaseT);
@@ -143,9 +151,11 @@ void PlayerGateReturnAnimation::ApplyPose(Player* player, float normalizedTime) 
         const float groundY = route_.end.y;
         const float fallStartY = (std::max)({route_.start.y, route_.gateCenter.y, groundY + kLaunchHopHeight});
 
+        // 最初の接地までの区間のうち冒頭14%では、重力による落下を始めず出口の高さへつなぐ。
         if (phaseT < kGateExitNoGravityTime) {
             const float gateExitT = EaseOutCubic(Clamp01(phaseT / kGateExitNoGravityTime));
             position.y = route_.start.y + (fallStartY - route_.start.y) * gateExitT;
+        // ゲートを出た後は、最初の接地時刻に間に合う加速度で落下させる。
         } else {
             const float fallT = Clamp01((phaseT - kGateExitNoGravityTime) / (1.0f - kGateExitNoGravityTime));
             const float fallDuration =
@@ -154,15 +164,16 @@ void PlayerGateReturnAnimation::ApplyPose(Player* player, float normalizedTime) 
             const float fallHeight = (std::max)(fallStartY - groundY, 0.0f);
             const float landingGravity = (std::max)(kGravity, (fallHeight * 2.0f) / (fallDuration * fallDuration));
 
-            // ゲートを抜けた後は上向き初速を入れず、下向き重力だけで地面まで落とします。
-            // 接地後は地面に固定し、以降の跳ね演出が空中で始まらないようにします。
+            // 落下区間の上向き初速は0とし、下向きの変位だけを積む。
             position.y = fallStartY - 0.5f * landingGravity * fallTime * fallTime;
 
+            // 経路の地面を下回る場合は、その高さにそろえてめり込みを防ぐ。
             if (position.y < groundY) {
                 position.y = groundY;
             }
         }
 
+        // 出口での圧縮、空中の伸び、最初の着地でのつぶれを基準寸法へ重ねる。
         const float launchSquash = 1.0f - Clamp01(phaseT / 0.22f);
         const float airborneStretch = std::sin(phaseT * std::numbers::pi_v<float>);
         const float landingSquash = std::sin(Clamp01((phaseT - 0.78f) / 0.22f) * std::numbers::pi_v<float>);
@@ -171,7 +182,7 @@ void PlayerGateReturnAnimation::ApplyPose(Player* player, float normalizedTime) 
                  route_.baseScale.z * (1.0f + launchSquash * 0.24f - airborneStretch * 0.05f + landingSquash * 0.26f)};
         pitch = -route_.direction.z * std::sin(phaseT * std::numbers::pi_v<float>) * 0.18f;
         roll = route_.direction.x * std::sin(phaseT * std::numbers::pi_v<float>) * 0.16f;
-    // 最初の接地後は大きく弾み、終盤に縮めて次の接地を見せます。
+    // 全体の42%から72%までは、最初の接地から大きく弾ませ、次の接地で縮める。
     } else if (normalizedTime < kFirstBounceEnd) {
         const float phaseT = Clamp01((normalizedTime - kLandingPhaseEnd) / (kFirstBounceEnd - kLandingPhaseEnd));
         const float moveT = EaseInOutCubic(phaseT);
@@ -185,8 +196,8 @@ void PlayerGateReturnAnimation::ApplyPose(Player* player, float normalizedTime) 
                  route_.baseScale.z * (1.0f - stretch * 0.06f + landingSquash * 0.18f)};
         pitch = -route_.direction.z * std::sin(phaseT * std::numbers::pi_v<float>) * 0.12f;
         roll = route_.direction.x * std::sin(phaseT * std::numbers::pi_v<float>) * 0.10f;
+    // 全体の72%以降は小さく弾ませながら、終点と基準姿勢へ近づける。
     } else {
-        // 最後は小さく弾みながら終点に近づき、基準姿勢に戻します。
         const float phaseT = Clamp01((normalizedTime - kFirstBounceEnd) / (1.0f - kFirstBounceEnd));
         const float moveT = EaseInOutCubic(phaseT);
         position = Lerp(firstBounceEnd, route_.end, moveT);
@@ -218,7 +229,7 @@ void PlayerGateReturnAnimation::ApplyPose(Player* player, float normalizedTime) 
 }
 
 void PlayerGateReturnAnimation::ApplyFinishedPose(Player* player, bool restoreControl) {
-    // 演出中の傾きと移動を消し、経路の終点へ確定させる。
+    // プレイヤーが無ければ、演出中に変更した姿勢と衝突を復元できない。
     if (!player) {
         return;
     }
@@ -227,6 +238,7 @@ void PlayerGateReturnAnimation::ApplyFinishedPose(Player* player, bool restoreCo
     player->SetIsVisible(true);
     RestoreCollision(player);
 
+    // 操作を戻す指定がある場合だけ、演出前の操作可否を書き戻す。
     if (restoreControl) {
         player->SetIsControlActive(savedControlActive_);
     }
@@ -242,6 +254,7 @@ void PlayerGateReturnAnimation::ApplyFinishedPose(Player* player, bool restoreCo
 }
 
 void PlayerGateReturnAnimation::SuspendCollision(Player* player) {
+    // 対象がいないか、すでに衝突を止めている場合は保存値を更新しない。
     if (!player || collisionSuspended_) {
         return;
     }
@@ -256,11 +269,12 @@ void PlayerGateReturnAnimation::SuspendCollision(Player* player) {
 }
 
 void PlayerGateReturnAnimation::RestoreCollision(Player* player) {
-    // 開始前に保存した属性とマスクだけを戻す。
+    // 対象が存在して衝突を止めている場合だけ、開始前の属性とマスクを戻す。
     if (!player || !collisionSuspended_) {
         return;
     }
 
+    // 保存した属性とマスクを復元し、次回は再度保存できる状態にする。
     player->SetCollisionAttribute(savedCollisionAttribute_);
     player->SetCollisionMask(savedCollisionMask_);
     collisionSuspended_ = false;

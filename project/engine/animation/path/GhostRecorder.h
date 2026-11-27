@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <filesystem>
 #include "Object3D.h"
 #include "engine/utility/math/Math.h"
@@ -17,7 +18,7 @@ struct GhostFrame {
     engine::Vector3 position;
     engine::Vector3 rotation;
     engine::Vector3 scale = { 1.0f, 1.0f, 1.0f };
-    int eventId = 0; // 0はイベントなし。非0なら通過時に対象のOnRecordEventへ渡す。
+    std::int32_t eventId = 0; // 0はイベントなし。非0なら通過時に対象のOnRecordEventへ渡す。
 };
 
 
@@ -28,33 +29,33 @@ struct GhostFrame {
 class GhostRecorder : public IEditable {
 public:
     enum class State {
-        Idle,       // 待機中
-        Recording,  // 録画中
-        Playing     // 再生中
+        kIdle,       // 待機中
+        kRecording,  // 録画中
+        kPlaying     // 再生中
     };
 
     // 始終点と中継点から記録フレームを生成する設定。相対生成の基準と区間補間方式も保持する。
     // 関連：GhostRecorder（この型を使う機能の本体）
     struct GenerationParams {
-        engine::Vector3 startPos = engine::Vector3::ZERO;
-        engine::Vector3 startRot = engine::Vector3::ZERO;
+        engine::Vector3 startPos = engine::Vector3::kZero;
+        engine::Vector3 startRot = engine::Vector3::kZero;
         engine::Vector3 startScale = { 1.0f, 1.0f, 1.0f };
 
-        int startEventId = 0;
+        std::int32_t startEventId = 0;
         // 始点の姿勢のまま待機する秒数です。移動にかかる秒数には含めません。
         float startWaitTime = 0.0f;
         float startDurationToNext = 1.0f; // 始点から次点へ移動する秒数。
-        int startEasingToNext = 0;
+        std::int32_t startEasingToNext = 0;
 
-        engine::Vector3 endPos = engine::Vector3::ZERO;
-        engine::Vector3 endRot = engine::Vector3::ZERO;
+        engine::Vector3 endPos = engine::Vector3::kZero;
+        engine::Vector3 endRot = engine::Vector3::kZero;
         engine::Vector3 endScale = { 1.0f, 1.0f, 1.0f };
 
-        int endEventId = 0;
+        std::int32_t endEventId = 0;
         float endWaitTime = 0.0f;
 
-        engine::Vector3 anchorOffsetPos = engine::Vector3::ZERO;
-        engine::Vector3 anchorOffsetRot = engine::Vector3::ZERO;
+        engine::Vector3 anchorOffsetPos = engine::Vector3::kZero;
+        engine::Vector3 anchorOffsetRot = engine::Vector3::kZero;
 
         // 経路生成の中継点。waitTime はその点での待機秒、durationToNext は次点までの移動秒。
         // 関連：GhostRecorder（この型を使う機能の本体）
@@ -62,10 +63,10 @@ public:
             engine::Vector3 pos;
             engine::Vector3 rot;
             engine::Vector3 scale = { 1.0f, 1.0f, 1.0f };
-            int eventId = 0;
+            std::int32_t eventId = 0;
             float waitTime = 0.0f;
             float durationToNext = 1.0f; // 次の中継点へ移動する秒数。
-            int easingToNext = 0;
+            std::int32_t easingToNext = 0;
         };
 
         std::vector<Waypoint> waypoints;
@@ -127,13 +128,13 @@ public:
     // 読み込み成功時だけ再生フレームと経路設定を差し替える。
     bool LoadFile(const std::filesystem::path& path);
 
-    int GetTotalFrames() const { return static_cast<int>(frames_.size()); }
+    std::int32_t GetTotalFrames() const { return static_cast<std::int32_t>(frames_.size()); }
 
     /// <summary>60サンプルを1秒として、最初から最後のサンプルまでの秒数を返す。</summary>
     float GetDurationSeconds() const;
 
     // 指定サンプルの姿勢を対象に反映する。
-    void EvaluateAtFrame(int frameIndex);
+    void EvaluateAtFrame(std::int32_t frameIndex);
 
     /// <summary>指定時刻の姿勢を補間して適用する。時刻は記録範囲に丸める。</summary>
     /// <param name="dispatchEvents">trueならpreviousTimeSecondsからtimeSecondsまでに通過したイベントを通知する。</param>
@@ -153,11 +154,11 @@ public:
     void PerformRedo();
 
     // 現在選択しているピンのイベントIDを返す。
-    int GetCurrentEventId() const;
+    std::int32_t GetCurrentEventId() const;
     // 接地結果だけを受け取り、EngineからPlayer型へ依存しない。
     void SetPlayerRiding(bool riding) { playerRiding_ = riding; }
 
-    bool IsPinSelected() const { return selectedPinType_ != SelectedPinType::None; }
+    bool IsPinSelected() const { return selectedPinType_ != SelectedPinType::kNone; }
 
     // 選択中の経路ピンを削除する。
     void DeleteSelectedPin();
@@ -205,7 +206,7 @@ private:
     engine::Vector3 TransformCoord(const engine::Vector3& vec, const engine::Matrix4x4& mat);
 
     // 録画済みならフレームを補間し、未録画なら編集用ウェイポイントから見本を作る。
-    std::vector<GhostFrame> BuildPreviewSamples(int sampleCount);
+    std::vector<GhostFrame> BuildPreviewSamples(std::int32_t sampleCount);
 
     // 借用中の対象が現在のシーンに残っているか検査する。
     bool IsTargetInCurrentScene() const;
@@ -218,7 +219,7 @@ private:
     engine::Object3D* target_ = nullptr; // 記録・再生するObject。借用参照。
 
     std::vector<GhostFrame> frames_;
-    State state_ = State::Idle;
+    State state_ = State::kIdle;
 
     size_t currentFrameIndex_ = 0; // 現在評価中の記録サンプル番号。
     float playbackTimeSeconds_ = 0.0f; // 経路の再生位置（秒）。
@@ -236,12 +237,12 @@ private:
     GenerationParams genParams_;
     bool isShowPreview_ = true;
     bool isShowObjectPreview_ = true;
-    int objectPreviewSampleCount_ = 6;
+    std::int32_t objectPreviewSampleCount_ = 6;
     float objectPreviewAlpha_ = 0.24f;
 
     bool isOverrideCamera_ = false;
-    engine::Vector3 basePosition_ = engine::Vector3::ZERO;
-    engine::Vector3 baseRotation_ = engine::Vector3::ZERO;
+    engine::Vector3 basePosition_ = engine::Vector3::kZero;
+    engine::Vector3 baseRotation_ = engine::Vector3::kZero;
     engine::Vector3 baseScale_ = { 1.0f, 1.0f, 1.0f };
     bool isScrubbing_ = false; // Scrubbing中かどうかのフラグ
     engine::Object3D* anchor_ = nullptr;
@@ -251,19 +252,19 @@ private:
     void FindAnchor();
 
     enum class SelectedPinType {
-        None,
-        Start,
-        Waypoint,
-        End
+        kNone,
+        kStart,
+        kWaypoint,
+        kEnd
     };
 
-    SelectedPinType selectedPinType_ = SelectedPinType::None;
-    int selectedWaypointIndex_ = -1; // 選択中継点。-1は未選択。
+    SelectedPinType selectedPinType_ = SelectedPinType::kNone;
+    std::int32_t selectedWaypointIndex_ = -1; // 選択中継点。-1は未選択。
     std::optional<GenerationParams> pendingHistoryState_; // 確定待ちの経路編集履歴。
     GenerationParams uiEditStartState_; // 連続編集を開始した時点の経路設定。
     bool hasUiEditStart_ = false;
     bool historyRegisteredThisFrame_ = false;
     // Undo・Redoが借りる寿命の目印です。録画器の破棄後は履歴からこのインスタンスへ触れません。
-    std::shared_ptr<int> historyLifetime_ = std::make_shared<int>(0);
+    std::shared_ptr<std::int32_t> historyLifetime_ = std::make_shared<std::int32_t>(0);
     bool isDraggingGizmo_ = false;
 };

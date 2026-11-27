@@ -1,5 +1,6 @@
 #include "game/ui/PlayerHealthHud.h"
 #pragma once
+#include <cstdint>
 #include "LifeLostPresentationState.h"
 #include "BaseScene.h"
 #include "game/system/scene/SceneGameplayAccess.h"
@@ -14,13 +15,15 @@
 #include "game/ui/CopyStyleHud.h"
 #include <array>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-namespace GoalPresentationRuntimeProbe { struct Access; }
+namespace goalPresentationRuntimeProbe { struct Access; }
 
 // 前方宣言
-namespace engine { class DirectXCommon; }
+namespace engine { class SceneRenderCommands; }
+namespace engine { class SceneLighting; }
 namespace engine { class InputManager; }
 class SceneManager;
 class LevelLoader;
@@ -50,6 +53,10 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
   public:
     /// <summary>シーン固有リソースをInitializeで作るため、初期状態だけ用意する。</summary>
     GamePlayScene();
+#ifdef USE_IMGUI
+    // エンジン側の地点編集画面へ、ゲームの移動受付と既定地点を登録します。
+    static void RegisterDebugTeleportEditor();
+#endif
 
     /// <summary>所有リソースの解放はFinalizeに任せてシーンを破棄する。</summary>
     ~GamePlayScene() override;
@@ -66,7 +73,7 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     /// <summary>段階初期化の進捗を0から1の割合で返す。</summary>
     float GetLoadingInitializeProgress() const override;
 
-    /// <summary>シーンが表示対象になった時に入力・カメラなどを有効化する。</summary>
+    /// <summary>シーンが現在シーンに切り替わったら、共有ライト等の描画設定を再適用する。</summary>
     void OnActivated() override;
 
     /// <summary>ステージで使うScene Assetと依存リソースの先読み一覧を作る。</summary>
@@ -75,10 +82,10 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     /// <summary>ゲームプレイ中に所有した描画・演出リソースを終了処理する。</summary>
     void Finalize() override;
 
-    /// <summary>プレイヤー、敵、ギミックと進行中の演出を更新する。</summary>
+    /// <summary>経過秒を受け取り、優先度順に演出・ポーズを処理した後、通常プレイを更新する。</summary>
     void Update(float deltaTime) override;
 
-    /// <summary>ポーズや操作ガイドなど、ワールド更新と分けたUI入力を処理する。</summary>
+    /// <summary>経過秒に合わせて通常HUD、残機喪失、疾走線、セーブ通知の表示を進める。</summary>
     void UpdateUi(float deltaTime);
 
     /// <summary>ステージの3D描画パスを実行する。</summary>
@@ -101,16 +108,19 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     void StartBridgeDropMovie();
 
     /// <summary>ボスとゲートの登場演出を開始します。</summary>
-    /// <param name="bossObject">登場させるボスの描画物。</param>
+    /// <param name="bossObject">登場させるシーン所有のボスオブジェクト。</param>
     /// <param name="gateObject">登場演出に使うゲート。</param>
+    // タイムラインの準備と再生開始に成功した場合にtrueを返す。cinematicPathは登場演出素材のパス。
     bool StartArenaBossIntro(engine::Object3D* bossObject, engine::Object3D* gateObject, const std::string& cinematicPath);
 
     /// <summary>ボス登場タイムラインの再生中か返す。</summary>
     bool IsArenaBossIntroActive() const { return arenaBossIntroActive_; }
 
-    // 既存のムービープレビューも、実際に読み込んだ演出素材の尺と節目を使う。
+    // 撃破ムービーのシーケンスに正の尺があるときは再生器から秒数を取得し、なければ12秒を使う。
     float GetCrownDefeatDuration() const { return crownDefeatVfxSequence_.duration > 0 ? crownDefeatVfxPlayer_.GetDuration() : 12.0f; }
+    // 指定したシグナル名から、撃破演出の開始を基準とする発火時刻を返す。
     float GetCrownDefeatMarkerTime(const std::string& name) const;
+    // 王冠継承の調整値を取得し、有効なシーケンスがあれば節目を全尺に対する割合に換算する。
     CrownFinaleTuning GetCrownFinaleTiming() const;
 
     /// <summary>アリーナボス撃破後の報酬表示を開始する。実行できない状態では何もしない。</summary>
@@ -144,7 +154,13 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     /// <summary>王冠ムービープレビューが進行中か返す。</summary>
     bool IsCrownMoviePreviewActive() const { return crownMoviePreview_.active; }
 
-    // 結晶破壊の猶予が切れた後だけ、第二形態の全域槍を映像として見せます。
+    // 第二形態で結晶を召喚し、結晶から障壁へ力が流れる演出を開始する。centerはワールド位置。
+    bool StartSealRevealMovie(class EnemyFalseKingSlime* boss, const engine::Vector3& center);
+    // 封印演出を再生中で、その種類が結晶召喚の場合だけtrue。
+    bool IsSealRevealMovieActive() const { return sealBarrageMovie_.active && sealBarrageMovie_.reveal; }
+    // 召喚ムービー内の経過秒。演出外は詠唱の見た目を開始しないようゼロを返します。
+    float GetSealRevealMovieTime() const { return IsSealRevealMovieActive() ? sealBarrageMovie_.time : 0.0f; }
+    // 結晶破壊の猶予切れで槍雨の演出を開始する。strikeは攻撃のワールド基準位置。
     bool StartSealBarrageMovie(class EnemyFalseKingSlime* boss, const engine::Vector3& strike);
 
     // BaseSceneの所有コンテナ操作。所有権の契約は基底クラスと同じです。
@@ -196,7 +212,7 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     /// <summary>ステージの進行規則を管理するGameRuleへの非所有参照を返す。</summary>
     GameRule* GetGameRule() override { return gameRule_.get(); }
 
-    /// <summary>ゴール状態を設定する。演出開始はStartGoalPresentationで行う。</summary>
+    /// <summary>ゴール状態を切り替える。解除時は保存した姿勢・材質・操作・カメラを復元する。</summary>
     void SetIsGoal(bool isGoal);
 
     /// <summary>指定王冠を使ってステージクリア演出を開始する。</summary>
@@ -208,21 +224,23 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     /// <summary>プレイヤーとゴールの接触から、開始条件を満たす場合にゴール処理を始める。</summary>
     bool TryStartGoalFromContact(engine::Object3D* actor, engine::Object3D* goal) override;
 
-    /// <summary>接触で取得したスターコインを進行記録とHUD演出へ反映する。</summary>
-    void CollectStarCoinFromContact(int coinIndex, const engine::Vector3& worldPosition) override;
+    /// <summary>接触したスターコインの番号とワールド位置を収集処理に渡し、ログに記録する。</summary>
+    void CollectStarCoinFromContact(std::int32_t coinIndex, const engine::Vector3& worldPosition) override;
+    // 今回のリザルト用に、コインの取得が成立した接触だけを数える。
+    void RecordStageCoinPickup();
 
     /// <summary>番号で指定したスターコインの取得状態を更新する。</summary>
-    void CollectStarCoin(int coinIndex);
+    void CollectStarCoin(std::int32_t coinIndex);
 
     /// <summary>取得状態を更新し、ワールド位置からHUDへ移動する演出を始める。</summary>
-    void CollectStarCoin(int coinIndex, const engine::Vector3& worldPosition);
+    void CollectStarCoin(std::int32_t coinIndex, const engine::Vector3& worldPosition);
 
     /// <summary>減少前後の残機数を使って、ライフ減少演出を開始します。</summary>
     /// <param name="beforeLives">減少前の残機数。</param>
     /// <param name="afterLives">減少後の残機数。</param>
-    void StartLifeLostPresentation(int beforeLives, int afterLives);
+    void StartLifeLostPresentation(std::int32_t beforeLives, std::int32_t afterLives);
 
-    /// <summary>結晶破壊後の全域攻撃ムービーが進行中か返す。</summary>
+    /// <summary>結晶召喚または猶予切れの槍雨のムービー中ならtrue。</summary>
     bool IsSealBarrageMovieActive() const { return sealBarrageMovie_.active; }
 
     /// <summary>残機減少演出が終了したか返す。</summary>
@@ -233,35 +251,44 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
 
   private:
 #ifdef USE_IMGUI
-    friend struct GoalPresentationRuntimeProbe::Access;
+    friend struct goalPresentationRuntimeProbe::Access;
 #endif
     /// <summary>シーンが所有する可変Sprite配列を基底の編集処理へ渡す。</summary>
     std::vector<std::unique_ptr<engine::Sprite>>* GetMutableSprites() override { return &sprites_; }
 
-    enum class MovieState { None, BridgeDrop };
+    enum class MovieState { kNone, kBridgeDrop };
 
-    // 橋落下ムービーの種類・時刻と、復元するカメラ構図。
-    MovieState movieState_ = MovieState::None;
+    // 橋落下ムービーの種類・経過秒と、復元するカメラ構図。
+    MovieState movieState_ = MovieState::kNone;
     float movieTimer_ = 0.0f;
     engine::Vector3 movieStartCameraEye_;
     engine::Vector3 movieStartCameraTarget_;
     bool hasBridgeDropped_ = false;
 
   private:
+    /// <summary>深度を参照する特殊材質とGPU粒子を描き、背景色をコピーした場合はtrueを返す。</summary>
+    bool DrawDepthReadingEffects(engine::SceneRenderCommands& commands,
+                                 const std::vector<std::unique_ptr<engine::Object3D>>& objects,
+                                 const engine::Camera& camera, bool isFirstPerson);
+
+    /// <summary>深度参照区間を閉じた後に付属エフェクトを描画し、先にコピーした背景色を再利用する。</summary>
+    void DrawAttachedMeshEffects(engine::SceneRenderCommands& commands,
+                                 const std::vector<std::unique_ptr<engine::Object3D>>& objects, bool sceneColorCopied,
+                                 const engine::SceneLighting& lighting);
+
     // Game/Frameworkが所有する描画・入力基盤を借用する。
-    engine::DirectXCommon* dxCommon_ = nullptr;
     engine::InputManager* inputManager_ = nullptr;
 
     // ステージ配置、ロックオン、Object一覧の管理器をシーンが所有する。
-    std::unique_ptr<LevelLoader> levelLoader_ = nullptr;
-    std::unique_ptr<LockOnSystem> lockOnSystem_ = nullptr;
-    std::unique_ptr<ObjectManager> objectManager_ = nullptr;
+    std::unique_ptr<LevelLoader> levelLoader_;
+    std::unique_ptr<LockOnSystem> lockOnSystem_;
+    std::unique_ptr<ObjectManager> objectManager_;
 
     // シーン内で使用するSpriteを所有する一覧。各Overlay固有のSpriteは含めない。
     std::vector<std::unique_ptr<engine::Sprite>> sprites_;
 
     // CPU粒子の発生と更新を担当する実行インスタンス。
-    std::unique_ptr<engine::ParticleSystem> particleSystem_ = nullptr;
+    std::unique_ptr<engine::ParticleSystem> particleSystem_;
 
     // デバッグ文字表示と、ゲームルール・シーン制御の実行単位。
     std::unique_ptr<Text> debugText_;
@@ -293,11 +320,11 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
         // 演出中に差し替える前のプレイヤー表示設定。
         std::string playerModel;
         engine::Vector4 playerColor{};
-        int playerMaterial = 25;
+        std::int32_t playerMaterial = 25;
         bool landed = false;
         float playerYaw = 0.0f;
 
-        // 再生器の秒数を参照する。ゲーム側では独自に加算しない。
+        // 演出経過秒は再生器の時計を借り、durationは全尺の秒数、fovはラジアン。
         engine::TimerView time;
         float duration = 9.0f;
         float fov = 0.45f;
@@ -319,7 +346,7 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
 
         std::string bossModel;
 
-        // 既存ボスは借用し、生成した破片・光・翼などの演出Objectだけを所有する。
+        // ボスとシーンへ追加した演出オブジェクトを借用し、終了時の復元・削除に使う。
         class EnemyFalseKingSlime* boss = nullptr;
         std::vector<CrownFinaleObjectPose> originalObjects;
         std::vector<CrownFinaleObjectPose> fractureChunks;
@@ -353,7 +380,7 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     void ResetCrownDefeat();
 
     /// <summary>このフレームの共有ライトを借り、撃破ムービーのワールド演出を描画する。</summary>
-    void DrawCrownDefeatWorld(ID3D12Resource* pointLightResource, ID3D12Resource* spotLightResource);
+    void DrawCrownDefeatWorld(const engine::SceneLighting& lighting);
 
     // 王冠演出プレビューの一時カメラを所有し、元の Player・カメラ・表示対象は復元用に借用する。
     struct CrownMoviePreviewState {
@@ -365,14 +392,16 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
         std::vector<engine::Object3D*> hiddenObjects;
         std::vector<engine::Object3D*> objects;
         engine::Vector3 eye{}, target{}, rotation{};
-        engine::Camera::FollowMode followMode = engine::Camera::FollowMode::Aimable;
+        engine::Camera::FollowMode followMode = engine::Camera::FollowMode::kAimable;
         engine::Object3D* follow = nullptr;
         float fov = 0.45f;
     } crownMoviePreview_;
 
-    // 封印失敗演出の時計と、終了時に復元する操作権・視点・追従対象。
+    // 結晶召喚・猶予切れ演出の時計と、終了時に戻す操作権・カメラ構図・追従対象。
     struct SealBarrageMovieState {
         bool active = false;
+        bool reveal = false; // 結晶召喚カット。false は時間切れの槍雨。
+        std::unique_ptr<engine::Object3D> shieldDemoShot; // 障壁で弾かれる描画専用の弾。
         bool hadControl = true;
 
         float time = 0.0f;
@@ -389,52 +418,51 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
 
         engine::Object3D* follow = nullptr;
         engine::Object3D* lockOn = nullptr;
-        engine::Camera::FollowMode followMode = engine::Camera::FollowMode::Aimable;
+        engine::Camera::FollowMode followMode = engine::Camera::FollowMode::kAimable;
     } sealBarrageMovie_;
 
-    /// <summary>結晶破壊の猶予切れ後に再生する全域攻撃ムービーを進める。</summary>
+    /// <summary>演出の種類に応じて、結晶召喚カットか槍雨の経過を秒単位で進める。</summary>
     void UpdateSealBarrageMovie(float deltaTime);
 
-    /// <summary>全域攻撃ムービーを終了し、保持した状態を片付ける。</summary>
+    /// <summary>結晶召喚または槍雨の終了時に操作権・カメラ・一時生成物を整理する。</summary>
     void FinishSealBarrageMovie();
 
     // 王冠最終演出の各段階で差し替える画面メッセージ。
     std::array<std::unique_ptr<engine::Sprite>, 6> crownFinaleMessages_;
 
-    // 最終演出で一時的に変更したワールドの状態は Finish で復元します。
-    /// <summary>王冠の結晶防衛と最終演出の進行を更新する。</summary>
+    /// <summary>王冠継承演出を進める。成功・中断時はFinishCrownFinale()へ処理を渡す。</summary>
     // seekSeconds指定時はイベントを発火せず指定秒を再現する。
     void UpdateCrownFinale(float deltaTime, std::optional<float> seekSeconds = std::nullopt);
-    // 共通再生器が決めた時刻で、能力・材質・床などゲーム固有の状態を先に準備する。
+    // 再生器が決めた秒数に合わせて能力・材質・床の状態を準備し、演出を続けられる場合はtrue。
     bool PrepareCrownFinaleFrame(float previousTime, float timeSeconds, float deltaTime);
 
     /// <summary>最終演出の成否を確定し、次の進行状態へ移す。</summary>
     void FinishCrownFinale(bool completed);
 
-    /// <summary>最終演出で変更したオブジェクトの姿勢と表示状態を戻します。</summary>
-    /// <summary>最終演出で変えたワールドObjectの姿勢と表示状態を復元する。</summary>
+    /// <summary>Object走査後に要求を取り出し、まだシーンに存在する生存ボスに対してだけ継承演出を始める。</summary>
     void StartPendingCrownFinale();
+    // 未処理の要求を消し、準備済みの演出があれば生成物とワールド状態を片付ける。
     void ResetCrownFinaleWorld();
 
     /// <summary>このフレームの共有ライトを借り、最終演出の3Dオブジェクトを描画する。</summary>
-    void DrawCrownFinaleWorld(ID3D12Resource* pointLightResource, ID3D12Resource* spotLightResource);
+    void DrawCrownFinaleWorld(const engine::SceneLighting& lighting);
 
     /// <summary>最終演出中の画面UIを描画する。</summary>
     void DrawCrownFinaleUi();
 
 #ifdef USE_IMGUI
 
-    enum class DebugTeleportDestination {
-        None,
-        PrismArena,
-        GoalApproach,
+    struct DebugTeleportRequest {
+        engine::Vector3 position;
+        float yawRadians;
+        std::string label;
     };
 
     // 能力呼び出しに必要な実敵インスタンスを、デバッグ変身中だけ所有します。
     std::unique_ptr<BaseEnemy> debugPlayerMorphSource_;
 
     // ImGui描画中にゲーム状態を直接変更せず、次の更新開始時に安全に処理します。
-    DebugTeleportDestination pendingDebugTeleportDestination_ = DebugTeleportDestination::None;
+    std::optional<DebugTeleportRequest> pendingDebugTeleport_;
 #endif
 
     // BGMの二重再生防止と、粒子演出時に鳴らすSEの登録ハンドル。
@@ -446,9 +474,10 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     // 疾走線は中央から外へ伸ばす二枚を交互に表示し、継ぎ目を隠す。
     std::array<std::unique_ptr<engine::Sprite>, 2> dashSpeedLineSprites_;
     float dashSpeedLinePhase_ = 0.0f; // 0〜1の流れ位置。
-    float dashSpeedLineAlpha_ = 0.0f; // 現在の合計不透明度。
-    float dashSpeedLineMaxAlpha_ = 0.72f; // 最高速での合計不透明度。
+    float dashSpeedLineAlpha_ = 0.0f; // 2枚への配分前の不透明度。
+    float dashSpeedLineMaxAlpha_ = 0.72f; // 加速線が最も濃いときの配分前不透明度。
     float dashSpeedLineScale_ = 1.0f; // 画面サイズに対する倍率。
+    // 加速パネルによる水平速度から疾走線の強さを更新する。deltaTimeは秒。
     void UpdateDashSpeedLines(float deltaTime);
 
     std::unique_ptr<engine::Sprite> lockOnSprite_;
@@ -462,6 +491,7 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     std::unique_ptr<engine::Object3D> animatedCube_;
 
     /// <summary>ゴール時の王冠・カメラ・結果UIの演出パラメータをまとめる。</summary>
+    // 演出の時刻は秒、視点と王冠の距離はワールド単位、FOVはラジアンで保持する。
     struct GoalPresentationTuning {
         float crownFocusEndTime = 0.72f;
         float crownMoveStartTime = 0.98f;
@@ -471,46 +501,44 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
         float crownWearWidthRatio = 0.78f;
         float cameraSafeMargin = 0.10f;
 
-        float crownFocusDistance = 5.80f;
-        float crownFocusSide = 1.25f;
-        float crownFocusHeight = 1.25f;
 
-        float landingCameraDistance = 7.60f;
-        float landingCameraSide = 1.60f;
-        float landingCameraHeight = 1.90f;
 
-        float jumpCameraDistance = 8.20f;
-        float jumpCameraSide = 1.85f;
-        float jumpCameraHeight = 2.35f;
 
         float resultCameraDistance = 8.60f;
-        float resultCameraSide = 1.55f;
         float resultCameraHeight = 1.85f;
         float resultTargetSide = 0.55f;
 
-        float crownFocusFov = 0.46f;
-        float landingFov = 0.54f;
-        float jumpFov = 0.61f;
         float resultFov = 0.54f;
 
-        float resultUiCenterX = 0.50f;
-        float resultUiCenterY = 0.24f;
+        // リザルト配置を解像度に合わせるため、中心位置は画面幅と高さに対する割合で指定する。
+        float resultUiCenterX = 0.735f;
+        float resultUiCenterY = 0.20f; // 見出しのY座標を画面高に対する割合で指定。
+        float resultPanelTop = 0.40f; // 獲得枠の上端を画面高に対する割合で指定。
         float resultUiScale = 1.00f;
 
         float resultBackdropAlpha = 1.00f;
         float resultGlowAlpha = 0.72f;
 
+        // 見出しの文字ごとの時間差と落下時間は秒、移動量は設計座標のピクセル。
         float resultLetterStagger = 0.085f;
         float resultLetterFallDuration = 0.34f;
         float resultLetterDropHeight = 260.0f;
         float resultLetterBounceHeight = 48.0f;
         float resultLetterBounceDamping = 2.90f;
         float resultLetterBounceFrequency = 9.80f;
+        float resultCoinCountDuration = 0.65f; // 獲得コインを数え上げる秒数。
     };
 
     // ゴール成立と保存の重複防止、入場前のクリア状態を保持する。
     bool isGoal_ = false;
     bool goalSavePerformed_ = false;
+    std::int32_t stageCoinPickups_ = 0; // このステージに入ってから取得した通常コインの枚数。
+    double stageElapsedSeconds_ = 0.0; // 操作可能なフレームで加算した、この挑戦の秒数。
+    std::int32_t goalResultClearSeconds_ = 0; // ゴール成立時に表示用として確定した秒数。
+    std::int32_t goalResultCoins_ = 0; // クリア時に確定した今回の取得枚数。
+    enum class GoalResultStar { kEmpty, kOwned, kNew };
+    std::array<GoalResultStar, 3> goalResultStars_{};
+    bool goalResultRevealed_ = false; // 決定入力で結果の表示を最後まで進めたか。
     bool goalWasStageCleared_ = false;
 
     // 今回のステージ滞在中に取得したスターコインをスロット別に記録する。
@@ -526,7 +554,7 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     bool stageEntryHadPlayerControl_ = true;
     bool stageEntryCinemaBarOverrideActive_ = false;
 
-    // 演出時刻、開始待ちの再試行時刻、変更前のシネマバー高さ。
+    // 演出と再試行の経過時間は秒。黒帯の基準値を終了時の復元に使う。
     float stageEntryPresentationTimer_ = 0.0f;
     float stageEntryPresentationRetryTimer_ = 0.0f;
     float stageEntryCinemaBarBaseHeight_ = 0.0f;
@@ -534,12 +562,12 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     // 入場ゲートはシーン内Objectを借用し、位置とカメラ構図だけ保存する。
     engine::Object3D* stageEntryGate_ = nullptr;
     engine::Vector3 stageEntryDirection_ = {1.0f, 0.0f, 0.0f};
-    engine::Vector3 stageEntryCameraStartEye_ = engine::Vector3::ZERO;
-    engine::Vector3 stageEntryCameraStartTarget_ = engine::Vector3::ZERO;
-    engine::Vector3 stageEntryCameraFocusEye_ = engine::Vector3::ZERO;
-    engine::Vector3 stageEntryCameraFocusTarget_ = engine::Vector3::ZERO;
-    engine::Vector3 stageEntryCameraRestoreEye_ = engine::Vector3::ZERO;
-    engine::Vector3 stageEntryCameraRestoreTarget_ = engine::Vector3::ZERO;
+    engine::Vector3 stageEntryCameraStartEye_ = engine::Vector3::kZero;
+    engine::Vector3 stageEntryCameraStartTarget_ = engine::Vector3::kZero;
+    engine::Vector3 stageEntryCameraFocusEye_ = engine::Vector3::kZero;
+    engine::Vector3 stageEntryCameraFocusTarget_ = engine::Vector3::kZero;
+    engine::Vector3 stageEntryCameraRestoreEye_ = engine::Vector3::kZero;
+    engine::Vector3 stageEntryCameraRestoreTarget_ = engine::Vector3::kZero;
     float stageEntryCameraBaseFov_ = 0.45f;
     float stageEntryCameraFocusFov_ = 0.45f;
 
@@ -566,8 +594,8 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     engine::Object3D* arenaBossIntroBoss_ = nullptr;
     engine::Object3D* arenaBossIntroGate_ = nullptr;
 
-    engine::Vector3 arenaBossIntroRestoreEye_ = engine::Vector3::ZERO;
-    engine::Vector3 arenaBossIntroRestoreTarget_ = engine::Vector3::ZERO;
+    engine::Vector3 arenaBossIntroRestoreEye_ = engine::Vector3::kZero;
+    engine::Vector3 arenaBossIntroRestoreTarget_ = engine::Vector3::kZero;
 
     // --- ステージ3 ボス撃破・王冠落下演出 ---
     // 報酬Objectは借用し、演出中の視点と終了時の復元位置を保持する。
@@ -581,15 +609,15 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     CinematicSequence arenaBossRewardSequence_;
     CinematicPlayer arenaBossRewardPlayer_;
     engine::Object3D* arenaBossRewardObject_ = nullptr;
-    engine::Vector3 arenaBossRewardGameplayEye_ = engine::Vector3::ZERO;
-    engine::Vector3 arenaBossRewardGameplayTarget_ = engine::Vector3::ZERO;
+    engine::Vector3 arenaBossRewardGameplayEye_ = engine::Vector3::kZero;
+    engine::Vector3 arenaBossRewardGameplayTarget_ = engine::Vector3::kZero;
 
-    enum class GoalPresentationState { Inactive, Celebrating, ReadyToReturn, Returning };
+    enum class GoalPresentationState { kInactive, kCelebrating, kReadyToReturn, kReturning };
 
     // ゴール後の入力受付と選択画面への復帰を切り替える段階。
-    GoalPresentationState goalPresentationState_ = GoalPresentationState::Inactive;
+    GoalPresentationState goalPresentationState_ = GoalPresentationState::kInactive;
 
-    // 再生中は演出時刻へ同期し、終了後もUI点滅と自動帰還まで進める秒時計。
+    // 再生中は演出時刻へ同期し、終了後もリザルトの表示を進める秒時計。
     engine::Timer goalPresentationTimer_;
 
     // 星・画面演出の発生間隔と、待機中の王冠演出を管理する。
@@ -600,14 +628,14 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     size_t goalCrownSparklePatternIndex_ = 0;
 
     // 演出開始前のプレイヤー・王冠の姿勢を保持し、終了時に復元する。
-    engine::Vector3 goalCrownPosition_ = engine::Vector3::ZERO;
-    engine::Vector3 goalPlayerBasePosition_ = engine::Vector3::ZERO;
+    engine::Vector3 goalCrownPosition_ = engine::Vector3::kZero;
+    engine::Vector3 goalPlayerBasePosition_ = engine::Vector3::kZero;
     engine::Vector3 goalPlayerBaseScale_ = {1.0f, 1.0f, 1.0f};
-    engine::Vector3 goalPlayerBaseRotation_ = engine::Vector3::ZERO;
-    engine::Vector3 goalPlayerPosePosition_ = engine::Vector3::ZERO;
+    engine::Vector3 goalPlayerBaseRotation_ = engine::Vector3::kZero;
+    engine::Vector3 goalPlayerPosePosition_ = engine::Vector3::kZero;
     engine::Vector3 goalMoveForward_ = {0.0f, 0.0f, 1.0f};
     engine::Vector3 goalMoveRight_ = {1.0f, 0.0f, 0.0f};
-    engine::Vector3 goalCrownBasePosition_ = engine::Vector3::ZERO;
+    engine::Vector3 goalCrownBasePosition_ = engine::Vector3::kZero;
     // 配置時の姿と装着後の寸法を分離し、親付きの王冠もワールド空間で運ぶ。
     engine::Vector3 goalCrownStartWorldPosition_{};
     engine::Vector3 goalCrownWearScale_ = {1.0f, 1.0f, 1.0f};
@@ -615,21 +643,17 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     bool goalCrownBaseEnvMap_ = false;
     float goalCrownBaseEnvIntensity_ = 1.0f, goalCrownBaseRoughness_ = 0.3f;
     engine::Vector3 goalCrownBaseScale_ = {1.0f, 1.0f, 1.0f};
-    engine::Vector3 goalCrownBaseRotation_ = engine::Vector3::ZERO;
+    engine::Vector3 goalCrownBaseRotation_ = engine::Vector3::kZero;
 
 
     // 通常・王冠注視・着地・ジャンプ・結果表示の各カメラ構図。
-    engine::Vector3 goalCameraGameplayEye_ = engine::Vector3::ZERO;
-    engine::Vector3 goalCameraGameplayTarget_ = engine::Vector3::ZERO;
-    engine::Vector3 goalCameraFocusEye_ = engine::Vector3::ZERO;
-    engine::Vector3 goalCameraFocusTarget_ = engine::Vector3::ZERO;
-    engine::Vector3 goalCameraLandingEye_ = engine::Vector3::ZERO;
-    engine::Vector3 goalCameraLandingTarget_ = engine::Vector3::ZERO;
-    engine::Vector3 goalCameraJumpEye_ = engine::Vector3::ZERO;
-    engine::Vector3 goalCameraJumpTarget_ = engine::Vector3::ZERO;
-    engine::Vector3 goalCameraResultEye_ = engine::Vector3::ZERO;
-    engine::Vector3 goalCameraResultTarget_ = engine::Vector3::ZERO;
+    engine::Vector3 goalCameraGameplayEye_ = engine::Vector3::kZero;
+    engine::Vector3 goalCameraGameplayTarget_ = engine::Vector3::kZero;
     float goalCameraGameplayFov_ = 0.45f;
+    static constexpr const char* kFalseKingRewardName = "Stage3_HighCrown_VictoryCrown";
+    // 通常ゴールで受け取った報酬にだけ、専用アイコンを表示する。
+    bool HasFalseKingGoalReward() const;
+    float goalDefeatResultBars_ = 0.0f; // ステージ3で勝利カットから引き継いだ黒帯の高さ。
 
     // 復元に必要なスナップショットの有効性と、一度だけ鳴らす演出の実行状態。
     bool goalSavedPlayerControlActive_ = true;
@@ -654,17 +678,30 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     bool goalCinematicTimelineLoaded_ = false;
     GoalPresentationTuning goalPresentationTuning_;
     std::unique_ptr<engine::Camera> goalPresentationCamera_;
-    std::unique_ptr<engine::Sprite> goalOverlayFlash_;
-    std::unique_ptr<engine::Sprite> goalOverlayReturnText_;
-    std::array<std::unique_ptr<engine::Sprite>, 10> goalOverlayStageClearLetters_;
-    std::array<std::unique_ptr<engine::Sprite>, 10> goalOverlaySparkles_;
+    std::unique_ptr<engine::Sprite> goalOverlayLandingRipple_;
+    std::unique_ptr<engine::Sprite> goalOverlayReturnPrompt_; // 帰還先のラベルと帯を焼き込んだ画像。
+    std::unique_ptr<engine::Sprite> goalOverlayReturnGlyph_; // 現在の入力デバイスと割当に対応する決定キー。
+    std::unique_ptr<engine::Sprite> goalOverlayResultPanel_;
+    std::unique_ptr<engine::Sprite> goalOverlayFalseKingCrown_;
+    std::unique_ptr<engine::Sprite> goalOverlayClearTimeLabel_;
+    std::array<std::unique_ptr<engine::Sprite>, 8> goalOverlayClearTimeGlyphs_;
+    std::array<std::unique_ptr<engine::Sprite>, 3> goalOverlayCoinTrails_;
+    std::unique_ptr<engine::Sprite> goalOverlayCoinMultiplier_;
+    std::array<std::unique_ptr<engine::Sprite>, 3> goalOverlayNewStars_;
+    std::array<std::unique_ptr<engine::Sprite>, 3> goalOverlayRewardStars_;
+    std::unique_ptr<engine::Sprite> goalOverlayRewardCoin_;
+    std::array<std::unique_ptr<engine::Sprite>, 10> goalOverlayRewardDigits_;
+    std::uint32_t goalRewardFilledStarTexture_ = 0;
+    std::uint32_t goalRewardEmptyStarTexture_ = 0;
+    std::array<std::unique_ptr<engine::Sprite>, 7> goalOverlayStageClearLetters_;
+    std::array<std::unique_ptr<engine::Sprite>, 7> goalOverlaySparkles_;
 
     // HUD の基準値。演出で拡縮しても戻せるよう保存する。
     struct HudSpriteState {
         engine::Sprite* sprite = nullptr;
-        engine::Vector2 basePosition = engine::Vector2::ZERO;
-        engine::Vector2 baseSize = engine::Vector2::ZERO;
-        engine::Vector4 baseColor = engine::Colors::White;
+        engine::Vector2 basePosition = engine::Vector2::kZero;
+        engine::Vector2 baseSize = engine::Vector2::kZero;
+        engine::Vector4 baseColor = engine::colors::kWhite;
     };
 
     // --- プレイ中 HUD ---
@@ -684,58 +721,59 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
 
     std::array<HudSpriteState, 3> hudStageStarSlots_;
 
-    // スターコイン3枠それぞれの取得点滅時刻と、演出済みかどうか。
+    // 脈動の残り秒数と、HUDの枠が取得済み画像へ切り替わったかを別に保持する。
     std::array<float, 3> hudStageStarPulseTimers_ = {0.0f, 0.0f, 0.0f};
     std::array<bool, 3> hudStageStarVisualCollected_ = {false, false, false};
 
-    // スターコイン取得時、ワールド位置から HUD へ飛んでいく粒子
+    // スターコイン取得地点の画面座標から、HUDの枠または火花の終点へ飛ぶ粒子。
     struct StageStarUiFlyParticle {
         std::unique_ptr<engine::Sprite> sprite;
-        engine::Vector2 start = engine::Vector2::ZERO;
-        engine::Vector2 control = engine::Vector2::ZERO;
-        engine::Vector2 end = engine::Vector2::ZERO;
+        engine::Vector2 start = engine::Vector2::kZero;
+        engine::Vector2 control = engine::Vector2::kZero;
+        engine::Vector2 end = engine::Vector2::kZero;
+        // 経過と寿命は秒。回転速度はラジアン毎秒。
         float timer = 0.0f;
         float duration = 0.6f;
         float baseSize = 20.0f;
         float rotationSpeed = 0.0f;
-        int starIndex = -1;
+        // 0～2は対応する取得枠。-1は枠を埋めない火花。
+        std::int32_t starIndex = -1;
         bool fillsSlot = false;
     };
 
     std::vector<StageStarUiFlyParticle> hudStageStarFlyParticles_;
 
-    // 数値変化の強調、遅延HPゲージ、コピーゲージ表示のための時計と前回値。
+    // 残機・コインの増減を前回値から検出し、表示を強調するための残り秒数を保持する。
     float hudLifeGainPulseTimer_ = 0.0f;
     float hudCoinPulseTimer_ = 0.0f;
 
-    int hudPreviousLives_ = 0;
-    int hudPreviousCoins_ = 0;
+    std::int32_t hudPreviousLives_ = 0;
+    std::int32_t hudPreviousCoins_ = 0;
 
 
     // --- ボス／中ボス共通 HUD ---
     enum class PrismBossHudPhase {
-        Hidden,
-        Introducing,
-        Active,
-        Dismissing,
+        kHidden,
+        kIntroducing,
+        kActive,
+        kDismissing,
     };
 
     enum class BossHudTheme {
-        Prism,
-        Magma,
-        FalseKing,
+        kPrism,
+        kMagma,
+        kFalseKing,
     };
 
     // 今フレームの表示値。敵への参照は保持しない。
     struct BossHudDisplay {
-        BossHudTheme theme = BossHudTheme::Prism;
+        BossHudTheme theme = BossHudTheme::kPrism;
         bool visible = false;
         float maximumHp = 1.0f;
         float currentHp = 0.0f;
         float appearanceProgress = 1.0f;
-        int falseKingPhase = 1;
+        std::int32_t falseKingPhase = 1;
         float falseKingPhaseTransition = 1.0f;
-        float sealCastRemaining = 0.0f; // 封印詠唱の残り秒数。
     };
 
     // ボスHUDの各Spriteは配置Spriteを借用し、テーマごとに画像と色を変える。
@@ -758,11 +796,9 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     std::array<HudSpriteState, 3> falseKingBossHudPhaseCrowns_;
     std::array<HudSpriteState, 2> falseKingBossHudPhaseDividers_;
 
-    HudSpriteState falseKingCastTrack_;
-    HudSpriteState falseKingCastFill_;
 
     // 表示・退場の段階、実HPとの差分表示、被弾点滅の進行状態。
-    PrismBossHudPhase prismBossHudPhase_ = PrismBossHudPhase::Hidden;
+    PrismBossHudPhase prismBossHudPhase_ = PrismBossHudPhase::kHidden;
     float prismBossHudTimer_ = 0.0f;
     float prismBossHudDisplayedRate_ = 0.0f; // すぐに追従するHP表示率（0〜1）。
     float prismBossHudDelayedRate_ = 0.0f; // ダメージ後に遅れて減るHP表示率（0〜1）。
@@ -770,8 +806,8 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     float prismBossHudDamagePulseTimer_ = 0.0f;
     float prismBossHudDamageHoldTimer_ = 0.0f;
     float prismBossHudAnimationTimer_ = 0.0f;
-    BossHudTheme prismBossHudTheme_ = BossHudTheme::Prism;
-    int falseKingBossHudPreviousPhase_ = 1;
+    BossHudTheme prismBossHudTheme_ = BossHudTheme::kPrism;
+    std::int32_t falseKingBossHudPreviousPhase_ = 1;
     float falseKingBossHudPhasePulseTimer_ = 0.0f;
 
     // --- ライフ減少演出 ---
@@ -807,8 +843,7 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     /// <param name="currentStage">読み込むステージの設定。</param>
     void InitializeCoreSystems(const StageData& currentStage);
 
-    /// <summary>段階初期化で2D・3D・粒子の描画共通基盤を用意する。</summary>
-    /// <returns>描画基盤の準備が完了した段階でtrue。</returns>
+    /// <summary>準備済みの描画基盤を借りてCPU粒子とGameRuleを作り、LightEditorへ3D基盤を渡す。</summary>
     void InitializeSceneParticles();
 
     /// <summary>ObjectManagerとステージObjectの実行基盤を用意する。</summary>
@@ -842,7 +877,6 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     /// <summary>ゴール王冠の待機中の動きを進める。</summary>
     void UpdateGoalCrownIdleAnimation(float deltaTime);
 
-    // 保存されたチェックポイントからの復帰、またはステージ入場を開始します。
     /// <summary>復帰演出が必要なときだけ開始します。</summary>
     /// <returns>復帰演出を開始した場合は true。</returns>
     bool StartRespawnIrisInIfNeeded();
@@ -886,26 +920,17 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     /// <summary>Editorで適用したプレイヤーの能力状態を解除する。</summary>
     void ClearDebugPlayerMorph();
 
-    /// <summary>フレーム更新の開始時に実行するデバッグ移動先を予約します。</summary>
-    /// <param name="destination">予約する移動先。</param>
-    void QueueDebugTeleport(DebugTeleportDestination destination);
-
-    /// <summary>予約済みのデバッグ移動をゲーム更新の開始時に実行する。</summary>
+    // 次のゲーム更新で位置と水平向き（ラジアン）を適用します。
+    bool QueueDebugTeleport(DebugTeleportRequest request);
     void ProcessPendingDebugTeleport();
-
-    /// <summary>名前でデバッグ移動先のObjectを探す。</summary>
     engine::Object3D* FindDebugObjectByName(const char* objectName) const;
 
-    /// <summary>アンカーを基準にプレイヤーを移動し、指定オブジェクトへ向けます。</summary>
-    /// <param name="anchorName">移動基準となるオブジェクト名。</param>
-    /// <param name="anchorOffset">基準位置からの移動量。</param>
-    /// <param name="facingObjectName">向きの基準となるオブジェクト名。</param>
-    /// <param name="destinationLabel">デバッグ表示に使う移動先名。</param>
-    bool TeleportPlayerToDebugTarget(const char* anchorName, const engine::Vector3& anchorOffset, const char* facingObjectName,
-                                     const char* destinationLabel);
+    // 従来の固定ボタンと同じ基準をEditorの初期地点に変換します。
+    std::optional<DebugTeleportRequest> ResolveDebugTeleportTarget(const char* anchorName, const engine::Vector3& anchorOffset,
+                                                                   const char* facingObjectName, const char* label);
+    void ApplyDebugTeleport(const DebugTeleportRequest& request);
 #endif
 
-    // ロード画面を描きながら進める段階初期化の処理番号と進捗単位。
     // 分割初期化で次に実行する処理。素材一覧は同じ段階のまま複数フレームに分ける。
     enum class LoadingPhase {
         kSelectStage,
@@ -933,14 +958,33 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     size_t loadingInitializeTotalUnits_ = 1;
     bool loadingStageObjectsStarted_ = false;
 
-    // ゴール処理中は通常のゲーム更新を止め、演出側で時間を進めます。
-    /// <summary>ゴール中の保存、入力、演出を処理し、通常のゲーム更新を止める。</summary>
-    /// <param name="deltaTime">演出更新に使う経過秒数。ゴール中は0へ変更する。</param>
-    /// <returns>ゴール処理がこのフレームを引き受けた場合はtrue。</returns>
-    bool HandleGoalClear(float& deltaTime);
+    /// <summary>撃破演出中は粒子、ワールド行列、UIまで更新し、通常進行を止める。</summary>
+    bool UpdateCrownDefeatIfActive(float deltaTime);
+
+    /// <summary>入場演出の準備または再生がこのフレームを使った場合はtrueを返す。</summary>
+    bool UpdateStageEntryIfActive(float deltaTime, bool runtimePlaying);
+
+    /// <summary>ゴール成立後の保存、結果表示、帰還を進め、フレームを受け持った場合はtrueを返す。</summary>
+    bool UpdateGoalClearIfActive(float deltaTime);
+
+    /// <summary>クリア記録を保存し、成功した内容をリザルトとステージ選択に引き継ぐ。</summary>
+    void SaveGoalResultIfNeeded();
+
+    /// <summary>通常進行を止めた状態でゴール演出、粒子、UIを更新する。</summary>
+    void UpdateGoalClearPresentation(float deltaTime);
+
+    /// <summary>決定入力で結果の数え上げを完了するか、ステージ選択への帰還を要求する。</summary>
+    void HandleGoalResultConfirmInput();
 
     /// <summary>ゴール結果を表示するSpriteオーバーレイを用意する。</summary>
     void InitializeGoalPresentationOverlay();
+    // 各時刻はクリア演出の開始からの秒数。見出しを出し、最後の文字の着地後に獲得物を表示する。
+    float GetGoalResultTitleStartTime() const;
+    float GetGoalRewardCoinStartTime() const;
+    // コインの数え上げと祝福演出が進み、通常の帰還入力を受けられる時刻を返す。
+    float GetGoalRewardReadyTime() const;
+    // 画面ピクセル座標と表示倍率を指定し、獲得スターとコインの演出を時刻に合わせる。
+    void UpdateGoalRewardOverlay(float time, float centerX, float rewardTop, float scale, bool visible);
 
     /// <summary>ゴール演出のタイムラインと各イベントを準備する。</summary>
     void InitializeGoalCinematicTimeline();
@@ -954,7 +998,7 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     /// <summary>シーケンス内のアニメーションクリップを対象へ適用します。</summary>
     /// <param name="target">アニメーションの対象。</param>
     /// <param name="clip">適用するクリップ。</param>
-    /// <param name="localTime">クリップ内の再生時刻。</param>
+    /// <param name="localTime">クリップ内の経過秒。</param>
     /// <param name="isPreview">Editor プレビューからの呼び出しかどうか。</param>
     void HandleGoalCinematicAnimation(engine::Object3D* target, const CinematicAnimationClipData& clip, float localTime,
                                       bool isPreview);
@@ -1087,13 +1131,13 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     void UpdateLifeLostPresentationWorld(float deltaTime);
 
     /// <summary>ライフ減少演出のワールド側オブジェクトをライト付きで描画します。</summary>
-    void DrawLifeLostPresentationWorld(ID3D12Resource* pointLightResource, ID3D12Resource* spotLightResource);
+    void DrawLifeLostPresentationWorld(const engine::SceneLighting& lighting);
 
     /// <summary>配置JSONから読み込んだHUDを名前で取得し、演出前の基準値を記録する。</summary>
     /// <param name="name">gameplayHUD.json内のSprite名。</param>
     HudSpriteState BindHud(const std::string& name);
 
-    /// <summary>保存した基準位置と色を使ってHUDスプライトを描く。</summary>
+    /// <summary>参照があるHUDスプライトを現在の状態で描く。可視性はSprite::Draw()が判定する。</summary>
     void DrawGameplayHUDSprite(const HudSpriteState& state);
 
     /// <summary>指定SpriteがゲームプレイHUDに属するか判定する。</summary>
@@ -1101,18 +1145,18 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
 
     /// <summary>二桁の HUD 数字を、指定した右端位置に合わせて更新します。</summary>
     /// <param name="digits">更新する十の位と一の位のスプライト。</param>
-    /// <param name="value">表示する数値。</param>
-    /// <param name="rightAlignedPosition">数字表示の右端座標。</param>
-    /// <param name="digitHeight">表示する数字の高さ。</param>
+    /// <param name="value">表示する数値。0～99へ丸める。</param>
+    /// <param name="rightAlignedPosition">画面ピクセルで指定する表示の右端Xと中心Y。</param>
+    /// <param name="digitHeight">表示する数字の高さをピクセルで指定。</param>
     /// <param name="color">数字の描画色。</param>
     /// <param name="visible">数字を表示するかどうか。</param>
-    void SetGameplayHUDNumber(std::array<HudSpriteState, 2>& digits, int value, const engine::Vector2& rightAlignedPosition,
+    void SetGameplayHUDNumber(std::array<HudSpriteState, 2>& digits, std::int32_t value, const engine::Vector2& rightAlignedPosition,
                               float digitHeight, const engine::Vector4& color, bool visible);
 
     /// <summary>取得したスターコインが画面のHUDへ飛ぶ演出を開始する。</summary>
-    void StartStageStarHUDCollectEffect(int starIndex, const engine::Vector3& worldPosition);
+    void StartStageStarHUDCollectEffect(std::int32_t starIndex, const engine::Vector3& worldPosition);
 
-    /// <summary>現在のカメラでワールド位置を画面座標へ投影する。</summary>
+    /// <summary>ワールド位置を画面ピクセルへ投影する。カメラ不在か投影XYが非有限値なら画面中央を返す。</summary>
     engine::Vector2 ProjectWorldToScreen(const engine::Vector3& worldPosition) const;
 
     /// <summary>HUD表示対象のプリズムボスを探す。</summary>
@@ -1124,6 +1168,6 @@ class GamePlayScene : public BaseScene, public IStageProgressScene, public IScen
     /// <summary>HUD表示対象の最終ボスを探す。</summary>
     class EnemyFalseKingSlime* FindFalseKingBossForHUD();
 
-    /// <summary>指定Objectが現在のカメラの視錐台内で描画対象か判定する。</summary>
+    /// <summary>可視指定のObjectを視錐台で判定する。偽王と王冠変身中のプレイヤーは本体だけで除外しない。</summary>
     bool IsVisible(engine::Object3D* obj);
 };

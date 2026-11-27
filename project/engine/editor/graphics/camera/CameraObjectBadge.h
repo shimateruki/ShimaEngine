@@ -13,9 +13,11 @@ struct CameraObjectBadge {
 
 // 範囲による切替を優先し、経路終点など範囲を持たないMainは通常色で表示する。
 inline CameraObjectBadge GetCameraObjectBadge(const SceneCameraSettings& settings) {
+    // 領域で切り替わるカメラは、用途指定より範囲ラベルを優先する。
     if (settings.region.enabled)
         return {ICON_FA_VIDEO " [範囲]", IM_COL32(105, 220, 255, 255)};
-    if (settings.role == SceneCameraRole::Cinematic)
+    // 領域設定がなく演出用途の場合に限り、演出ラベルと色を使う。
+    if (settings.role == SceneCameraRole::kCinematic)
         return {ICON_FA_VIDEO " [演出]", IM_COL32(255, 135, 218, 255)};
     return {ICON_FA_VIDEO, IM_COL32(218, 223, 230, 255)};
 }

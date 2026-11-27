@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "engine/utility/math/Math.h"
 
@@ -18,13 +19,13 @@ class SettingsMenuOverlay;
 // 主な入口：Initialize / SetActive / Update / Draw / Finalize
 class PauseMenuOverlay {
   public:
-    enum class Action { None, Resume, OpenGuide, Retry, StageSelect, OpenSettings, ReturnTitle };
+    enum class Action { kNone, kResume, kOpenGuide, kRetry, kStageSelect, kOpenSettings, kReturnTitle };
 
-    enum class Mode { Gameplay, StageSelect };
+    enum class Mode { kGameplay, kStageSelect };
 
-    // 描画基盤を借用してSpriteを所有する。Modeで表示する項目を切り替える。
+    // 描画基盤を借用して Sprite を所有する。ステージ選択では再開・設定・タイトルへの移動だけを出す。
     void Initialize(engine::SpriteCommon* spriteCommon, const std::string& layoutPath = "Resources/json/sprite/pauseMenu.json",
-                    Mode mode = Mode::Gameplay);
+                    Mode mode = Mode::kGameplay);
 
     /// ポーズ用 Sprite と操作状態を片付ける。
     void Finalize();
@@ -39,9 +40,11 @@ class PauseMenuOverlay {
 
     /// <summary>入力と開閉アニメーションを更新し、確定した操作を返します。</summary>
     // 戻り値はシーン側で処理する要求。RetryやScene切替そのものはこのUIで実行しない。
+    // deltaTime は秒。acceptInput が false の間も表示を更新し、操作要求は kNone を返す。
     Action Update(float deltaTime, bool acceptInput = true);
 
     // ガイドと共通の背景を二重描画せずにページを移動する。
+    // offsetX は画面上の横位置差。ページ移動中は固定背景と一部の案内を隠す。
     void SetGuideTransitionOffset(float offsetX, bool transitioning);
 
     /// 現在の選択行とカーソルを描画する。
@@ -57,14 +60,14 @@ class PauseMenuOverlay {
     void RestoreReplayState(const nlohmann::json& state);
 
   private:
-    enum class Item { Resume, Guide, Retry, StageSelect, Settings, Title, Count };
+    enum class Item { kResume, kGuide, kRetry, kStageSelect, kSettings, kTitle, kCount };
 
     // 選択によって背景と文字の表示を一緒に切り替える行です。
     struct MenuRow {
         engine::Sprite* backdrop = nullptr;
         engine::Sprite* label = nullptr;
-        engine::Vector2 backdropBaseSize = engine::Vector2::ZERO;
-        engine::Vector2 labelBaseSize = engine::Vector2::ZERO;
+        engine::Vector2 backdropBaseSize = engine::Vector2::kZero;
+        engine::Vector2 labelBaseSize = engine::Vector2::kZero;
     };
 
     // レイアウト JSON の読み込み後、Sprite を各 UI 要素へ紐付けます。
@@ -89,7 +92,7 @@ class PauseMenuOverlay {
     void UpdateSprites();
 
     /// 選択行を指定方向へ移す。
-    void ChangeSelection(int direction);
+    void ChangeSelection(std::int32_t direction);
 
     engine::SpriteCommon* spriteCommon_ = nullptr;
     engine::InputManager* inputManager_ = nullptr;
@@ -102,18 +105,18 @@ class PauseMenuOverlay {
     engine::Sprite* confirmHintText_ = nullptr;
     engine::Sprite* cursorArrow_ = nullptr;
     engine::Sprite* cursorSlime_ = nullptr;
-    engine::Vector2 panelBaseSize_ = engine::Vector2::ZERO;
+    engine::Vector2 panelBaseSize_ = engine::Vector2::kZero;
     engine::Vector2 layoutRatio_ = {1.0f, 1.0f};
-    std::array<MenuRow, static_cast<size_t>(Item::Count)> rows_{};
+    std::array<MenuRow, static_cast<size_t>(Item::kCount)> rows_{};
 
     // 開いた直後の同じ入力で閉じないよう、トグル入力を一時抑止します。
     bool isActive_ = false;
-    Mode mode_ = Mode::Gameplay;
+    Mode mode_ = Mode::kGameplay;
     bool suppressOpenCloseInput_ = false;
-    int selectedIndex_ = 0;
+    std::int32_t selectedIndex_ = 0;
     float time_ = 0.0f;
     float guideTransitionOffset_ = 0.0f;
 };
 
-// 設定を重ねる操作とタイトルに戻る操作を処理し、その他の操作はシーンに委ねる。
+// 設定の開始とタイトル遷移を共通処理する。これ以外の Action は false を返して各シーンに委ねる。
 bool HandleSharedPauseAction(PauseMenuOverlay::Action action, PauseMenuOverlay& pauseMenu, SettingsMenuOverlay* settings);

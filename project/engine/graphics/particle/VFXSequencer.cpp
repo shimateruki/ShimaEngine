@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "engine/graphics/effect/VfxAssetPath.h"
 #include "VfxSequencer.h"
 #include <numbers>
@@ -27,12 +28,11 @@ namespace {
 
     std::vector<std::unique_ptr<VfxSequencer>>& ActiveOneShotSequences() {
         // 呼び出し元がインスタンスを保持しない単発演出を、再生終了まで生存させる。
-        static std::vector<std::unique_ptr<VfxSequencer>> sequences;
-        return sequences;
+        static std::vector<std::unique_ptr<VfxSequencer>> sSequences;
+        return sSequences;
     }
 
     // 停止要求一件の残り秒と時間倍率。停止を解除できるよう残り時間は非スケール時間で減らす。
-    // 担当：一つのヒットストップ要求の残り秒数と時間倍率。
     // 関連：VFXSequencerの内部処理だけで使う補助型。
     struct HitStopLayer {
         float remaining = 0.0f;
@@ -41,20 +41,20 @@ namespace {
 
     std::vector<HitStopLayer>& ActiveHitStops() {
         // 複数のヒットストップを重ねられるよう、各要求の残り時間を独立して保持する。
-        static std::vector<HitStopLayer> layers;
-        return layers;
+        static std::vector<HitStopLayer> sLayers;
+        return sLayers;
     }
 
     // JSONの解析済みイベントを名前ごとに保持し、同じ演出の再読込を減らします。
     std::unordered_map<std::string, std::vector<VfxEvent>>& SequenceEventCache() {
-        static std::unordered_map<std::string, std::vector<VfxEvent>> cache;
-        return cache;
+        static std::unordered_map<std::string, std::vector<VfxEvent>> sCache;
+        return sCache;
     }
 
     // キャッシュの有効性を判定するため、各JSONの最終更新時刻を保持します。
     std::unordered_map<std::string, std::filesystem::file_time_type>& SequenceWriteTimeCache() {
-        static std::unordered_map<std::string, std::filesystem::file_time_type> cache;
-        return cache;
+        static std::unordered_map<std::string, std::filesystem::file_time_type> sCache;
+        return sCache;
     }
 
     void ResetEventRuntimeState(std::vector<VfxEvent>& events) {
@@ -102,11 +102,13 @@ namespace {
         return json::array({ value.x, value.y, value.z, value.w });
     }
 
-    float ApplyEventEasing(int easingType, float progress) {
+    float ApplyEventEasing(std::int32_t easingType, float progress) {
         // 保存済みの曲線番号を再生側の補間へ対応付け、不明な番号は線形扱いにする。
         progress = std::clamp(progress, 0.0f, 1.0f);
+        // 曲線番号2は、序盤を速く進めて終端に近づくほど緩やかにする。
         if (easingType == 2)
             return Easing::OutSine(progress);
+        // 曲線番号4は、序盤を緩やかにして終端に向かって加速する。
         if (easingType == 4)
             return Easing::InQuad(progress);
         return progress;
@@ -141,6 +143,7 @@ namespace {
     engine::Vector3 ResolveTargetPosition(engine::Object3D* targetObject, const engine::Vector3& localOffset, engine::Matrix4x4& emitMatrix) {
     // 対象がある場合はローカル位置をワールドへ移し、放出行列も同じ基準にする。
         emitMatrix = engine::Math::MakeIdentity4x4();
+        // 対象がないときは入力オフセットをワールド座標として返し、行列は単位行列のままにする。
         if (!targetObject)
             return localOffset;
 
@@ -169,6 +172,7 @@ namespace {
                 localOffset.z * rootScale.z
             };
 
+            // ルート位置を指定している場合は、対象のローカル座標へ変換する前に加える。
             if (useRootPosition) {
                 targetLocalOffset.x += rootPosition.x;
                 targetLocalOffset.y += rootPosition.y;
@@ -188,6 +192,7 @@ namespace {
         const engine::Matrix4x4 rootRotateMatrix = engine::Math::MakeRotateMatrix(rootRotation);
         engine::Vector3 spawnPos = engine::Math::TransformNormal(scaledOffset, rootRotateMatrix);
 
+        // 対象なしでルート位置が指定されたときは、回転後のオフセットにワールドで足す。
         if (useRootPosition) {
             spawnPos.x += rootPosition.x;
             spawnPos.y += rootPosition.y;
@@ -199,12 +204,14 @@ namespace {
     }
 
     void RemovePostPulseContribution(VfxEvent& event) {
+        // 前回に加算していなければ、共有パラメーターから引く値はない。
         if (!event.hasAppliedPostPulse)
             return;
 
         // 前フレームに加算した分だけ戻し、別イベントの寄与を消さない。
         PostEffect::Params* params = PostEffect::GetInstance()->GetParams();
 
+        // 画面効果の定数へ書き込める場合に限り、記録しておいた値を引く。
         if (params) {
             params->radialIntensity -= event.appliedRadialIntensity;
             params->damageFlash -= event.appliedDamageFlash;
@@ -213,6 +220,7 @@ namespace {
             params->bloomIntensity -= event.appliedBloomIntensity;
         }
 
+        // 定数が取得できたかにかかわらず、同じ寄与を二度引かないよう記録を消す。
         event.hasAppliedPostPulse = false;
         event.appliedRadialIntensity = 0.0f;
         event.appliedDamageFlash = 0.0f;
@@ -225,6 +233,7 @@ namespace {
     void ApplyPostPulse(VfxEvent& event, float currentTime) {
         PostEffect::Params* params = PostEffect::GetInstance()->GetParams();
 
+        // 画面効果の定数が準備できていなければ、このイベントを打ち切る。
         if (!params) {
             event.isFinished = true;
             return;
@@ -236,6 +245,7 @@ namespace {
         const float duration = (std::max)(event.duration, 0.01f);
         const float progress = std::clamp((currentTime - event.triggerTime) / duration, 0.0f, 1.0f);
 
+        // 継続時間を使い切ったら、前フレーム分を戻した状態で終了する。
         if (progress >= 1.0f) {
             event.isFinished = true;
             return;
@@ -261,17 +271,18 @@ namespace {
 
     float GetVfxEventEndTime(const VfxEvent& event) {
         // イベントの種類ごとに有効な継続時間を求め、シーケンスの終了判定に使う。
-        if ((event.type == VfxEventType::GpuParticle && event.emissionRate > 0) ||
-            event.type == VfxEventType::MovingParticle ||
-            event.type == VfxEventType::CameraShake ||
-            event.type == VfxEventType::PostEffectPulse ||
-            event.type == VfxEventType::LightPulse ||
-            event.type == VfxEventType::HitStop ||
-            event.type == VfxEventType::ControllerRumble ||
-            event.type == VfxEventType::CameraFovPulse) {
+        if ((event.type == VfxEventType::kGpuParticle && event.emissionRate > 0) ||
+            event.type == VfxEventType::kMovingParticle ||
+            event.type == VfxEventType::kCameraShake ||
+            event.type == VfxEventType::kPostEffectPulse ||
+            event.type == VfxEventType::kLightPulse ||
+            event.type == VfxEventType::kHitStop ||
+            event.type == VfxEventType::kControllerRumble ||
+            event.type == VfxEventType::kCameraFovPulse) {
             return event.triggerTime + (std::max)(event.duration, 0.01f);
         }
 
+        // その他の単発イベントには、発火時刻に短い余裕を足して全体尺を求める。
         return event.triggerTime + 0.08f;
     }
 }
@@ -288,6 +299,7 @@ void VfxSequencer::Initialize(engine::Object3D* targetObject) {
     events_.clear();
 }
 
+// ルート位置を有効にする。対象付きでは対象ローカル、単独再生ではワールドの基準位置になる。
 void VfxSequencer::SetRootPosition(const engine::Vector3& rootPosition) {
     rootPosition_ = rootPosition;
     useRootPosition_ = true;
@@ -302,6 +314,7 @@ void VfxSequencer::SetRootScale(const engine::Vector3& rootScale) {
     };
 }
 
+// 単独演出の基準方向と、メッシュ演出の追加回転をラジアンのXYZで指定する。
 void VfxSequencer::SetRootRotation(const engine::Vector3& rootRotation) {
     rootRotation_ = rootRotation;
 }
@@ -321,6 +334,7 @@ void VfxSequencer::AddEvent(
     const engine::Vector3& offset,
     const engine::Vector3& rotation,
     const engine::Vector3& scale) {
+    // 指定された秒位置と姿勢を持つイベントを、発火前の状態で登録する。
     VfxEvent event;
     event.type = type;
     event.presetName = presetName;
@@ -331,15 +345,18 @@ void VfxSequencer::AddEvent(
     events_.push_back(event);
 }
 
+// 以前の寄与と実行状態を戻してから、先頭からの再生を開始する。
 void VfxSequencer::Play() {
     Reset();
     isPlaying_ = true;
 }
 
+// 現在の画面効果を解除し、時刻を先頭へ戻して停止する。
 void VfxSequencer::Stop() {
     Reset();
 }
 
+// イベント定義を保ったまま実行状態だけを初期化する。
 void VfxSequencer::Reset() {
     currentTime_ = 0.0f;
     isPlaying_ = false;
@@ -365,8 +382,10 @@ float VfxSequencer::GetDuration() const {
 
 // 発火時刻に達した単発・継続イベントを登録順に処理し、全件の終了時に再生を止めます。
 void VfxSequencer::Update(float deltaTime) {
+    // 停止中は時刻を進めず、各システムへ演出を依頼しない。
     if (!isPlaying_)
         return;
+    // 実質的に時間が進まないフレームでは、新しい発火や継続更新を行わない。
     if (deltaTime <= 0.0001f)
         return;
 
@@ -377,16 +396,18 @@ void VfxSequencer::Update(float deltaTime) {
     bool allFinished = true;
 
     for (auto& event : events_) {
+        // 処理を終えたイベントは再発火させない。
         if (event.isFinished)
             continue;
 
+        // 開始時刻がまだ先なら、何も発生させずシーケンスを継続する。
         if (currentTime_ < event.triggerTime) {
             allFinished = false;
             continue;
         }
 
         // 継続型の効果は発火後も毎フレーム更新し、単発型は最初の1回だけ発行する。
-        if (event.type == VfxEventType::GpuParticle && event.emissionRate > 0) {
+        if (event.type == VfxEventType::kGpuParticle && event.emissionRate > 0) {
             event.isFinished = currentTime_ >= event.triggerTime + event.duration;
             const float previousTime = currentTime_ - timeStep;
             // 秒に毎秒発生数を掛け、整数境界を跨いだかを判定します。複数の境界を跨いでも、現在位置での発生は一回だけです。
@@ -405,11 +426,11 @@ void VfxSequencer::Update(float deltaTime) {
                 event.hasFired = true;
             }
         }
-        else if (event.type == VfxEventType::PostEffectPulse) {
+        else if (event.type == VfxEventType::kPostEffectPulse) {
             // 継続中の画面効果を現在時刻で再評価し、前回このイベントが加えた分を置き換える。
             ApplyPostPulse(event, currentTime_);
         }
-        else if (event.type == VfxEventType::LightPulse) {
+        else if (event.type == VfxEventType::kLightPulse) {
             // 光源の生成は一度だけ行い、寿命の終了まではイベントを保持する。
             if (!event.hasFired) {
                 engine::Matrix4x4 emitMat;
@@ -424,11 +445,13 @@ void VfxSequencer::Update(float deltaTime) {
                 event.hasFired = true;
             }
 
+            // 発光の継続時間に達したら、再生成せずイベントを終了する。
             if (currentTime_ >= event.triggerTime + (std::max)(event.duration, 0.01f)) {
                 event.isFinished = true;
             }
         }
-        else if (event.type == VfxEventType::MovingParticle) {
+        // 移動粒子は、継続時間中に曲線上の発生点を更新する。
+        else if (event.type == VfxEventType::kMovingParticle) {
             event.hasFired = true;
 
             // 軌道上に粒子を発生させるため、イベントの継続時間中は毎フレーム放出する。
@@ -452,30 +475,35 @@ void VfxSequencer::Update(float deltaTime) {
             emitMat.m[3][2] = spawnPos.z;
             GpuParticleManager::GetInstance()->Emit(event.presetName, spawnPos, emitMat);
         }
+        // 独自の継続更新を持たない種類は、未発火のときだけ一度処理する。
         else if (!event.hasFired) {
             // それ以外は発火時に一回だけ各システムへ要求し、同フレームで完了にする。
-            if (event.type == VfxEventType::GpuParticle) {
+            // 発生率を指定しないGPU粒子は、発火位置でまとめて一度放出する。
+            if (event.type == VfxEventType::kGpuParticle) {
                 engine::Matrix4x4 emitMat;
                 engine::Vector3 spawnPos = ResolveSequencerPosition(targetObject_, useRootPosition_, rootPosition_, rootScale_, rootRotation_, event.offset, emitMat);
                 GpuParticleManager::GetInstance()->Emit(event.presetName, spawnPos, emitMat);
             }
-            else if (event.type == VfxEventType::Debris) {
+            else if (event.type == VfxEventType::kDebris) {
                 // 一回の発生だけ地面高さと色を調整できるよう、破片設定を一時オブジェクトへ読む。
                 DebrisEffectConfig config;
                 auto* debris = DebrisEffectManager::GetInstance();
+                // 破片プリセットを読み取れた場合だけ、この発生分の設定を加工して生成する。
                 if (debris->LoadConfig(std::filesystem::path("Resources/json/debris") /
                         std::filesystem::path(std::u8string(event.presetName.begin(), event.presetName.end()) + u8".json"), config)) {
                     engine::Matrix4x4 emitMat;
                     const auto position = ResolveSequencerPosition(targetObject_, useRootPosition_, rootPosition_, rootScale_, rootRotation_, event.offset, emitMat);
                     // ワールドの発生点に対する相対高さを、破片が衝突に使う絶対の地面高さへ変換します。
                     if (event.debrisGroundRelative) config.groundY = position.y + event.debrisGroundOffset;
+                    // 色を上書きする設定が選ばれている場合は、プリセットの色をこのイベントの色へ差し替える。
                     if (event.debrisOverrideColor) config.color = event.debrisColor;
                     debris->SpawnFromConfig(config, position);
+                // プリセットを読み取れなければ、生成を省いて名前を警告に残す。
                 } else {
-                    DebugConsole::GetInstance()->AddLog(LogLevel::Warning, "[VFX] debris preset not found: " + event.presetName);
+                    DebugConsole::GetInstance()->AddLog(LogLevel::kWarning, "[VFX] debris preset not found: " + event.presetName);
                 }
             }
-            else if (event.type == VfxEventType::MeshEffect) {
+            else if (event.type == VfxEventType::kMeshEffect) {
                 // 対象ありなら追従エフェクト、対象なしなら解決済み座標で単発生成する。
                 std::string path = "Resources/json/effect/" + event.presetName + ".json";
                 engine::Object3D* target = targetObject_;
@@ -487,6 +515,7 @@ void VfxSequencer::Update(float deltaTime) {
 
                 engine::Vector3 eventRotation = event.rotation;
 
+                // 対象が指定されている場合は、対象空間のオフセットを渡して追従させる。
                 if (target) {
                     engine::Vector3 spawnOffset = {
                         event.offset.x * rootScale_.x,
@@ -494,6 +523,7 @@ void VfxSequencer::Update(float deltaTime) {
                         event.offset.z * rootScale_.z
                     };
 
+                    // ルート位置の指定があれば、追従時のローカルオフセットに合算する。
                     if (useRootPosition_) {
                         spawnOffset.x += rootPosition_.x;
                         spawnOffset.y += rootPosition_.y;
@@ -504,6 +534,7 @@ void VfxSequencer::Update(float deltaTime) {
                     eventRotation.y += rootRotation_.y;
                     eventRotation.z += rootRotation_.z;
                     MeshEffectManager::GetInstance()->SpawnEffect(path, target, spawnOffset, eventRotation, eventScale);
+                // 追従対象がない場合は、ルート変換から解決した固定座標へ生成する。
                 } else {
                     engine::Matrix4x4 emitMat;
                     engine::Vector3 spawnPos = ResolveSequencerPosition(
@@ -520,39 +551,43 @@ void VfxSequencer::Update(float deltaTime) {
                     MeshEffectManager::GetInstance()->SpawnEffectAt(path, spawnPos, eventRotation, eventScale);
                 }
             }
-            else if (event.type == VfxEventType::SoundEffect) {
+            // 音のイベントには、位置設定を使えるよう解決済みの発生位置を添える。
+            else if (event.type == VfxEventType::kSoundEffect) {
                 engine::Matrix4x4 emitMatrix;
                 engine::Vector3 spawnPosition = ResolveSequencerPosition(
                     targetObject_, useRootPosition_, rootPosition_, rootScale_, rootRotation_, event.offset, emitMatrix);
                 // 音の発生位置を解決し、位置を使うかは音イベントの設定に任せる。
                 AudioEventSystem::GetInstance()->PlayReference(event.presetName, &spawnPosition);
             }
-            else if (event.type == VfxEventType::CameraShake) {
+            else if (event.type == VfxEventType::kCameraShake) {
                 // 揺れ時間、周波数、各軸の倍率をカメラへ渡し、以降の減衰はカメラ側で進める。
                 CameraManager::GetInstance()->PlayShake(event.duration, event.intensity, event.frequency, event.scale);
             }
-            else if (event.type == VfxEventType::CameraFovPulse) {
+            else if (event.type == VfxEventType::kCameraFovPulse) {
                 // イベント素材の強度は度数法で編集するので、カメラへ渡す直前にラジアンへ変換します。
                 CameraManager::GetInstance()->PlayFovPulse(event.duration, event.intensity * kDegreesToRadians, event.attackRatio);
             }
-            else if (event.type == VfxEventType::ControllerRumble) {
+            else if (event.type == VfxEventType::kControllerRumble) {
                 // 左右モーターの強度と継続秒数を入力基盤へ渡す。
                 engine::InputManager::GetInstance()->PlayRumble(event.intensity, event.secondaryIntensity, event.duration);
             }
-            else if (event.type == VfxEventType::HitStop) {
+            else if (event.type == VfxEventType::kHitStop) {
                 // この種類の強度は時間倍率です。演出要求の時間中だけゲーム更新を減速または停止します。
                 RequestHitStop(event.duration, event.intensity);
             }
 
+            // 各システムへ発生を依頼したら、シーケンス側の単発イベントは完了にする。
             event.hasFired = true;
             event.isFinished = true;
         }
 
+        // まだ継続する効果があれば、シーケンス全体を次のフレームへ残す。
         if (!event.isFinished) {
             allFinished = false;
         }
     }
 
+    // 未発火や継続中のイベントが一件もなければ停止する。
     if (allFinished) {
         isPlaying_ = false;
     }
@@ -567,7 +602,7 @@ bool VfxSequencer::SaveFile(const std::filesystem::path& path) const {
     for (const auto& event : events_) {
 
         json eventJson;
-        eventJson["type"] = static_cast<int>(event.type);
+        eventJson["type"] = static_cast<std::int32_t>(event.type);
         eventJson["presetName"] = event.presetName;
         eventJson["debrisGroundRelative"] = event.debrisGroundRelative;
         eventJson["debrisGroundOffset"] = event.debrisGroundOffset;
@@ -600,6 +635,7 @@ bool VfxSequencer::SaveFile(const std::filesystem::path& path) const {
         root["events"].push_back(eventJson);
     }
 
+    // JSONを指定パスへ書き、ファイルを閉じるところまで成功したかを返す。
     std::ofstream file(path);
     file << root.dump(4);
     file.close();
@@ -609,11 +645,12 @@ bool VfxSequencer::SaveFile(const std::filesystem::path& path) const {
 // JSON更新時刻が一致すれば解析結果を再利用し、変わっていれば読み直して実行状態を初期化します。
 void VfxSequencer::Load(const std::string& sequenceName) {
     sequenceName_ = sequenceName;
-    const auto filepath = VfxAssetPath::ResolveDependency(std::filesystem::path(kSequenceDirectory) /
+    const auto filepath = vfxAssetPath::ResolveDependency(std::filesystem::path(kSequenceDirectory) /
         std::filesystem::path(std::u8string(sequenceName.begin(), sequenceName.end()) + u8".json"));
     std::filesystem::file_time_type currentWriteTime{};
     bool hasWriteTime = false;
     try {
+        // ファイルが存在するときだけ、キャッシュ照合用の最終更新時刻を問い合わせる。
         if (std::filesystem::exists(filepath)) {
             currentWriteTime = std::filesystem::last_write_time(filepath);
             hasWriteTime = true;
@@ -635,12 +672,14 @@ void VfxSequencer::Load(const std::string& sequenceName) {
         hasWriteTime &&
         writeTimeIt != writeTimeCache.end() &&
         writeTimeIt->second == currentWriteTime;
+    // 解析済みの値と現在の更新時刻が揃い、時刻が一致するときだけ再利用する。
     if (cacheIsFresh) {
         // キャッシュから値をコピーし、再生中の発火状況が次のインスタンスやキャッシュへ伝わらないようにします。
         events_ = cacheIt->second;
         ResetEventRuntimeState(events_);
         Reset();
 
+        // 診断ログを出せる環境だけ、キャッシュ経由だったことを知らせる。
         if (DebugConsole::GetInstance()) {
             DebugConsole::GetInstance()->AddLog("Loaded VFX Sequence from cache: " + sequenceName);
         }
@@ -663,20 +702,23 @@ void VfxSequencer::Load(const std::string& sequenceName) {
     if (root.contains("events") && root["events"].is_array()) {
         for (const auto& eventJson : root["events"]) {
             VfxEvent event;
-            int type = eventJson.value("type", static_cast<int>(VfxEventType::GpuParticle));
-            type = std::clamp(type, static_cast<int>(VfxEventType::GpuParticle), static_cast<int>(VfxEventType::Debris));
+            std::int32_t type = eventJson.value("type", static_cast<std::int32_t>(VfxEventType::kGpuParticle));
+            type = std::clamp(type, static_cast<std::int32_t>(VfxEventType::kGpuParticle), static_cast<std::int32_t>(VfxEventType::kDebris));
             event.type = static_cast<VfxEventType>(type);
             event.presetName = eventJson.value("presetName", std::string{});
             event.debrisGroundRelative = eventJson.value("debrisGroundRelative", false);
             event.debrisGroundOffset = eventJson.value("debrisGroundOffset", 0.0f);
             event.debrisOverrideColor = eventJson.value("debrisOverrideColor", false);
             event.debrisColor = eventJson.contains("debrisColor") ? ReadVector4(eventJson["debrisColor"], event.debrisColor) : event.debrisColor;
+            // 地面の相対高さが有限値でなければ、破片が使う座標を計算できないため読み込みを失敗させる。
             if (!std::isfinite(event.debrisGroundOffset)) throw std::runtime_error("Invalid debris ground offset");
             event.emissionRate = eventJson.value("emissionRate", 0.0f);
             event.emissionScale = eventJson.value("emissionScale", 1.0f);
             event.directionFollowsYaw = eventJson.value("directionFollowsYaw", false);
+            // 方向が記録されている場合だけ読み込み、無い場合は既定方向を使う。
             if (eventJson.contains("emissionDirection"))
                 event.emissionDirection = ReadVector3(eventJson["emissionDirection"], event.emissionDirection);
+            // 毎秒の発生回数と発生倍率は有限かつ非負の値だけを受け付ける。
             if (!std::isfinite(event.emissionRate) || event.emissionRate < 0 ||
                 !std::isfinite(event.emissionScale) || event.emissionScale < 0)
                 throw std::runtime_error("Invalid particle emission settings");
@@ -708,14 +750,17 @@ void VfxSequencer::Load(const std::string& sequenceName) {
     ResetEventRuntimeState(events_);
     cache[sequenceName] = events_;
 
+    // 更新時刻が取得できた場合は、読み込んだ内容と対応付ける。
     if (hasWriteTime) {
         writeTimeCache[sequenceName] = currentWriteTime;
+    // 時刻を取れなかった場合は過去の時刻も破棄し、次回その値でキャッシュが採用されないようにする。
     } else {
         writeTimeCache.erase(sequenceName);
     }
 
     Reset();
 
+    // ログを出せる環境だけ、ファイル本体の読み込み完了を知らせる。
     if (DebugConsole::GetInstance()) {
         DebugConsole::GetInstance()->AddLog("Loaded VFX Sequence: " + sequenceName);
     }
@@ -735,6 +780,7 @@ void VfxSequencer::PlayOneShot(const std::string& sequenceName, const engine::Ve
     sequence->Initialize(nullptr);
     sequence->Load(sequenceName);
 
+    // 発火するイベントが一件もなければ、単発の共有リストには登録しない。
     if (sequence->GetEvents().empty()) {
         return;
     }
@@ -762,6 +808,7 @@ void VfxSequencer::PlayOneShotOnTarget(
     const engine::Vector3& localOffset,
     const engine::Vector3& scale,
     const engine::Vector3& rotation) {
+    // 追従対象がない依頼では、単独再生へ切り替えずに中止する。
     if (!targetObject) {
         return;
     }
@@ -770,6 +817,7 @@ void VfxSequencer::PlayOneShotOnTarget(
     sequence->Initialize(targetObject);
     sequence->Load(sequenceName);
 
+    // 対象と結び付けても再生するイベントが無ければ、共有リストに登録しない。
     if (sequence->GetEvents().empty()) {
         return;
     }
@@ -786,6 +834,7 @@ void VfxSequencer::UpdateOneShots(float deltaTime) {
     auto& sequences = ActiveOneShotSequences();
 
     for (auto& sequence : sequences) {
+        // 所有ポインターが有効な単発演出だけ時間を進める。
         if (sequence) {
             sequence->Update(deltaTime);
         }
@@ -805,6 +854,7 @@ void VfxSequencer::UpdateOneShots(float deltaTime) {
 // Sceneの単発演出に加え、共有ヒットストップと振動も解除します。
 void VfxSequencer::ClearOneShots() {
     for (auto& sequence : ActiveOneShotSequences()) {
+        // まだ存在する演出を停止し、残っている画面効果を外してから解放する。
         if (sequence) {
             sequence->Stop();
         }
@@ -864,12 +914,14 @@ namespace {
 }
 // 本編の単発演出とヒットストップを退避し、編集側を通常の速度から開始する。
 void VfxSequencer::BeginEditorSession() {
+    // すでに編集用へ切り替えている場合は、本編の退避状態を上書きしない。
     if (editorVfxSession) return;
     ActiveOneShotSequences().swap(savedEditorSequences); ActiveHitStops().swap(savedEditorHitStops);
     savedEditorGameplayScale = gameplayTimeScale; gameplayTimeScale = 1; editorVfxSession = true;
 }
 // 編集側の単発・振動を解除した後、本編で停止していた単発演出と減速状態を戻す。
 void VfxSequencer::EndEditorSession() {
+    // 退避していなければ、本編側の活動中の演出には触れない。
     if (!editorVfxSession) return;
     ClearOneShots();
     ActiveOneShotSequences().swap(savedEditorSequences); ActiveHitStops().swap(savedEditorHitStops);

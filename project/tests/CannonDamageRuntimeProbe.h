@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #ifdef USE_IMGUI
 #include "SceneManager.h"
 #include "GimmickFireCannon.h"
@@ -12,18 +13,18 @@
 #include <stdexcept>
 
 // 実際の砲台から撃ち、共通BulletとGameRuleでHPが減ることを隔離Actorで確認します。
-namespace CannonDamageRuntimeProbe {
+namespace cannonDamageRuntimeProbe {
 inline bool Enabled() {
     // 通常起動ではテスト用Actorを生成しません。
-    static const bool enabled = GetEnvironmentVariableA("CG2_CANNON_DAMAGE_TEST", nullptr, 0) > 0;
-    return enabled;
+    static const bool kEnabled = GetEnvironmentVariableA("CG2_CANNON_DAMAGE_TEST", nullptr, 0) > 0;
+    return kEnabled;
 }
 // 隔離Actorを配置して実際の弾更新と衝突を通す。step は検証時の経過秒。
-inline bool RunCase(SceneManager* manager, int mode, float radius, float blast, bool preview, bool invincible, std::ostream& log, float step = 0.2f) {
+inline bool RunCase(SceneManager* manager, std::int32_t mode, float radius, float blast, bool preview, bool invincible, std::ostream& log, float step = 0.2f) {
     // 配置データを変えず、高空の隔離空間で一発だけ飛ばします。
     auto* scene = manager->GetCurrentScene();
     auto* bullets = BulletManager::GetInstance();
-    auto* collisions = CollisionManager::GetInstance();
+    auto* collisions = engine::CollisionManager::GetInstance();
     bullets->Clear();
     auto player = std::make_unique<Player>();
     player->Initialize(scene->GetObject3DCommon(), engine::InputManager::GetInstance(), scene->GetParticleSystem(), scene->GetSpriteCommon());
@@ -31,12 +32,12 @@ inline bool RunCase(SceneManager* manager, int mode, float radius, float blast, 
     player->SetName("__CannonDamageTarget"); player->SetClassName("Player"); player->SetEditorInternal(false);
     player->SetParameter(&engine::EntityParameter::hp, player->SetParameter(&engine::EntityParameter::maxHp, 20));
     player->SetScale({1, 1, 1});
-    engine::Object3D::ColliderConfig collider; collider.type = ColliderType::Sphere; collider.center = {0, 0, 0}; collider.size = {0.5f, 0.5f, 0.5f};
+    engine::Object3D::ColliderConfig collider; collider.type = engine::ColliderType::kSphere; collider.center = {0, 0, 0}; collider.size = {0.5f, 0.5f, 0.5f};
     player->SetColliderConfig(collider);
     player->SetCollisionRadius(0.5f);
     if (player->GetCollider()) player->GetCollider()->SetScaleOverride({1, 1, 1});
-    player->SetCollisionAttribute(CollisionCategories::Get("player"));
-    player->SetCollisionMask(CollisionCategories::Get("enemy_attack"));
+    player->SetCollisionAttribute(engine::collisionCategories::Get("player"));
+    player->SetCollisionMask(engine::collisionCategories::Get("enemy_attack"));
     player->SetDamageInvincible(invincible);
     auto cannon = std::make_unique<GimmickFireCannon>();
     cannon->Initialize(scene->GetObject3DCommon(), "Gimmicks/volcanic_bombard");
@@ -56,12 +57,12 @@ inline bool RunCase(SceneManager* manager, int mode, float radius, float blast, 
     player->SetTranslate(projectile->GetTranslate() + direction * 8.0f);
     player->UpdateWorldMatrix(true);
     collisions->AddObject(player.get());
-    int damageEvents = 0;
+    std::int32_t damageEvents = 0;
     const auto subscription = EventManager::GetInstance()->Subscribe([&](const DamageEvent& event) {
         if (event.target == player.get()) ++damageEvents;
     });
     // 通常のフレーム間隔と低FPSの大きな変位で、途中の命中と一度だけの被弾を確認する。
-    for (int i = 0; i < 20; ++i) bullets->Update(step);
+    for (std::int32_t i = 0; i < 20; ++i) bullets->Update(step);
     const float damage = 20 - player->GetHp();
     const float expected = preview || invincible ? 0.0f : 1.0f;
     const bool eventsValid = preview ? damageEvents == 0 : (invincible ? damageEvents <= 1 : damageEvents == 1);
@@ -78,23 +79,23 @@ inline bool RunPlayerProjectileCase(SceneManager* manager, std::ostream& log) {
     // 共通Bulletを使うプレイヤー側の弾も、敵に一度だけ命中することを確認する。
     auto* scene = manager->GetCurrentScene();
     auto* bullets = BulletManager::GetInstance();
-    auto* collisions = CollisionManager::GetInstance();
+    auto* collisions = engine::CollisionManager::GetInstance();
     bullets->Clear();
     auto enemy = EnemyFactory::GetInstance()->CreateEnemy("Slime", scene->GetObject3DCommon());
     if (!enemy) throw std::runtime_error("regression enemy missing");
     enemy->SetParameter(&engine::EntityParameter::hp, enemy->SetParameter(&engine::EntityParameter::maxHp, 20));
     enemy->SetScale({1, 1, 1}); enemy->SetTranslate({0, 1000, 8});
-    engine::Object3D::ColliderConfig collider; collider.type = ColliderType::Sphere; collider.size = {0.5f, 0.5f, 0.5f};
+    engine::Object3D::ColliderConfig collider; collider.type = engine::ColliderType::kSphere; collider.size = {0.5f, 0.5f, 0.5f};
     enemy->SetColliderConfig(collider); enemy->SetCollisionRadius(0.5f);
-    enemy->SetCollisionAttribute(CollisionCategories::Get("enemy"));
-    enemy->SetCollisionMask(CollisionCategories::Get("player_attack"));
+    enemy->SetCollisionAttribute(engine::collisionCategories::Get("enemy"));
+    enemy->SetCollisionMask(engine::collisionCategories::Get("player_attack"));
     enemy->UpdateWorldMatrix(true);
     collisions->AddObject(enemy.get());
     BulletVisualConfig visual;
     visual.collisionRadiusIsWorld = true;
-    bullets->Fire({0, 1000, 0}, {0, 0, 60}, CollisionCategories::Get("player_attack"), CollisionCategories::Get("enemy"),
-                  "Primitives/sphere", 0.3f, 3.0f, visual, 2.0f, {}, DamageType::Fire);
-    int events = 0;
+    bullets->Fire({0, 1000, 0}, {0, 0, 60}, engine::collisionCategories::Get("player_attack"), engine::collisionCategories::Get("enemy"),
+                  "Primitives/sphere", 0.3f, 3.0f, visual, 2.0f, {}, DamageType::kFire);
+    std::int32_t events = 0;
     const auto subscription = EventManager::GetInstance()->Subscribe([&](const DamageEvent& event) {
         if (event.target == enemy.get()) ++events;
     });
@@ -110,13 +111,13 @@ inline bool RunPlayerProjectileCase(SceneManager* manager, std::ostream& log) {
 inline void AfterDraw(SceneManager* manager, const std::string& path) {
     // Sceneの読み込みが完了してから、一組ずつ生成・破棄して検証します。
     static std::ofstream log(path, std::ios::trunc);
-    static int phase = 0, frame = 0;
-    static bool done = false;
-    if (done || !manager || manager->IsTransitioning()) return;
-    if (phase == 0) { manager->ChangeScene("GAMEPLAY"); phase = 1; return; }
+    static std::int32_t sPhase = 0, sFrame = 0;
+    static bool sDone = false;
+    if (sDone || !manager || manager->IsTransitioning()) return;
+    if (sPhase == 0) { manager->ChangeScene("GAMEPLAY"); sPhase = 1; return; }
     if (manager->GetCurrentSceneName() != "GAMEPLAY") return;
     manager->SetIsPlaying(false);
-    if (++frame < 3) return;
+    if (++sFrame < 3) return;
     try {
         bool ok = true;
         ok = RunCase(manager, 0, 1.0f, 0.5f, false, false, log) && ok;
@@ -130,8 +131,8 @@ inline void AfterDraw(SceneManager* manager, const std::string& path) {
         ok = RunPlayerProjectileCase(manager, log) && ok;
         log << (ok ? "PASS:" : "FAIL:") << " cannon direct/bombard damage, large direct hit, invincibility and harmless preview" << std::endl;
     } catch (const std::exception& error) { log << "FAIL: " << error.what() << std::endl; }
-    done = true;
+    sDone = true;
     WinApp::CloseNow();
 }
-} // namespace CannonDamageRuntimeProbe
+} // namespace cannonDamageRuntimeProbe
 #endif

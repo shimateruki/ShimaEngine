@@ -35,8 +35,8 @@ public:
 
 private:
     enum class UsageKind {
-        Direct,
-        DynamicCandidate,
+        kDirect,
+        kDynamicCandidate,
     };
 
     /// JSON 内の値と参照元位置を保持します。
@@ -46,7 +46,7 @@ private:
         std::string jsonPointer;
         std::string value;
         std::string ownerCategory;
-        UsageKind kind = UsageKind::Direct;
+        UsageKind kind = UsageKind::kDirect;
     };
 
     /// 解決できなかった値と、修復候補の GUID を保持します。
@@ -57,7 +57,7 @@ private:
         std::string key;
         std::string value;
         std::vector<std::string> candidateGuids;
-        int selectedCandidate = 0;
+        std::int32_t selectedCandidate = 0;
     };
 
     // 参照索引の構築。AssetDatabase の世代が変わったときに再実行します。

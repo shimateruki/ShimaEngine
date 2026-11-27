@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "EffectObject3D.h"
 #include "engine/utility/math/Math.h"
@@ -15,7 +16,7 @@
 class AttackTelegraph {
   public:
     // 予兆として表示する形状の種類です。
-    enum class Shape { Circle, ImpactDisc, Line, DecalCircle };
+    enum class Shape { kCircle, kImpactDisc, kLine, kDecalCircle };
 
     // 描画用エフェクトを必要時に生成するための共有コンテキストを借ります。
     void Initialize(engine::Object3DCommon* common);
@@ -44,7 +45,7 @@ class AttackTelegraph {
                                  const engine::Vector4& color);
 
     // 複数の飛び道具が通るレーンを、本数と間隔に合わせて表示します。
-    void ShowLaneFan(const engine::Vector3& origin, const engine::Vector3& direction, float length, float width, int laneCount,
+    void ShowLaneFan(const engine::Vector3& origin, const engine::Vector3& direction, float length, float width, std::int32_t laneCount,
                      float lateralSpacing, float angleStep, float progress, const engine::Vector4& color);
 
     // 攻撃直前の強調表示を直近の予兆位置で再生します。
@@ -155,13 +156,13 @@ class AttackTelegraph {
 
     engine::Object3DCommon* common_ = nullptr;
 
-    Shape shape_ = Shape::Circle;
-    Shape cueShape_ = Shape::Circle;
-    Shape lastShape_ = Shape::Circle;
-    Shape patternShape_ = Shape::Line;
-    Shape timingShape_ = Shape::Circle;
+    Shape shape_ = Shape::kCircle;
+    Shape cueShape_ = Shape::kCircle;
+    Shape lastShape_ = Shape::kCircle;
+    Shape patternShape_ = Shape::kLine;
+    Shape timingShape_ = Shape::kCircle;
 
-    engine::Vector3 lastCenter_ = engine::Vector3::ZERO;
+    engine::Vector3 lastCenter_ = engine::Vector3::kZero;
     engine::Vector3 lastDirection_ = {0.0f, 0.0f, 1.0f};
 
     engine::Vector4 lastColor_ = {1.0f, 0.1f, 0.04f, 1.0f};
@@ -191,8 +192,8 @@ class AttackTelegraph {
     float patternCueTimer_ = 0.0f;
     engine::Vector4 patternCueColor_ = {1.0f, 0.05f, 0.02f, 1.0f};
 
-    engine::Vector3 warningCenter_ = engine::Vector3::ZERO;
-    engine::Vector3 warningOffset_ = engine::Vector3::ZERO;
+    engine::Vector3 warningCenter_ = engine::Vector3::kZero;
+    engine::Vector3 warningOffset_ = engine::Vector3::kZero;
     engine::Vector4 warningAccentColor_ = {1.0f, 0.45f, 0.08f, 1.0f};
     float warningSize_ = 1.0f;
 

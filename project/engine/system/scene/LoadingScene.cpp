@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "LoadingScene.h"
 #include <numbers>
 
@@ -25,10 +26,10 @@ const char* SelectLoadingSlimeTexturePath() {
         "Resources/sprite/loading/slime_hop_sheet_right_bomber.png",
     };
 
-    static constexpr std::array<int, 4> kAppearanceWeights = { 70, 10, 10, 10 };
+    static constexpr std::array<std::int32_t, 4> kAppearanceWeights = { 70, 10, 10, 10 };
     static std::mt19937 randomEngine(std::random_device{}());
 
-    std::discrete_distribution<int> distribution(kAppearanceWeights.begin(), kAppearanceWeights.end());
+    std::discrete_distribution<std::int32_t> distribution(kAppearanceWeights.begin(), kAppearanceWeights.end());
     return kTexturePaths[static_cast<std::size_t>(distribution(randomEngine))];
 }
 
@@ -37,12 +38,12 @@ float Clamp01(float value) {
     return std::clamp(value, 0.0f, 1.0f);
 }
 
-// ロード画面の設計解像度から幅と高さを取得します。
+// 現在のクライアント領域の幅をピクセル単位で返します。
 float ScreenW() {
     return static_cast<float>(WinApp::GetClientWidth());
 }
 
-// ロード画面の設計高さを返します。
+// 現在のクライアント領域の高さをピクセル単位で返します。
 float ScreenH() {
     return static_cast<float>(WinApp::GetClientHeight());
 }
@@ -61,13 +62,13 @@ float GaugeY() {
 void LoadingScene::Initialize() {
     // ロード中だけ使うSpriteを作り、進捗表示とキャラクター演出を同じ座標系へ揃えます。
 
-    const uint32_t whiteHandle = TextureManager::GetInstance()->Load("Resources/sprite/common/white.png");
-    const uint32_t glowHandle = TextureManager::GetInstance()->Load("Resources/sprite/common/circle2.png");
-    const uint32_t fadeFinalHandle = TextureManager::GetInstance()->Load("Resources/sprite/fade/crown_iris/frame_47.png");
-    const uint32_t slimeHandle = TextureManager::GetInstance()->Load(SelectLoadingSlimeTexturePath());
-    const uint32_t loadingTextHandle = TextureManager::GetInstance()->Load("Resources/sprite/generated/text/text_text_load.png");
-    const uint32_t hintTextHandle = TextureManager::GetInstance()->Load("Resources/sprite/generated/text/text_loading_hint.png");
-    const uint32_t dotHandle = TextureManager::GetInstance()->Load("Resources/sprite/number/dot.png");
+    const uint32_t whiteHandle = engine::TextureManager::GetInstance()->Load("Resources/sprite/common/white.png");
+    const uint32_t glowHandle = engine::TextureManager::GetInstance()->Load("Resources/sprite/common/circle2.png");
+    const uint32_t fadeFinalHandle = engine::TextureManager::GetInstance()->Load("Resources/sprite/fade/crown_iris/frame_47.png");
+    const uint32_t slimeHandle = engine::TextureManager::GetInstance()->Load(SelectLoadingSlimeTexturePath());
+    const uint32_t loadingTextHandle = engine::TextureManager::GetInstance()->Load("Resources/sprite/generated/text/text_text_load.png");
+    const uint32_t hintTextHandle = engine::TextureManager::GetInstance()->Load("Resources/sprite/generated/text/text_loading_hint.png");
+    const uint32_t dotHandle = engine::TextureManager::GetInstance()->Load("Resources/sprite/number/dot.png");
 
     // 後から所有リスト順に描くため、背景を先に、文字や動く装飾を後に作る。
     background_ = CreateSprite(
@@ -91,7 +92,7 @@ void LoadingScene::Initialize() {
     dots_.clear();
 
     // 進行中の点は同じ素材を共有し、時間差のアニメーションだけ個別に与える。
-    for (int i = 0; i < 3; ++i) {
+    for (std::int32_t i = 0; i < 3; ++i) {
         dots_.push_back(CreateSprite(
             dotHandle,
             { ScreenW() * 0.5f + 62.0f + static_cast<float>(i) * 18.0f, ScreenH() - 119.0f },
@@ -143,7 +144,7 @@ void LoadingScene::Initialize() {
 
     gaugeBubbles_.clear();
 
-    for (int i = 0; i < 12; ++i) {
+    for (std::int32_t i = 0; i < 12; ++i) {
         gaugeBubbles_.push_back(CreateSprite(
             glowHandle,
             { GaugeLeft(), GaugeY() },
@@ -173,7 +174,7 @@ void LoadingScene::Initialize() {
 }
 
 void LoadingScene::Update(float deltaTime) {
-    // 実進捗へ表示値を滑らかに追従させ、更新頻度の揺れを見た目に出しません。
+    // 経過秒数が正でなければロード画面独自の刻みとして1/60秒を使う。
     const float effectiveDeltaTime = deltaTime > 0.0f ? deltaTime : (1.0f / 60.0f);
     timer_ += effectiveDeltaTime;
 
@@ -192,6 +193,7 @@ void LoadingScene::Update(float deltaTime) {
     UpdateDotAnimation();
 
     for (auto& sprite : sprites_) {
+        // 準備済みのスプライトだけ、今フレームの位置や色をGPU描画の値へ反映する。
         if (sprite) {
             sprite->Update();
         }
@@ -211,6 +213,7 @@ void LoadingScene::DrawUi() {
     BeginSpriteDrawing();
 
     for (auto& sprite : sprites_) {
+        // 生成済みのスプライトだけに、所有リスト順で描画を依頼する。
         if (sprite) {
             sprite->Draw();
         }
@@ -265,7 +268,7 @@ void LoadingScene::UpdateSlimeRunAnimation() {
     const float x = GaugeLeft() + kGaugeWidth * progress;
     // 1秒に1.45周進め、余りを一回の跳ねの中の位置として四つの画像を使い分ける。
     const float hopT = std::fmod(timer_ * 1.45f, 1.0f);
-    int frame = 0;
+    std::int32_t frame = 0;
     float lift = 0.0f;
     engine::Vector2 size = { 116.0f, 130.0f };
     float rotation = 0.0f;
@@ -288,6 +291,7 @@ void LoadingScene::UpdateSlimeRunAnimation() {
         const float airT = (hopT - 0.42f) / 0.34f;
         lift = 22.0f + std::sin(airT * kPi) * 9.0f;
         rotation = -0.018f;
+    // 周期の76%以上は着地の画像へ切り替え、横につぶれた姿勢にする。
     } else {
         frame = 3;
         size = { 130.0f, 112.0f };
@@ -320,6 +324,7 @@ void LoadingScene::UpdateDotAnimation() {
     for (size_t i = 0; i < dots_.size(); ++i) {
         engine::Sprite* dot = dots_[i];
 
+        // 点の実体が無い場合は、この点の脈動を更新しない。
         if (!dot) {
             continue;
         }
@@ -362,6 +367,7 @@ void LoadingScene::UpdateProgressGauge() {
     for (size_t i = 0; i < gaugeBubbles_.size(); ++i) {
         engine::Sprite* bubble = gaugeBubbles_[i];
 
+        // 泡の実体が用意できていない場合は、その位置を処理しない。
         if (!bubble) {
             continue;
         }
@@ -372,6 +378,7 @@ void LoadingScene::UpdateProgressGauge() {
         const bool visible = fillWidth > normalizedX * kGaugeWidth + 6.0f;
         bubble->SetVisible(visible);
 
+        // ゲージがまだ届かず泡を隠した場合は、大きさと色の更新も行わない。
         if (!visible) {
             continue;
         }

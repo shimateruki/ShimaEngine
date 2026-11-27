@@ -1,12 +1,13 @@
+#include <cstdint>
 #include "engine/editor/assets/preset/PresetManager.Internal.h"
 #include "game/system/scene/GimmickFactory.h"
 #include "engine/editor/assets/EditorObjectDefaults.h"
 
-using namespace PresetManagerImplementation;
+using namespace presetManagerImplementation;
 
-// 補助処理の定義を一か所に保持し、共有状態と呼び出し順を維持します。
-namespace PresetManagerImplementation {
+namespace presetManagerImplementation {
 std::string ReadString(const json& source, const char* key, const std::string& fallback) {
+    // 指定のキーが文字列として存在する場合だけ取り出し、それ以外は呼び出し元の既定値を返す。
     if (source.is_object() && source.contains(key) && source.at(key).is_string()) {
         return source.at(key).get<std::string>();
     }
@@ -17,10 +18,12 @@ std::string ReadString(const json& source, const char* key, const std::string& f
 std::string ResolveEnemyType(const json& node) {
     // 古い汎用Paramの敵種別より、明示されたオブジェクト種別を優先します。
     const std::string type = ReadString(node, "type");
+    // 明示された種別がEnemy以外なら、旧パラメーターに敵の設定が残っていても敵として生成しない。
     if (!type.empty() && type != "Enemy")
         return {};
     std::string enemyType = ReadString(node, "enemyType");
 
+    // 直下の敵種別が無ければ、旧式のparam内から種別を探す。
     if (enemyType.empty() && node.contains("param") && node["param"].is_object()) {
         enemyType = ReadString(node["param"], "enemyType");
     }
@@ -40,22 +43,24 @@ std::uint64_t HashText(const std::string& text) {
     return hash;
 }
 
+// 識別番号を接頭辞と16桁の16進表記で組み立てる。
 std::string MakeHexId(const std::string& prefix, std::uint64_t value) {
     std::ostringstream stream;
     stream << prefix << '-' << std::hex << std::setw(16) << std::setfill('0') << value;
     return stream.str();
 }
 
+// 同じ入力から同じ識別子を得る。旧形式を開き直しても差分の参照先を維持できる。
 std::string MakeStableId(const std::string& prefix, const std::string& seed) {
     return MakeHexId(prefix, HashText(seed));
 }
 
 std::string MakeUniqueId(const std::string& prefix) {
-    static std::atomic<std::uint64_t> counter = 0;
+    static std::atomic<std::uint64_t> sCounter = 0;
     // 同じ時刻に生成を繰り返しても入力が変わるよう、時刻に通し番号を混ぜる。
     const auto ticks = static_cast<std::uint64_t>(
         std::chrono::high_resolution_clock::now().time_since_epoch().count());
-    return MakeHexId(prefix, ticks ^ (++counter * 0x9E3779B97F4A7C15ull));
+    return MakeHexId(prefix, ticks ^ (++sCounter * 0x9E3779B97F4A7C15ull));
 }
 
 // Prefab差分用にJSONを比較します。数値には小さい保存誤差を許容します。
@@ -65,12 +70,15 @@ bool JsonValuesEqual(const json& lhs, const json& rhs) {
         return std::fabs(lhs.get<double>() - rhs.get<double>()) <= 0.00001;
     }
 
+    // 両方が配列なら、数値の許容誤差を子要素にも適用するため要素単位で調べる。
     if (lhs.is_array() && rhs.is_array()) {
+        // 配列の長さが異なれば同じ値にはならない。
         if (lhs.size() != rhs.size()) {
             return false;
         }
 
         for (std::size_t index = 0; index < lhs.size(); ++index) {
+            // 途中の要素が異なれば、それ以降を比較せず不一致を返す。
             if (!JsonValuesEqual(lhs[index], rhs[index])) {
                 return false;
             }
@@ -84,9 +92,11 @@ bool JsonValuesEqual(const json& lhs, const json& rhs) {
 
 // Assetへ移すノードと子孫から、シーン固有のGUIDを除きます。
 void RemoveSceneObjectGuids(json& node) {
+    // JSONオブジェクト以外には保存時に除くGUIDキーがない。
     if (!node.is_object())
         return;
     node.erase("guid");
+    // 保存済みの子の配列がなければ、現在のノードだけを処理する。
     if (!node.contains("children") || !node["children"].is_array())
         return;
     for (json& child : node["children"]) {
@@ -111,11 +121,13 @@ json BuildPresetNode(engine::Object3D* object, std::unordered_set<const engine::
     for (engine::Object3D* child : object->GetChildren()) {
         json childNode = BuildPresetNode(child, visited);
 
+        // 循環や重複で空の結果を返した子は保存配列に入れない。
         if (!childNode.empty()) {
             children.push_back(std::move(childNode));
         }
     }
 
+    // 保存する子がある場合だけ、その一覧を現在のノードへ結び付ける。
     if (!children.empty()) {
         node["children"] = std::move(children);
     }
@@ -128,6 +140,7 @@ json BuildPrefabNode(
     engine::Object3D* object,
     const std::string& assetId,
     std::unordered_set<const engine::Object3D*>& visited) {
+    // ポインターがないか処理済みの場合は、階層の重複や無限再帰を防ぐため省く。
     if (!object || visited.count(object) != 0) {
         return json::object();
     }
@@ -140,8 +153,10 @@ json BuildPrefabNode(
 
     const auto& instance = object->GetPrefabInstanceInfo();
 
+    // 同じAssetに由来し元ノードIDが残る場合は、そのIDを変更せず上書きから追跡できるようにする。
     if (instance.assetId == assetId && !instance.sourceObjectId.empty()) {
         node["prefabObjectId"] = instance.sourceObjectId;
+    // 新規または別Asset由来なら、この階層用のIDを割り当てる。
     } else {
         node["prefabObjectId"] = MakeUniqueId("object");
     }
@@ -151,11 +166,13 @@ json BuildPrefabNode(
     for (engine::Object3D* child : object->GetChildren()) {
         json childNode = BuildPrefabNode(child, assetId, visited);
 
+        // 子の生成が空になった場合は、保存される階層に含めない。
         if (!childNode.empty()) {
             children.push_back(std::move(childNode));
         }
     }
 
+    // 保存する子があるときだけ現在のノードへ子の配列を設定する。
     if (!children.empty()) {
         node["children"] = std::move(children);
     }
@@ -165,6 +182,7 @@ json BuildPrefabNode(
 
 // Assetと階層位置から、IDのないPrefabノードへ安定IDを補います。
 void EnsurePrefabObjectIds(json& node, const std::string& assetId, const std::string& hierarchyPath) {
+    // ノードの形式がオブジェクトでなければIDを補えない。
     if (!node.is_object()) {
         return;
     }
@@ -180,6 +198,7 @@ void EnsurePrefabObjectIds(json& node, const std::string& assetId, const std::st
     // Prefab AssetはScene上の実体GUIDを所有しません。
     node.erase("guid");
 
+    // 子の配列がない場合はこれ以上の階層を補わない。
     if (!node.contains("children") || !node["children"].is_array()) {
         return;
     }
@@ -193,44 +212,51 @@ void EnsurePrefabObjectIds(json& node, const std::string& assetId, const std::st
 // 旧Variantに不足する差分フィールドを空の配列・オブジェクトで補います。
 void EnsurePrefabVariantFields(json& asset) {
     // 旧Variantの不足フィールドを空の差分として補い、現在の読込処理へ渡します。
+    // 削除したノードの一覧が無いか配列でなければ、削除なしとして初期化する。
     if (!asset.contains("removedObjectIds") || !asset["removedObjectIds"].is_array()) {
         asset["removedObjectIds"] = json::array();
     }
 
+    // 追加した子の一覧が無いか形式が違えば、空の配列に揃える。
     if (!asset.contains("addedChildren") || !asset["addedChildren"].is_array()) {
         asset["addedChildren"] = json::array();
     }
 
+    // 親変更の記録が無いか形式が違えば、空の配列に揃える。
     if (!asset.contains("reparentedObjects") || !asset["reparentedObjects"].is_array()) {
         asset["reparentedObjects"] = json::array();
     }
 
+    // ノードごとの値の差分は、キーで参照できるオブジェクトとして持つ。
     if (!asset.contains("nodeOverrides") || !asset["nodeOverrides"].is_object()) {
         asset["nodeOverrides"] = json::object();
     }
 
+    // 部品の有無の差分も、未定義または別形式なら空のオブジェクトを持つ。
     if (!asset.contains("componentOverrides") || !asset["componentOverrides"].is_object()) {
         asset["componentOverrides"] = json::object();
     }
 }
 
-// Prefab階層のObject ID、親ID、並び順を一覧へ採取します。
 // 親IDと兄弟内の位置を含む比較用索引を作る。ノードへのポインタは参照元ツリーの生存中に使う。
 void CollectPrefabNodeLocations(
     const json& node,
     const std::string& parentObjectId,
     std::size_t order,
     std::unordered_map<std::string, PrefabNodeLocation>& locations) {
+    // オブジェクト以外の値は索引のノードとして記録できない。
     if (!node.is_object()) {
         return;
     }
 
     const std::string objectId = node.value("prefabObjectId", "");
 
+    // 比較キーになるIDを持つノードだけ、親と子の順番を記録する。
     if (!objectId.empty()) {
         locations[objectId] = { &node, parentObjectId, order };
     }
 
+    // 子の配列を持たないノードでは、この階層までで探索を終える。
     if (!node.contains("children") || !node["children"].is_array()) {
         return;
     }
@@ -241,14 +267,15 @@ void CollectPrefabNodeLocations(
 }
 
 // 現ノードと子孫を再帰的に数えます。
-int CountPrefabNodes(const json& node) {
-    // 子を再帰的に数え、Prefabの展開規模を把握する。
+std::int32_t CountPrefabNodes(const json& node) {
+    // オブジェクトの形を持つノードだけを個数に含める。
     if (!node.is_object()) {
         return 0;
     }
 
-    int count = 1;
+    std::int32_t count = 1;
 
+    // 子の配列がある場合だけ、子孫の個数も合計する。
     if (node.contains("children") && node["children"].is_array()) {
         for (const auto& child : node["children"]) {
             count += CountPrefabNodes(child);
@@ -268,16 +295,20 @@ void RemovePrefabChildrenWithKnownIds(json& node, const std::unordered_set<std::
     auto& children = node["children"];
 
     for (auto it = children.begin(); it != children.end();) {
+        // 子がオブジェクトでなければ、継承できるIDは無いと見なす。
         const std::string childId = it->is_object() ? it->value("prefabObjectId", "") : "";
 
+        // Prefab本体に同じIDがある子は、この子以下を本体から継承できる。
         if (!childId.empty() && knownIds.find(childId) != knownIds.end()) {
             it = children.erase(it);
+        // IDが不明な子は残し、その内側に継承できる子があるか調べる。
         } else {
             RemovePrefabChildrenWithKnownIds(*it, knownIds);
             ++it;
         }
     }
 
+    // 差分として保持する子が全て無くなったら、空のchildrenも消す。
     if (children.empty()) {
         node.erase("children");
     }
@@ -293,11 +324,13 @@ bool RemovePrefabNodeRecursive(json& root, const std::string& sourceObjectId) {
     auto& children = root["children"];
 
     for (auto childIt = children.begin(); childIt != children.end(); ++childIt) {
+        // 調べている子のIDが一致した時点で、その枝を子一覧から消す。
         if (childIt->is_object() && childIt->value("prefabObjectId", "") == sourceObjectId) {
             children.erase(childIt);
             return true;
         }
 
+        // 子孫で対象を削除できたら、残りの枝を調べず呼び出し元へ成功を返す。
         if (RemovePrefabNodeRecursive(*childIt, sourceObjectId)) {
             return true;
         }
@@ -316,12 +349,14 @@ bool TakePrefabNodeRecursive(json& root, const std::string& sourceObjectId, json
     auto& children = root["children"];
 
     for (auto childIt = children.begin(); childIt != children.end(); ++childIt) {
+        // 一致する子を見つけたら値を引数へ移し、元の並びから該当項目を外す。
         if (childIt->is_object() && childIt->value("prefabObjectId", "") == sourceObjectId) {
             removedNode = std::move(*childIt);
             children.erase(childIt);
             return true;
         }
 
+        // 子孫からノードを取り出せたら、親の探索もその時点で終える。
         if (TakePrefabNodeRecursive(*childIt, sourceObjectId, removedNode)) {
             return true;
         }
@@ -335,10 +370,12 @@ bool InsertPrefabChild(json& root, const std::string& parentObjectId, std::size_
     // 指定順が子の総数を超える場合は末尾へ追加する。
     json* parent = FindSourceNodeRecursive(root, parentObjectId);
 
+    // 指定した親IDが見つからなければ、元の階層を変更せず失敗を返す。
     if (!parent) {
         return false;
     }
 
+    // 子を初めて持つか子の形式が不正な親には、配列を準備する。
     if (!parent->contains("children") || !(*parent)["children"].is_array()) {
         (*parent)["children"] = json::array();
     }
@@ -352,18 +389,22 @@ bool InsertPrefabChild(json& root, const std::string& parentObjectId, std::size_
 // nullを削除として扱い、Prefabの差分JSONを対象へ再帰的に適用します。
 void ApplyJsonMergePatch(json& target, const json& patch) {
     // nullは削除、オブジェクトは再帰的に統合し、それ以外は値を置き換える。
+    // オブジェクト以外のパッチは、対象の値全体を置き換える。
     if (!patch.is_object()) {
         target = patch;
         return;
     }
 
+    // オブジェクトの差分を適用するため、元の値が別の型なら空のオブジェクトへ置き換える。
     if (!target.is_object()) {
         target = json::object();
     }
 
     for (auto it = patch.begin(); it != patch.end(); ++it) {
+        // nullが指定されたキーは、値の設定ではなく削除を行う。
         if (it.value().is_null()) {
             target.erase(it.key());
+        // null以外は、対象キーの値へ同じ合成規則を再帰適用する。
         } else {
             ApplyJsonMergePatch(target[it.key()], it.value());
         }
@@ -373,11 +414,13 @@ void ApplyJsonMergePatch(json& target, const json& patch) {
 // 元Assetと編集後の値から、変更された項目だけの差分JSONを作ります。
 json BuildJsonMergePatch(const json& base, const json& edited, bool& changed) {
     // Prefab元との差分だけを保存し、元データの更新をインスタンスへ引き継げるようにする。
+    // 許容誤差を含めて同じ値なら、保存すべき上書きは無い。
     if (JsonValuesEqual(base, edited)) {
         changed = false;
         return json::object();
     }
 
+    // 片方でもオブジェクトでなければ、編集後の値を差分として丸ごと返す。
     if (!base.is_object() || !edited.is_object()) {
         changed = true;
         return edited;
@@ -387,6 +430,7 @@ json BuildJsonMergePatch(const json& base, const json& edited, bool& changed) {
 
     // 元にあって編集後にないキーはnullを削除命令として記録する。
     for (auto baseIt = base.begin(); baseIt != base.end(); ++baseIt) {
+        // 元のキーが編集後に存在しなければ、値を消すためにnullを記録する。
         if (!edited.contains(baseIt.key())) {
             patch[baseIt.key()] = nullptr;
         }
@@ -394,6 +438,7 @@ json BuildJsonMergePatch(const json& base, const json& edited, bool& changed) {
 
     for (auto editedIt = edited.begin(); editedIt != edited.end(); ++editedIt) {
         // オブジェクトの子要素だけ再帰的に比較し、値全体の複製を抑える。
+        // 旧状態に存在しないキーは比較を省き、値全体を追加する。
         if (!base.contains(editedIt.key())) {
             patch[editedIt.key()] = editedIt.value();
             continue;
@@ -402,6 +447,7 @@ json BuildJsonMergePatch(const json& base, const json& edited, bool& changed) {
         bool childChanged = false;
         json childPatch = BuildJsonMergePatch(base.at(editedIt.key()), editedIt.value(), childChanged);
 
+        // 既存キーは、再帰比較で変更を検出した場合だけ記録する。
         if (childChanged) {
             patch[editedIt.key()] = std::move(childPatch);
         }
@@ -416,18 +462,21 @@ bool EraseJsonPath(json& source, const std::string& path) {
     // 子の差分を消した結果、空になった親オブジェクトも畳む。
     const std::size_t separator = path.find('.');
 
+    // 区切りが残っていなければ、現在のオブジェクトから最後のキーを消す。
     if (separator == std::string::npos) {
         return source.is_object() && source.erase(path) > 0;
     }
 
     const std::string head = path.substr(0, separator);
 
+    // 途中のオブジェクトや子キーが無ければ、削除できる項目が無い。
     if (!source.is_object() || !source.contains(head)) {
         return false;
     }
 
     const bool erased = EraseJsonPath(source[head], path.substr(separator + 1));
 
+    // 再帰削除が成功して、その結果空になった親オブジェクトは畳む。
     if (erased && source.contains(head) && source[head].is_object() && source[head].empty()) {
         source.erase(head);
     }
@@ -441,6 +490,7 @@ void MigrateLegacyComponentOverrides(json& asset) {
     EnsurePrefabVariantFields(asset);
     json& nodeOverrides = asset["nodeOverrides"];
 
+    // 旧ノード差分の形式を扱えない場合は変換を続けない。
     if (!nodeOverrides.is_object()) {
         return;
     }
@@ -451,6 +501,7 @@ void MigrateLegacyComponentOverrides(json& asset) {
     for (auto nodeIt = nodeOverrides.begin(); nodeIt != nodeOverrides.end();) {
         json& patch = nodeIt.value();
 
+        // 部品差分がオブジェクトとして入っていないノードは読み飛ばす。
         if (!patch.is_object() || !patch.contains("components") || !patch["components"].is_object()) {
             ++nodeIt;
             continue;
@@ -460,6 +511,7 @@ void MigrateLegacyComponentOverrides(json& asset) {
 
         // 取り外し可能なComponentだけを対象にし、プロパティ差分は元のノードに残す。
         for (const EditorComponentDescriptor& component : registry->GetComponents()) {
+            // 有無を変更できる登録済み部品が、旧差分にもオブジェクトとして存在する場合だけ移行する。
             if (!component.removable || !component.serializedPresent || !component.setSerializedPresent ||
                 !serializedComponents.contains(component.typeId) ||
                 !serializedComponents[component.typeId].is_object()) {
@@ -475,17 +527,21 @@ void MigrateLegacyComponentOverrides(json& asset) {
                 componentPatch.erase("_editorPresent");
             }
 
+            // 移行後に値の差分が残らない部品は、旧オブジェクトから取り除く。
             if (componentPatch.empty()) {
                 serializedComponents.erase(component.typeId);
             }
         }
 
+        // 残る部品差分が無ければ、空のcomponentsキーを消す。
         if (serializedComponents.empty()) {
             patch.erase("components");
         }
 
+        // 元ノード側に何も残らなかった場合だけ、ノードの差分項目自体を削除する。
         if (patch.empty()) {
             nodeIt = nodeOverrides.erase(nodeIt);
+        // 別の変更が残っているノードは保持して、次の項目へ進む。
         } else {
             ++nodeIt;
         }
@@ -497,8 +553,10 @@ json NormalizePrefabAsset(const std::string& prefabName, const json& value) {
     // 旧形式のルート直書きを包み、以後の処理が単一のPrefab形式を読めるようにする。
     json asset;
 
+    // rootがオブジェクトとして保存されていれば、既にラッパー付きの形式として扱う。
     if (value.is_object() && value.contains("root") && value["root"].is_object()) {
         asset = value;
+    // 旧形式の直書きノードは、rootの値として包んでから整える。
     } else {
         asset["root"] = value;
     }
@@ -506,19 +564,23 @@ json NormalizePrefabAsset(const std::string& prefabName, const json& value) {
     asset["version"] = 3;
     std::string assetId = asset.value("assetId", "");
 
+    // 保存済みのAsset IDが空の場合だけ、名前から再現可能なIDを生成する。
     if (assetId.empty()) {
         assetId = MakeStableId("prefab", prefabName);
         asset["assetId"] = assetId;
     }
 
+    // 有効なルートオブジェクトが無ければ、空のルートを用意する。
     if (!asset.contains("root") || !asset["root"].is_object()) {
         asset["root"] = json::object();
     }
 
+    // 継承元のIDが無いか型が異なれば、継承元なしに揃える。
     if (!asset.contains("baseAssetId") || !asset["baseAssetId"].is_string()) {
         asset["baseAssetId"] = "";
     }
 
+    // 値の差分が定義されていなければ、空のプロパティ一覧を用意する。
     if (!asset.contains("propertyOverrides") || !asset["propertyOverrides"].is_object()) {
         asset["propertyOverrides"] = json::object();
     }
@@ -532,6 +594,7 @@ json NormalizePrefabAsset(const std::string& prefabName, const json& value) {
     for (std::size_t index = 0; index < asset["addedChildren"].size(); ++index) {
         json& entry = asset["addedChildren"][index];
 
+        // 追加した子の実体がJSONノードとして存在する場合だけ、追加位置を種にIDを補う。
         if (entry.is_object() && entry.contains("node") && entry["node"].is_object()) {
             EnsurePrefabObjectIds(entry["node"], assetId, "added/" + std::to_string(index));
         }
@@ -547,6 +610,7 @@ void CreateObjectFromPresetNode(
     engine::Object3D* parent,
     std::vector<std::unique_ptr<engine::Object3D>>& outObjects,
     const PrefabCreationContext* prefabContext) {
+    // 有効な定義と3D共通資源が揃う場合にだけ個体を作る。
     if (!node.is_object() || !common) {
         return;
     }
@@ -555,17 +619,21 @@ void CreateObjectFromPresetNode(
     const std::string enemyType = ResolveEnemyType(node);
     std::unique_ptr<engine::Object3D> object;
 
+    // 敵種別が解決できた場合は先に敵Factoryで派生型を生成する。
     if (!enemyType.empty()) {
         object = EnemyFactory::GetInstance()->CreateEnemy(enemyType, common);
     }
 
-    // 移動床を通常Objectとして生成すると、録画は動いても乗員を運ぶ処理が欠落する。
+    // 固有の更新処理が必要なギミックは、名前を解決して専用Factoryへ渡す。
     std::string gimmickType = node.value("gimmickType", std::string{});
+    // 直下にギミック種別が無い場合は、旧形式のparamも調べる。
     if (gimmickType.empty() && node.contains("param") && node["param"].is_object())
         gimmickType = node["param"].value("gimmickType", std::string{});
+    // まだ個体がなく、Gimmickと明示され種別も確認できた場合にFactoryを使う。
     if (!object && node.value("type", std::string{}) == "Gimmick" && !gimmickType.empty())
         object = GimmickFactory::GetInstance()->CreateGimmick(gimmickType, common);
 
+    // どちらのFactoryからも作れなければ、通常のObject3Dを初期化する。
     if (!object) {
         object = std::make_unique<engine::Object3D>();
         object->Initialize(common);
@@ -581,6 +649,7 @@ void CreateObjectFromPresetNode(
         object->SetClassName("Enemy");
         object->SetEnemyType(enemyType);
 
+        // 取り込んだJSONに敵用のパラメーターがなければ、戦闘値を適用する前に初期化する。
         if (!object->GetParameters().has_value()) {
             object->ResetParameters();
         }
@@ -593,7 +662,8 @@ void CreateObjectFromPresetNode(
 
     // 明示された当たり判定と衝突属性を優先し、旧テンプレートの省略値だけ補完します。
     if (!node.contains("collider") && !node.contains("collisionAttribute") && !node.contains("collisionMask"))
-        EditorObjectDefaults::ApplyGroundCollision(object.get());
+        editorObjectDefaults::ApplyGroundCollision(object.get());
+    // 保存名が文字列なら、用意されていればプリセット表示名を優先する。
     if (node.contains("name") && node["name"].is_string()) {
         object->SetName(node.value("presetDisplayName", node["name"].get<std::string>()));
     }
@@ -612,6 +682,7 @@ void CreateObjectFromPresetNode(
     // 親子関係と行列を確定してから所有権を出力配列へ移し、子ノードを再帰生成します。
     engine::Object3D* raw = object.get();
 
+    // 子として呼ばれた場合だけ、指定された実体を親に設定する。
     if (parent) {
         raw->SetParent(parent);
     }
@@ -620,6 +691,7 @@ void CreateObjectFromPresetNode(
     raw->UpdateWorldMatrix();
     outObjects.push_back(std::move(object));
 
+    // 子を持たない定義では、今の個体の登録を済ませて生成を終える。
     if (!node.contains("children") || !node["children"].is_array()) {
         return;
     }
@@ -635,12 +707,15 @@ json* FindSourceNodeRecursive(json& node, const std::string& sourceObjectId) {
         return nullptr;
     }
 
+    // 現在の固定IDが一致すれば、子へ進まず編集可能な参照を返す。
     if (node.value("prefabObjectId", "") == sourceObjectId) {
         return &node;
     }
 
+    // 子の配列があるときだけ再帰探索する。
     if (node.contains("children") && node["children"].is_array()) {
         for (auto& child : node["children"]) {
+            // 子孫で対象を見つけた時点で、残りの探索を打ち切る。
             if (json* result = FindSourceNodeRecursive(child, sourceObjectId)) {
                 return result;
             }
@@ -656,12 +731,15 @@ const json* FindSourceNodeRecursive(const json& node, const std::string& sourceO
         return nullptr;
     }
 
+    // 現在の固定IDが一致すれば、読み取り専用の参照を返す。
     if (node.value("prefabObjectId", "") == sourceObjectId) {
         return &node;
     }
 
+    // 参照できる子の配列がある場合だけ、その中を検索する。
     if (node.contains("children") && node["children"].is_array()) {
         for (const auto& child : node["children"]) {
+            // 子孫の一致を見つけたら、それ以降の枝は確認しない。
             if (const json* result = FindSourceNodeRecursive(child, sourceObjectId)) {
                 return result;
             }
@@ -671,16 +749,18 @@ const json* FindSourceNodeRecursive(const json& node, const std::string& sourceO
     return nullptr;
 }
 
+// Registryの情報を優先して、指定された編集プロパティの保存キーを返す。
 const char* GetSerializedPropertyKey(const std::string& propertyPath) {
     EditorPropertyRegistry* registry = EditorPropertyRegistry::GetInstance();
     registry->InitializeBuiltInProperties();
 
+    // Registryに項目が存在する場合は、登録された保存パスの有無を優先し旧定義へは進まない。
     if (const EditorPropertyDescriptor* descriptor = registry->Find(propertyPath)) {
         return descriptor->serializedPath.empty() ? nullptr : descriptor->serializedPath.c_str();
     }
 
-    // Registry導入前の外部Propertyに対する移行期間用Fallbackです。
-    // カメラとGameplayの古い保存キーもここで読み書きできる状態を保ちます。
+    // 以下の互換表では、Registryに無い既知の編集パスに一致した場合だけ保存キーを返す。
+    // カメラやゲーム設定も、各行の左の編集パスから右のJSONパスへ対応させる。
     if (propertyPath == "identity.name")
         return "name";
     if (propertyPath == "identity.tag")
@@ -845,11 +925,12 @@ const char* GetSerializedPropertyKey(const std::string& propertyPath) {
         return "param.startActive";
     if (propertyPath == "gameplay.returnOnOff")
         return "param.returnOnOff";
+    // Registryにも互換表にも無いキーは、保存パス未対応として返す。
     return nullptr;
 }
 
 const char* GetCanonicalComponentPropertyKey(const std::string& propertyPath) {
-    // 旧形式の編集プロパティ名を現行Componentの保存パスへ写す。
+    // 以下の既知の編集パスに一致する場合だけ、現行部品の保存パスを返して旧キーと同期できるようにする。
     if (propertyPath == "component.particle.cpu")
         return "components.ParticleEmitter.cpuParticle";
     if (propertyPath == "component.particle.gpu")
@@ -870,6 +951,7 @@ const char* GetCanonicalComponentPropertyKey(const std::string& propertyPath) {
         return "components.GameplayLink.eventId";
     if (propertyPath == "component.link.targetId")
         return "components.GameplayLink.targetId";
+    // 同期する現行部品のキーが定義されていない項目には、追加の書き込み先を返さない。
     return nullptr;
 }
 
@@ -882,12 +964,14 @@ const json* FindJsonPath(const json& source, const std::string& path) {
         const std::size_t separator = path.find('.', begin);
         const std::string key = path.substr(begin, separator == std::string::npos ? std::string::npos : separator - begin);
 
+        // 途中がオブジェクトではないかキーが無い場合は、参照先を得られない。
         if (!current->is_object() || !current->contains(key)) {
             return nullptr;
         }
 
         current = &current->at(key);
 
+        // 区切りが尽きたら、移動した直後の値が指定された保存先になる。
         if (separator == std::string::npos) {
             return current;
         }
@@ -907,12 +991,14 @@ json* EnsureJsonPath(json& source, const std::string& path) {
         const std::size_t separator = path.find('.', begin);
         const std::string key = path.substr(begin, separator == std::string::npos ? std::string::npos : separator - begin);
 
+        // 最後のキーでは、値を書き込める要素への参照を返す。
         if (separator == std::string::npos) {
             return &(*current)[key];
         }
 
         json& next = (*current)[key];
 
+        // 途中の要素がオブジェクトになっていなければ、子キーを保持できる形へ揃える。
         if (!next.is_object()) {
             next = json::object();
         }
@@ -929,6 +1015,7 @@ json GetMissingSourceDefault(const std::string& propertyPath) {
     EditorPropertyRegistry* registry = EditorPropertyRegistry::GetInstance();
     registry->InitializeBuiltInProperties();
 
+    // Registryが項目を持つ場合は、そこに示された既定値を採用する。
     if (const EditorPropertyDescriptor* descriptor = registry->Find(propertyPath)) {
         return descriptor->defaultValue;
     }
@@ -940,6 +1027,7 @@ json GetMissingSourceDefault(const std::string& propertyPath) {
         return false;
     }
 
+    // 素材や動作の識別名が省略された場合、その素材や動作なしを表す空文字を返す。
     if (propertyPath == "component.particle.cpu" ||
         propertyPath == "component.particle.gpu" ||
         propertyPath == "component.meshEffect.primary" ||
@@ -957,6 +1045,7 @@ json ReadSourceProperty(const json& sourceNode, const std::string& propertyPath)
     // Registryで決まる保存Pathを解決し、旧Assetで省略された値は型ごとの既定値に戻します。
     const char* key = GetSerializedPropertyKey(propertyPath);
 
+    // 保存パスを解決できない項目は、値を取得できないためnullを返す。
     if (!key) {
         return json();
     }
@@ -969,12 +1058,14 @@ json ReadSourceProperty(const json& sourceNode, const std::string& propertyPath)
 bool WriteSourceProperty(json& sourceNode, const std::string& propertyPath, const json& value) {
     const char* key = GetSerializedPropertyKey(propertyPath);
 
+    // 対応する保存キーが無ければAssetを変更しない。
     if (!key) {
         return false;
     }
 
     json* target = EnsureJsonPath(sourceNode, key);
 
+    // パスの作成後も書き込み先が得られない場合は変更を適用できない。
     if (!target) {
         return false;
     }
@@ -983,6 +1074,7 @@ bool WriteSourceProperty(json& sourceNode, const std::string& propertyPath, cons
 
     // 旧キーと現行コンポーネントキーの両方がある項目は同じ値に揃え、読み込む形式による差を防ぐ。
     if (const char* canonicalKey = GetCanonicalComponentPropertyKey(propertyPath)) {
+        // 現行の保存先を作成できれば、先に書いた互換キーと同じ値を設定する。
         if (json* canonicalTarget = EnsureJsonPath(sourceNode, canonicalKey)) {
             *canonicalTarget = value;
         }
@@ -1007,6 +1099,7 @@ void RemoveComponentPropertyOverrides(
     json& asset,
     const std::string& sourceObjectId,
     const std::string& componentTypeId) {
+    // 指定ノードの差分オブジェクトを取得できない場合は、消すプロパティがない。
     if (!asset.contains("propertyOverrides") || !asset["propertyOverrides"].is_object() ||
         !asset["propertyOverrides"].contains(sourceObjectId) ||
         !asset["propertyOverrides"][sourceObjectId].is_object()) {
@@ -1017,11 +1110,13 @@ void RemoveComponentPropertyOverrides(
     json& objectOverrides = asset["propertyOverrides"][sourceObjectId];
 
     for (const EditorPropertyDescriptor* property : registry->GetPropertiesForComponent(componentTypeId)) {
+        // 登録済みのプロパティが有効なら、該当部品の差分だけを消す。
         if (property) {
             objectOverrides.erase(property->path);
         }
     }
 
+    // 対象ノードに他の差分が残らない場合は、空のノード項目も消す。
     if (objectOverrides.empty()) {
         asset["propertyOverrides"].erase(sourceObjectId);
     }
@@ -1033,28 +1128,33 @@ bool WriteComponentStateFromObject(
     engine::Object3D* object,
     const EditorComponentDescriptor& component,
     bool present) {
+    // 実体か有無の保存を担当する処理が欠けていれば失敗を返す。
     if (!object || !component.setSerializedPresent) {
         return false;
     }
 
     EditorPropertyRegistry* registry = EditorPropertyRegistry::GetInstance();
 
+    // 部品を持つ状態を保存する場合は、先に現在の値を保存する。
     if (present) {
         // 追加したComponentのPrefab上書き対象だけを保存し、実行時専用値を混ぜない。
         for (const EditorPropertyDescriptor* property : registry->GetPropertiesForComponent(component.typeId)) {
-            if (!property || !HasEditorPropertyFlag(property->flags, EditorPropertyFlags::PrefabOverride) ||
+            // Prefabで上書きでき、保存パスが割り当てられたプロパティだけを書き出す。
+            if (!property || !HasEditorPropertyFlag(property->flags, EditorPropertyFlags::kPrefabOverride) ||
                 property->serializedPath.empty()) {
                 continue;
             }
 
             const json value = registry->GetValue(object, property->path);
 
+            // 値を取得できたプロパティだけ、Prefabの保存パスへ書く。
             if (!value.is_null()) {
                 WriteSourceProperty(sourceNode, property->path, value);
             }
         }
     }
 
+    // 値の書き込みを終えてから、部品が存在するかを保存する。
     component.setSerializedPresent(sourceNode, present);
     return true;
 }
@@ -1064,6 +1164,7 @@ bool ApplySerializedComponentState(
     engine::Object3D* object,
     const json& sourceNode,
     const EditorComponentDescriptor& component) {
+    // 実体と保存された有無の照会処理が揃わない場合は適用を行えない。
     if (!object || !component.serializedPresent) {
         return false;
     }
@@ -1077,19 +1178,23 @@ bool ApplySerializedComponentState(
         const bool changed = desiredPresent
             ? registry->AddComponent(object, component.typeId)
             : registry->RemoveComponent(object, component.typeId);
+        // 部品の追加または削除に失敗したら、残るプロパティは適用しない。
         if (!changed) {
             return false;
         }
     }
 
+    // 最終状態に部品が存在する場合だけ、保存値を実体へ反映する。
     if (desiredPresent) {
         for (const EditorPropertyDescriptor* property : registry->GetPropertiesForComponent(component.typeId)) {
+            // 保存先の無いプロパティや無効な定義は復元できないため省く。
             if (!property || property->serializedPath.empty()) {
                 continue;
             }
 
             const json value = ReadSourceProperty(sourceNode, property->path);
 
+            // 参照値か既定値がnull以外の場合だけ、実体の値を上書きする。
             if (!value.is_null()) {
                 registry->SetValue(object, property->path, value);
             }
@@ -1099,12 +1204,12 @@ bool ApplySerializedComponentState(
     return true;
 }
 
-// Registryで扱うComponentの旧存在マーカーを保存ノードから取り除きます。
 // 登録済み部品の有無は個別に差分化するため、汎用のJSON差分に旧マーカーとバージョンを含めない。
 void RemoveKnownComponentPresenceMarkers(json& node) {
     EditorPropertyRegistry* registry = EditorPropertyRegistry::GetInstance();
 
     for (const EditorComponentDescriptor& component : registry->GetComponents()) {
+        // 有無を差分として扱える部品だけ、汎用差分から旧マーカーと形式番号を除く。
         if (IsPrefabComponentDescriptor(component)) {
             EraseJsonPath(node, "components." + component.typeId + "._editorPresent");
             EraseJsonPath(node, "components." + component.typeId + ".version");
@@ -1125,6 +1230,7 @@ void RegisterPrefabAssetTransaction(
     const json& before,
     const json& after,
     const std::string& label) {
+    // 管理オブジェクトが無いか実際の差が無い場合は、履歴に項目を増やさない。
     if (!manager || before == after) {
         return;
     }
@@ -1144,6 +1250,7 @@ void RegisterPrefabAssetTransaction(
         manager->SavePrefabs();
     };
 
+    // 前後のAsset状態を保持するUndoとRedoを、エディターの履歴へ渡す。
     EditorTransactionManager::GetInstance()->Register(std::move(transaction));
 }
 }

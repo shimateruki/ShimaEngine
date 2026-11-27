@@ -4,7 +4,7 @@
 #include "Object3D.h"
 
 // 前方宣言
-class CollisionManager;
+namespace engine { class CollisionManager; }
 
 /// <summary>
 /// ゲーム内 Object3D の追加、更新、描画、削除予約をまとめて扱う管理クラス。

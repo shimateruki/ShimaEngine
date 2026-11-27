@@ -9,7 +9,7 @@
 
 #include <algorithm>
 
-namespace Object3DTransformUtils {
+namespace object3DTransformUtils {
 
 // 行列から移動・倍率・回転を復元し、親変更と実行時コピーで同じ姿勢を使います。
 inline void ApplyMatrixToTransform(Transform& transform, const engine::Matrix4x4& matrix) {
@@ -45,4 +45,4 @@ inline void ApplyMatrixToTransform(Transform& transform, const engine::Matrix4x4
     transform.isQuaternionMaster = true;
 }
 
-} // namespace Object3DTransformUtils
+} // namespace object3DTransformUtils

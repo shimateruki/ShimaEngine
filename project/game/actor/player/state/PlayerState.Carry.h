@@ -8,8 +8,10 @@
 // 主な入口：Enter / Update / Exit
 class PlayerStateCarry : public IAnimationState {
   public:
+    // 運搬モードに入り、保持対象の元の大きさを退避する。
     void Enter(Player* player) override;
 
+    // 経過秒から保持対象の揺れを計算し、プレイヤーの頭上へ配置する。
     void Update(Player* player, float deltaTime) override;
 
     // 運搬中に変えた敵の縮尺を戻す。投げた後の状態へ変形を持ち越さない。

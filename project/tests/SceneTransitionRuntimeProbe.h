@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #ifdef USE_IMGUI
 #include "SceneManager.h"
@@ -33,20 +34,20 @@
 
 // 明示的に環境変数を設定した実行だけで、実際の更新・GPU描画を通して遷移を検証します。
 // 通常起動ではシーン選択、エフェクト、保存データに介入しません。
-namespace SceneTransitionRuntimeProbe {
+namespace sceneTransitionRuntimeProbe {
 inline const std::string& LogPath() {
-    static const std::string path = [] {
+    static const std::string kPath = [] {
         char value[2048]{};
         const auto length = GetEnvironmentVariableA("CG2_SCENE_TRANSITION_TEST_LOG", value, sizeof(value));
         return length && length < sizeof(value) ? std::string(value) : std::string{};
     }();
-    return path;
+    return kPath;
 }
 inline bool Enabled() { return !LogPath().empty(); }
 inline void AfterDraw(SceneManager* manager, DebugEditor* editor = nullptr) {
     if (!Enabled() || !manager)
         return;
-    if (!SharedRenderCommonsRuntimeProbe::CheckAfterDraw(manager, LogPath())) return;
+    if (!sharedRenderCommonsRuntimeProbe::CheckAfterDraw(manager, LogPath())) return;
     if (StatusPreviewRuntimeProbe::Enabled()) {
         StatusPreviewRuntimeProbe::AfterDraw(manager, editor, LogPath());
         return;
@@ -59,96 +60,96 @@ inline void AfterDraw(SceneManager* manager, DebugEditor* editor = nullptr) {
         AttackPreviewRegistryRuntimeProbe::AfterDraw(manager, editor, LogPath());
         return;
     }
-    if (EditorEventRuntimeProbe::Enabled()) {
-        EditorEventRuntimeProbe::AfterDraw(manager, editor, LogPath());
+    if (editorEventRuntimeProbe::Enabled()) {
+        editorEventRuntimeProbe::AfterDraw(manager, editor, LogPath());
         return;
     }
-    if (CameraBarrierRuntimeProbe::Enabled()) {
-        CameraBarrierRuntimeProbe::AfterDraw(manager, LogPath());
+    if (cameraBarrierRuntimeProbe::Enabled()) {
+        cameraBarrierRuntimeProbe::AfterDraw(manager, LogPath());
         return;
     }
-    if (CarryHookRuntimeProbe::Enabled()) {
-        CarryHookRuntimeProbe::AfterDraw(manager, LogPath());
+    if (carryHookRuntimeProbe::Enabled()) {
+        carryHookRuntimeProbe::AfterDraw(manager, LogPath());
         return;
     }
-    if (EnemyProjectileRuntimeProbe::Enabled()) {
-        EnemyProjectileRuntimeProbe::AfterDraw(manager,LogPath());
+    if (enemyProjectileRuntimeProbe::Enabled()) {
+        enemyProjectileRuntimeProbe::AfterDraw(manager,LogPath());
         return;
     }
-    if (StarCoinRuntimeProbe::Enabled()) {
-        StarCoinRuntimeProbe::AfterDraw(manager,LogPath());
+    if (starCoinRuntimeProbe::Enabled()) {
+        starCoinRuntimeProbe::AfterDraw(manager,LogPath());
         return;
     }
-    if (GoalPresentationRuntimeProbe::Enabled()) {
-        GoalPresentationRuntimeProbe::AfterDraw(manager,LogPath());
+    if (goalPresentationRuntimeProbe::Enabled()) {
+        goalPresentationRuntimeProbe::AfterDraw(manager,LogPath());
         return;
     }
-    if (SdlStickRuntimeProbe::Enabled()) {
-        SdlStickRuntimeProbe::AfterDraw(LogPath());
+    if (sdlStickRuntimeProbe::Enabled()) {
+        sdlStickRuntimeProbe::AfterDraw(LogPath());
         return;
     }
-    if (GateEntryRuntimeProbe::Enabled()) {
-        GateEntryRuntimeProbe::AfterDraw(manager, LogPath());
+    if (gateEntryRuntimeProbe::Enabled()) {
+        gateEntryRuntimeProbe::AfterDraw(manager, LogPath());
         return;
     }
-    if (CannonDamageRuntimeProbe::Enabled()) {
-        CannonDamageRuntimeProbe::AfterDraw(manager, LogPath());
+    if (cannonDamageRuntimeProbe::Enabled()) {
+        cannonDamageRuntimeProbe::AfterDraw(manager, LogPath());
         return;
     }
-    if (TutorialExitGuideRuntimeProbe::Enabled()) {
-        TutorialExitGuideRuntimeProbe::AfterDraw(manager, LogPath());
+    if (tutorialExitGuideRuntimeProbe::Enabled()) {
+        tutorialExitGuideRuntimeProbe::AfterDraw(manager, LogPath());
         return;
     }
-    if (TutorialPromptRuntimeProbe::Enabled()) {
-        TutorialPromptRuntimeProbe::AfterDraw(manager, LogPath());
+    if (tutorialPromptRuntimeProbe::Enabled()) {
+        tutorialPromptRuntimeProbe::AfterDraw(manager, LogPath());
         return;
     }
-    if (PlayerLocomotionRuntimeProbe::Enabled()) {
-        PlayerLocomotionRuntimeProbe::AfterDraw(manager, LogPath());
+    if (playerLocomotionRuntimeProbe::Enabled()) {
+        playerLocomotionRuntimeProbe::AfterDraw(manager, LogPath());
         return;
     }
-    if (PlayerAttackRuntimeProbe::Enabled()) {
-        PlayerAttackRuntimeProbe::AfterDraw(manager, LogPath());
+    if (playerAttackRuntimeProbe::Enabled()) {
+        playerAttackRuntimeProbe::AfterDraw(manager, LogPath());
         return;
     }
-    if (GimmickPropertyRuntimeProbe::Enabled()) {
-        GimmickPropertyRuntimeProbe::AfterDraw(manager, editor, LogPath());
+    if (gimmickPropertyRuntimeProbe::Enabled()) {
+        gimmickPropertyRuntimeProbe::AfterDraw(manager, editor, LogPath());
         return;
     }
-    if (CinematicRuntimeProbe::Enabled()) {
-        CinematicRuntimeProbe::AfterDraw(manager, LogPath());
+    if (cinematicRuntimeProbe::Enabled()) {
+        cinematicRuntimeProbe::AfterDraw(manager, LogPath());
         return;
     }
-    if (RaftRuntimeProbe::Enabled()) {
-        RaftRuntimeProbe::AfterDraw(manager, LogPath());
+    if (raftRuntimeProbe::Enabled()) {
+        raftRuntimeProbe::AfterDraw(manager, LogPath());
         return;
     }
     if (AttackEditorRuntimeProbe::Enabled()) {
         AttackEditorRuntimeProbe::AfterDraw(manager, editor, LogPath());
         return;
     }
-    if (AttackLifecycleRuntimeProbe::Enabled()) {
-        AttackLifecycleRuntimeProbe::AfterDraw(manager, LogPath());
+    if (attackLifecycleRuntimeProbe::Enabled()) {
+        attackLifecycleRuntimeProbe::AfterDraw(manager, LogPath());
         return;
     }
     static std::ofstream log(LogPath(), std::ios::trunc);
-    static ULONGLONG phaseStarted = GetTickCount64();
-    static int step = 0;
-    static int frames = 0;
-    static bool finished = false;
-    static uint64_t generation = 0;
-    if (finished)
+    static ULONGLONG sPhaseStarted = GetTickCount64();
+    static std::int32_t sStep = 0;
+    static std::int32_t sFrames = 0;
+    static bool sFinished = false;
+    static uint64_t sGeneration = 0;
+    if (sFinished)
         return;
     auto finish = [&](const char* message) {
         log << message << std::endl;
-        finished = true;
+        sFinished = true;
 
         // 検証専用プロセスなので保存確認UIを挟まず、通常のFinalizeへ進めます。
         WinApp::CloseNow();
     };
 
     // 複数回の実アセット読込を合算せず、各遷移が進まなくなった場合を検出します。
-    if (GetTickCount64() - phaseStarted > 180000) {
+    if (GetTickCount64() - sPhaseStarted > 180000) {
         finish("FAIL: transition timeout");
         return;
     }
@@ -156,17 +157,17 @@ inline void AfterDraw(SceneManager* manager, DebugEditor* editor = nullptr) {
         return;
     const char* normalScenes[] = {"TITLE", "GAMEPLAY", "SELECT", "GAMEPLAY", "GAMEPLAY"};
     const char* commonScenes[] = {"TITLE", "GAMEPLAY", "SELECT", "GAMEOVER", "TUTORIAL", "SCENE_EDITOR", "GAMEPLAY", "GAMEPLAY"};
-    const std::span<const char* const> scenes = SharedRenderCommonsRuntimeProbe::Enabled()
+    const std::span<const char* const> scenes = sharedRenderCommonsRuntimeProbe::Enabled()
         ? std::span<const char* const>(commonScenes) : std::span<const char* const>(normalScenes);
-    if (manager->GetCurrentSceneName() != scenes[step]) {
+    if (manager->GetCurrentSceneName() != scenes[sStep]) {
         finish("FAIL: unexpected scene");
         return;
     }
-    if (frames == 0) {
-        if (generation == manager->GetSceneGeneration())
+    if (sFrames == 0) {
+        if (sGeneration == manager->GetSceneGeneration())
             return;
-        generation = manager->GetSceneGeneration();
-        log << "ENTER " << step << ' ' << scenes[step] << " generation=" << generation << std::endl;
+        sGeneration = manager->GetSceneGeneration();
+        log << "ENTER " << sStep << ' ' << scenes[sStep] << " generation=" << sGeneration << std::endl;
         for (const auto& effect : MeshEffectManager::GetInstance()->GetActiveEffects()) {
             if (effect && effect->GetName() == "SceneTransitionLifetimeProbe") {
                 finish("FAIL: previous scene effect survived its owner");
@@ -182,20 +183,20 @@ inline void AfterDraw(SceneManager* manager, DebugEditor* editor = nullptr) {
         }
         MeshEffectManager::GetInstance()->GetActiveEffects().back()->SetName("SceneTransitionLifetimeProbe");
     }
-    if (++frames < 120)
+    if (++sFrames < 120)
         return;
-    log << "DRAWN " << scenes[step] << " frames=" << frames
+    log << "DRAWN " << scenes[sStep] << " frames=" << sFrames
         << " activeMesh=" << MeshEffectManager::GetInstance()->GetActiveEffects().size() << std::endl;
-    if (++step == static_cast<int>(scenes.size())) {
+    if (++sStep == static_cast<std::int32_t>(scenes.size())) {
         finish("PASS: loading transitions and direct reload rendered successfully");
         return;
     }
-    frames = 0;
-    phaseStarted = GetTickCount64();
-    if (step == static_cast<int>(scenes.size()) - 1)
-        manager->ChangeSceneWithoutLoading(scenes[step]);
-    else manager->ChangeScene(scenes[step]);
-    log << "REQUEST " << scenes[step] << std::endl;
+    sFrames = 0;
+    sPhaseStarted = GetTickCount64();
+    if (sStep == static_cast<std::int32_t>(scenes.size()) - 1)
+        manager->ChangeSceneWithoutLoading(scenes[sStep]);
+    else manager->ChangeScene(scenes[sStep]);
+    log << "REQUEST " << scenes[sStep] << std::endl;
 }
 }
 #endif

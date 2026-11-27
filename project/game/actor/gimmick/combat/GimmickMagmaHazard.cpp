@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 
+// 静的なマグマ面の表示と、プレイヤー用のトリガー範囲を初期化します。
 void GimmickMagmaHazard::Initialize(engine::Object3DCommon* common, const std::string& modelName) {
     BaseGimmick::Initialize(common, modelName);
 
@@ -21,18 +22,19 @@ void GimmickMagmaHazard::Initialize(engine::Object3DCommon* common, const std::s
     SetEmissive(1.8f);
     SetRoughness(0.38f);
     SetMetallic(0.0f);
-    SetCollisionAttribute(CollisionCategories::Get("trigger"));
-    SetCollisionMask(CollisionCategories::Get("player"));
+    SetCollisionAttribute(engine::collisionCategories::Get("trigger"));
+    SetCollisionMask(engine::collisionCategories::Get("player"));
 
     // マグマ面は移動しないため、巨大Colliderを静的グリッドへ一度だけ登録する。
     SetStatic(true);
 
     engine::Object3D::ColliderConfig collider;
-    collider.type = ColliderType::Obb;
+    collider.type = engine::ColliderType::kObb;
     collider.center = {0.0f, 0.0f, 0.0f};
     collider.size = {1.0f, 1.0f, 1.0f};
     SetColliderConfig(collider);
 
+    // 配置データがまだ無ければ、共有の設定欄を生成する。
     if (!GetParameters().has_value()) {
         ResetParameters();
     }
@@ -40,7 +42,7 @@ void GimmickMagmaHazard::Initialize(engine::Object3DCommon* common, const std::s
     SetParameter(&engine::EntityParameter::speed, 12.0f);
     SetParameter(&engine::EntityParameter::interval, 0.8f);
 
-    // 編集項目の宣言です。動作処理と旧paramの保存キーは変更しません。
+    // 既存の配置・編集との互換用に speed と interval を公開する。実際に液面に触れた判定は Player 側で行う。
     using Self = GimmickMagmaHazard;
     engine::ObjectPropertyDefinition<Self> properties(*this, kTypeId, "マグマダメージ床",
         "触れたプレイヤーを炎上させ、上方向へ弾き返します。");
@@ -74,7 +76,7 @@ void GimmickMagmaHazard::Update(float deltaTime) {
         initializedForPlay_ = true;
     }
 
-    // 待ち時間を進めながら、描画は基準の発光に緩い周期を掛けます。
+    // 旧設定と同じクールダウン値を減らし、基準発光にはゆっくり変わる周期を掛ける。
     damageCooldownTimer_ = (std::max)(0.0f, damageCooldownTimer_ - deltaTime);
     visualTimer_ += deltaTime;
     const float pulse = 0.92f + std::sin(visualTimer_ * 2.6f) * 0.08f;
@@ -84,18 +86,17 @@ void GimmickMagmaHazard::Update(float deltaTime) {
 }
 
 bool GimmickMagmaHazard::OnCollision(engine::Object3D* /*other*/) {
-    // 液面接触による死亡はPlayer側で波の高さも含めて判定します。
-    // 旧Colliderによるダメージ・炎上・ノックバックを重ねないようにします。
+    // 液面の波を含めた死亡判定はPlayer側が担当する。ここでは接触を受け取ったことだけ返す。
     return true;
 }
 
 float GimmickMagmaHazard::GetDamage() const {
-    // 共通パラメータのspeed欄をダメージ量として使い、負値は0へ丸める。
+    // 共通パラメーターのspeedを0以上のダメージ設定値として返す。設定が無ければ12。
     return GetParameters().has_value() ? (std::max)(0.0f, GetParameters()->speed) : 12.0f;
 }
 
 float GimmickMagmaHazard::GetDamageInterval() const {
-    // 接触中の連続被弾を防ぐため、間隔は最低0.1秒に制限する。
+    // 共通パラメーターのintervalを0.1秒以上の設定値として返す。設定が無ければ0.8秒。
     return GetParameters().has_value() ? (std::max)(0.1f, GetParameters()->interval) : 0.8f;
 }
 

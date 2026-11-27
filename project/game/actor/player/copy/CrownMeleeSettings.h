@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "json.hpp"
 #include <array>
 #include <algorithm>
@@ -26,7 +27,7 @@ struct CrownMeleeSettings {
         };
         // 三段で共通する範囲を使いつつ、非有限値は段ごとの既定値へ戻す。
         const CrownMeleeSettings defaults;
-        for (int i = 0; i < 3; ++i) {
+        for (std::int32_t i = 0; i < 3; ++i) {
             clamp(duration[i], 0.30f, 1.2f, defaults.duration[i]);
             clamp(reach[i], 2.0f, 6.0f, defaults.reach[i]);
             clamp(damage[i], 1.0f, 100.0f, defaults.damage[i]);
@@ -39,10 +40,11 @@ struct CrownMeleeSettings {
         clamp(trailWidth, 0.15f, 1.2f, 0.64f);
         clamp(trailLife, 0.06f, 0.25f, 0.14f);
     }
-    // 設定JSONを読み込む。全項目を読み取れたときだけ、補正済みの設定に差し替える。
+    // 設定JSONを一時領域へ読み込む。省略された値は段ごとの既定値を使い、有効な設定だけを反映する。
     void Load() {
         try {
             std::ifstream in(kConfigPath);
+            // ファイルを開けなければ、現在のコンボ設定を保ったまま終了する。
             if (!in) return;
             nlohmann::json j; in >> j;
             CrownMeleeSettings next;
@@ -59,6 +61,7 @@ struct CrownMeleeSettings {
     }
     // 現在の設定を専用JSONへ保存し、書き込みが成功したかを返す。
     bool Save() const {
+        // 画面上の調整値は変更せず、書き出すコピーに範囲補正を掛ける。
         auto safe = *this; safe.Sanitize();
         nlohmann::json j;
 #define WRITE_MELEE(field) j[#field] = safe.field
@@ -68,22 +71,25 @@ struct CrownMeleeSettings {
 #undef WRITE_MELEE
         std::error_code error;
         std::filesystem::create_directories(std::filesystem::path(kConfigPath).parent_path(), error);
+        // 親フォルダーを作れない場合は、設定ファイルへ触れず失敗を返す。
         if (error) return false;
         std::ofstream out(kConfigPath);
+        // 設定の出力先を開けない場合は、JSONを書き込めない。
         if (!out) return false;
         out << j.dump(2);
         return out.good();
     }
     static CrownMeleeSettings& Get() {
-        static CrownMeleeSettings settings = [] { CrownMeleeSettings value; value.Load(); return value; }();
-        return settings;
+        static CrownMeleeSettings sSettings = [] { CrownMeleeSettings value; value.Load(); return value; }();
+        return sSettings;
     }
 #ifdef USE_IMGUI
     void DrawEditor() {
+        // 見出しが閉じている間は、三段の調整欄と保存操作を出さない。
         if (!ImGui::CollapsingHeader("覇王・近接3段コンボの設定", ImGuiTreeNodeFlags_DefaultOpen)) return;
         // 段ごとに同じラベルを使うので、PushIDで別々の入力欄として登録する。
         const char* names[]{"1段目・横薙ぎ", "2段目・斬り上げ", "3段目・叩きつけ"};
-        for (int i = 0; i < 3; ++i) {
+        for (std::int32_t i = 0; i < 3; ++i) {
             ImGui::PushID(i);
             ImGui::TextUnformatted(names[i]);
             ImGui::DragFloat("動作時間", &duration[i], 0.01f, 0.30f, 1.2f, "%.2f 秒");
@@ -98,9 +104,11 @@ struct CrownMeleeSettings {
         ImGui::DragFloat("軌跡の幅", &trailWidth, 0.01f, 0.15f, 1.2f);
         ImGui::DragFloat("軌跡の残る時間", &trailLife, 0.01f, 0.06f, 0.25f, "%.2f 秒");
         Sanitize();
-        static int result = 0;
-        if (ImGui::Button("近接コンボの設定を保存")) result = Save() ? 1 : -1;
-        if (result) ImGui::TextUnformatted(result > 0 ? "保存しました" : "保存に失敗しました");
+        static std::int32_t sResult = 0;
+        // 保存ボタンを押した場合に限り、現在の調整値を保存して結果を保持する。
+        if (ImGui::Button("近接コンボの設定を保存")) sResult = Save() ? 1 : -1;
+        // まだ保存を試していない値0では何も表示せず、結果があれば成功・失敗を表示する。
+        if (sResult) ImGui::TextUnformatted(sResult > 0 ? "保存しました" : "保存に失敗しました");
     }
 #endif
 };

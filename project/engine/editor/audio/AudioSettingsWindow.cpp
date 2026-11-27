@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "AudioSettingsWindow.h"
 
 #include "AudioPlayer.h"
@@ -25,6 +26,7 @@ void AudioSettingsWindow::Initialize(DebugEditor* editor) {
 void AudioSettingsWindow::DrawAudioEventEditor() {
     // 音源ファイルとイベント設定を分けて扱い、イベント側の調整値を編集します。
 #ifdef USE_IMGUI
+    // 設定欄が閉じている間は、このパネルの項目を描かない。
     if (!ImGui::CollapsingHeader(
         ICON_FA_VOLUME_UP " Audio Event",
         ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -39,8 +41,10 @@ void AudioSettingsWindow::DrawAudioEventEditor() {
     std::vector<std::string> eventFiles;
     std::error_code error;
 
+    // イベント設定のフォルダーが確認できたときだけ、候補ファイルを探す。
     if (std::filesystem::exists(directory, error) && !error) {
         for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+            // イベント設定として選べる候補は、拡張子が .json の通常ファイルに絞る。
             if (entry.is_regular_file() && entry.path().extension() == ".json") {
                 eventFiles.push_back(entry.path().filename().string());
             }
@@ -49,10 +53,12 @@ void AudioSettingsWindow::DrawAudioEventEditor() {
 
     std::sort(eventFiles.begin(), eventFiles.end());
 
+    // 選択欄が開いている間だけ、ファイル候補を表示する。
     if (ImGui::BeginCombo("Event一覧", audioEventFileName_)) {
         for (const std::string& fileName : eventFiles) {
             const bool selected = fileName == audioEventFileName_;
 
+            // 候補が選ばれたら、そのパスを読み込み・保存用の入力欄に入れる。
             if (ImGui::Selectable(fileName.c_str(), selected)) {
                 strncpy_s(
                     audioEventFileName_,
@@ -61,6 +67,7 @@ void AudioSettingsWindow::DrawAudioEventEditor() {
                     _TRUNCATE);
             }
 
+            // 現在の設定ファイルに対応する行を既定のフォーカスにする。
             if (selected) {
                 ImGui::SetItemDefaultFocus();
             }
@@ -77,12 +84,14 @@ void AudioSettingsWindow::DrawAudioEventEditor() {
     // 入力名に拡張子がなければ JSON を補い、読込・保存・試聴で同じ Path を使います。
     std::filesystem::path eventPath =
         directory / std::filesystem::path(audioEventFileName_);
+    // 拡張子を省略された入力には、イベント設定用の .json を補う。
     if (eventPath.extension().empty()) {
         eventPath.replace_extension(".json");
     }
 
     const std::string eventPathString = eventPath.generic_string();
 
+    // 読み込みを押した場合は、入力された設定ファイルを開き、成否を表示する。
     if (ImGui::Button(ICON_FA_UPLOAD " 読込##AudioEvent")) {
         std::string message;
         const bool loaded = AudioEventSystem::GetInstance()->LoadEvent(
@@ -94,6 +103,7 @@ void AudioSettingsWindow::DrawAudioEventEditor() {
 
     ImGui::SameLine();
 
+    // 保存を押した場合は、入力先に現在の設定を書き出し、成否を表示する。
     if (ImGui::Button(ICON_FA_SAVE " 保存##AudioEvent")) {
         std::string message;
         const bool saved = AudioEventSystem::GetInstance()->SaveEvent(
@@ -120,9 +130,11 @@ void AudioSettingsWindow::DrawAudioEventEditor() {
         audioEventClipPath_,
         sizeof(audioEventClipPath_));
     ImGui::SameLine();
+    // 追加操作があり、パスが空でない場合に重複を調べる。
     if (ImGui::Button(ICON_FA_PLUS " 追加##AudioEventClip") &&
         audioEventClipPath_[0] != '\0') {
         const std::string clipPath = audioEventClipPath_;
+        // 同じパス文字列が一覧にない場合だけ、候補に追加する。
         if (std::find(
             audioEventDefinition_.clips.begin(),
             audioEventDefinition_.clips.end(),
@@ -133,10 +145,11 @@ void AudioSettingsWindow::DrawAudioEventEditor() {
 
     for (std::size_t index = 0;
         index < audioEventDefinition_.clips.size();) {
-        ImGui::PushID(static_cast<int>(index));
+        ImGui::PushID(static_cast<std::int32_t>(index));
         ImGui::TextUnformatted(audioEventDefinition_.clips[index].c_str());
         ImGui::SameLine();
 
+        // 削除された要素の次の項目は同じ添字に詰まるので、その添字から確認し直す。
         if (ImGui::SmallButton(ICON_FA_TRASH)) {
             audioEventDefinition_.clips.erase(
                 audioEventDefinition_.clips.begin() + index);
@@ -175,6 +188,7 @@ void AudioSettingsWindow::DrawAudioEventEditor() {
         64);
     ImGui::Checkbox("3D距離減衰", &audioEventDefinition_.spatial);
 
+    // 3D 音声が有効なイベントだけ、距離減衰の設定を表示する。
     if (audioEventDefinition_.spatial) {
         ImGui::DragFloat(
             "減衰開始距離",
@@ -210,14 +224,17 @@ void AudioSettingsWindow::DrawImGui() {
     float seMaster = gameSettings->GetSEVolume();
     float bgmMaster = gameSettings->GetBGMVolume();
 
+    // SE の音量入力が変わったときに、再生側の設定を更新する。
     if (ImGui::SliderFloat("SE 全体音量", &seMaster, 0.0f, 1.0f, "%.2f")) {
         gameSettings->SetSEVolume(seMaster);
     }
 
+    // BGM の音量入力が変わったときに、再生側の設定を更新する。
     if (ImGui::SliderFloat("BGM 全体音量", &bgmMaster, 0.0f, 1.0f, "%.2f")) {
         gameSettings->SetBGMVolume(bgmMaster);
     }
 
+    // 保存ボタンで全体設定と登録一覧を書き出す。
     if (ImGui::Button(ICON_FA_SAVE " 保存")) {
         gameSettings->Save();
         audioSettings->Save();
@@ -226,6 +243,7 @@ void AudioSettingsWindow::DrawImGui() {
 
     ImGui::SameLine();
 
+    // 再読み込みボタンで全体設定と登録一覧をディスクから読み直す。
     if (ImGui::Button(ICON_FA_SYNC " 再読み込み")) {
         gameSettings->Load();
         audioSettings->Load();
@@ -234,6 +252,7 @@ void AudioSettingsWindow::DrawImGui() {
 
     ImGui::SameLine();
 
+    // 停止ボタンは現在鳴っている BGM を停止する。
     if (ImGui::Button(ICON_FA_STOP " BGM停止")) {
         AudioPlayer::GetInstance()->StopBGM();
     }
@@ -250,26 +269,31 @@ void AudioSettingsWindow::DrawImGui() {
     ImGui::InputText("音源パス##NewAudio", newAudioPath_, sizeof(newAudioPath_));
     ImGui::Checkbox("BGM##NewAudio", &newAudioBgm_);
 
+    // 音声ファイルの選択欄を開いている間だけ、候補を調べる。
     if (ImGui::BeginCombo("音源ファイルから選択", newAudioPath_[0] ? newAudioPath_ : "(未選択)")) {
         const std::filesystem::path audioDirectory("Resources/audio");
         std::error_code error;
 
+        // 候補フォルダーが存在し、確認時にエラーがない場合だけ走査する。
         if (std::filesystem::exists(audioDirectory, error) && !error) {
             for (std::filesystem::recursive_directory_iterator it(
                      audioDirectory, std::filesystem::directory_options::skip_permission_denied, error), end;
                  it != end && !error; it.increment(error)) {
+                // 列挙エラーが出た項目や通常ファイルではない項目は候補から外す。
                 if (!it->is_regular_file(error) || error) {
                     continue;
                 }
 
                 const std::string extension = it->path().extension().string();
 
+                // 対応する小文字拡張子の音声ファイルだけ表示する。
                 if (extension != ".wav" && extension != ".mp3" && extension != ".ogg" && extension != ".flac") {
                     continue;
                 }
 
                 const std::string path = it->path().generic_string();
 
+                // 候補を選択したら、登録用のパス入力に反映する。
                 if (ImGui::Selectable(path.c_str(), path == newAudioPath_)) {
                     strncpy_s(newAudioPath_, sizeof(newAudioPath_), path.c_str(), _TRUNCATE);
                 }
@@ -279,13 +303,17 @@ void AudioSettingsWindow::DrawImGui() {
         ImGui::EndCombo();
     }
 
+    // 登録ボタンを押した時点の ID とファイルパスで入力を検証する。
     if (ImGui::Button(ICON_FA_PLUS " 音声を追加")) {
         const std::filesystem::path path(newAudioPath_);
 
+        // どちらかが空のままなら、登録せず必須入力を案内する。
         if (newAudioId_[0] == '\0' || newAudioPath_[0] == '\0') {
             statusText_ = "IDと音源ファイルを指定してください。";
+        // パスが通常ファイルを指していない場合は、登録せずエラーを表示する。
         } else if (!std::filesystem::is_regular_file(path)) {
             statusText_ = "音源ファイルが見つかりません。";
+        // 両方の入力がありファイルを確認できた場合に、一覧に追加するデータを作る。
         } else {
             GameAudioSettings::SoundEntry entry;
             entry.id = newAudioId_;
@@ -294,10 +322,12 @@ void AudioSettingsWindow::DrawImGui() {
             entry.path = path.generic_string();
 
             // IDを登録できた場合にだけ一覧を保存し、次の入力に備えて欄を空にします。
+            // 登録側が受け付けた場合は一覧を保存し、次の登録用に入力欄を空にする。
             if (audioSettings->AddEntry(entry)) {
                 audioSettings->Save();
                 newAudioId_[0] = newAudioName_[0] = newAudioPath_[0] = '\0';
                 statusText_ = "音声を登録して保存しました。";
+            // 追加を受け付けなかった場合は、ID の重複を表示して入力を残す。
             } else {
                 statusText_ = "そのIDは既に登録されています。";
             }
@@ -313,6 +343,7 @@ void AudioSettingsWindow::DrawImGui() {
         ImGuiTableFlags_Resizable |
         ImGuiTableFlags_ScrollY;
 
+    // テーブルを開始できた場合だけ、列と行を組み立てる。
     if (ImGui::BeginTable("AudioSettingsTable", 8, kTableFlags, ImVec2(0.0f, 430.0f))) {
         ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 130.0f);
         ImGui::TableSetupColumn("表示名", ImGuiTableColumnFlags_WidthFixed, 150.0f);
@@ -328,10 +359,11 @@ void AudioSettingsWindow::DrawImGui() {
         auto& entries = audioSettings->GetEntries();
         std::string removeId;
 
-        for (int index = 0; index < static_cast<int>(entries.size()); ++index) {
+        for (std::int32_t index = 0; index < static_cast<std::int32_t>(entries.size()); ++index) {
             auto& entry = entries[index];
             const std::string searchText = entry.id + " " + entry.displayName + " " + entry.category + " " + entry.path;
 
+            // 絞り込み条件に合わない行は表示しない。
             if (!MatchesSearch(searchText)) {
                 continue;
             }
@@ -350,6 +382,7 @@ void AudioSettingsWindow::DrawImGui() {
 
             ImGui::TableSetColumnIndex(3);
 
+            // 項目の音量を変更した場合は、入力値を設定可能な範囲に収める。
             if (ImGui::SliderFloat("##volume", &entry.volume, 0.0f, 1.0f, "%.2f")) {
                 entry.volume = std::clamp(entry.volume, 0.0f, 1.0f);
             }
@@ -362,9 +395,12 @@ void AudioSettingsWindow::DrawImGui() {
 
             ImGui::TableSetColumnIndex(6);
 
+            // 試聴を押した行の音声を、項目に登録されたカテゴリで再生する。
             if (ImGui::SmallButton(ICON_FA_PLAY " 試聴")) {
+                // BGM に登録された音声は BGM として試聴する。
                 if (entry.category == "BGM") {
                     audioSettings->PlayBGM(entry.id, 1.0f, entry.loop);
+                // BGM 以外の音声は SE として試聴する。
                 } else {
                     audioSettings->PlaySE(entry.id, 1.0f, entry.loop);
                 }
@@ -372,12 +408,14 @@ void AudioSettingsWindow::DrawImGui() {
 
             ImGui::SameLine();
 
+            // 停止ボタンを押した項目は、登録 ID を指定して停止する。
             if (ImGui::SmallButton(ICON_FA_STOP)) {
                 audioSettings->Stop(entry.id);
             }
 
             ImGui::SameLine();
 
+            // 一覧の走査を終えてから削除するため、この時点では対象の ID を控える。
             if (ImGui::SmallButton(ICON_FA_TRASH)) {
                 removeId = entry.id;
             }
@@ -390,6 +428,7 @@ void AudioSettingsWindow::DrawImGui() {
 
         ImGui::EndTable();
 
+        // テーブル描画後、指定 ID の削除が成功した場合だけ一覧を保存する。
         if (!removeId.empty() && audioSettings->RemoveEntry(removeId)) {
             audioSettings->Save();
             statusText_ = "音声を削除して保存しました。";

@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "24fcb5b11c607a4f7909dc14317130b6",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/sprite/ui/result/clear/japanese/clear_celebration.png",
+  "version": 1
+}

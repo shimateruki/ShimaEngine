@@ -51,17 +51,17 @@ struct SceneLoadManifest {
 
 /// <summary>事前読み込みで調べる依存アセットの種類。</summary>
 enum class SceneDependencyType {
-    Json,
-    Model,
-    Texture,
-    Audio,
-    Other,
+    kJson,
+    kModel,
+    kTexture,
+    kAudio,
+    kOther,
 };
 
 /// <summary>検出した依存アセットの種類、パス、存在状態です。</summary>
 // 関連：ScenePreloader（準備）、SceneManager / BaseScene（結果利用）
 struct SceneDependencyRecord {
-    SceneDependencyType type = SceneDependencyType::Other;
+    SceneDependencyType type = SceneDependencyType::kOther;
     std::string path;
     bool exists = true;
 };
@@ -111,7 +111,7 @@ private:
 // 担当：事前準備したJSONとアセット一覧を、シーン初期化へ引き渡す。
 // 関連：ScenePreloader（生成）、BaseScene（利用）、SceneManager（保持）
 // 主な入口：TakeJson
-class ScenePreloadData {
+struct ScenePreloadData {
 public:
     /// <summary>読み込み済み JSON を取り出し、保持領域から削除します。</summary>
     /// <param name="path">読み込み時と同じ正規化対象のパス。</param>

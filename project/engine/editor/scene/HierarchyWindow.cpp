@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "HierarchyWindow.h"
 #include "engine/editor/graphics/camera/CameraObjectBadge.h"
 #include <numbers>
@@ -53,21 +54,24 @@ static std::string ToLowerAscii(std::string text) {
     return text;
 }
 
+// 候補文字列だけを小文字化し、変換済みの検索語と部分一致を調べる。
 static bool ContainsLower(const std::string& text, const std::string& lowerNeedle) {
     return ToLowerAscii(text).find(lowerNeedle) != std::string::npos;
 }
 
 static bool MatchesHierarchySearch(engine::Object3D* object, const std::string& lowerFilter) {
     // 名前だけでなく種別・タグ・レイヤーも階層検索の対象にする。
-    // 名前だけでなく種別・タグ・レイヤーも階層検索の対象にする。
+    // 対象がなければ表示候補から外す。
     if (!object) {
         return false;
     }
 
+    // 検索語が空なら有効な対象をすべて通す。
     if (lowerFilter.empty()) {
         return true;
     }
 
+    // 名前・クラス・保存カテゴリ・タグ・レイヤーのどれかで部分一致すれば表示対象。
     return ContainsLower(object->GetName(), lowerFilter) ||
         ContainsLower(object->GetClassName(), lowerFilter) ||
         ContainsLower(object->GetSaveCategory(), lowerFilter) ||
@@ -81,52 +85,58 @@ namespace {
 
     // 実際の親子関係や保存先カテゴリには触れず、一覧で使う表示上の分類だけを決める。
     enum class HierarchyDisplayGroup : size_t {
-        Player,
-        Enemy,
-        Camera,
-        Stage,
-        Gimmick,
-        Effect,
-        Object,
-        Other,
-        Count
+        kPlayer,
+        kEnemy,
+        kCamera,
+        kStage,
+        kGimmick,
+        kEffect,
+        kObject,
+        kOther,
+        kCount
     };
 
-    constexpr std::array<const char*, static_cast<size_t>(HierarchyDisplayGroup::Count)> kHierarchyGroupNames = {
+    constexpr std::array<const char*, static_cast<size_t>(HierarchyDisplayGroup::kCount)> kHierarchyGroupNames = {
         "プレイヤー", "敵", "カメラ", "地形・背景", "ギミック", "エフェクト", "オブジェクト", "その他"
     };
 
+    // 一覧用の分類を優先順に判定する。保存カテゴリや親子構造は更新しない。
     HierarchyDisplayGroup GetHierarchyDisplayGroup(const engine::Object3D* object) {
         const std::string& category = object->GetSaveCategory();
         const std::string& className = object->GetClassName();
         const std::string modelName = object->GetModelName();
+        // プレイヤーと敵は保存カテゴリかクラス名のどちらかで分類する。
         if (category == "Player" || className == "Player")
-            return HierarchyDisplayGroup::Player;
+            return HierarchyDisplayGroup::kPlayer;
         if (category == "Enemy" || className == "Enemy")
-            return HierarchyDisplayGroup::Enemy;
+            return HierarchyDisplayGroup::kEnemy;
+        // 保存上のカメラとカメラ設定を持つオブジェクトを同じ分類へ置く。
         if (category == "Camera" || object->IsCameraObject())
-            return HierarchyDisplayGroup::Camera;
+            return HierarchyDisplayGroup::kCamera;
+        // エフェクトはクラス名かモデルパスから判定する。
         if (className == "Effect" || className == "GPUParticle" || modelName.rfind("Effects/", 0) == 0) {
-            return HierarchyDisplayGroup::Effect;
+            return HierarchyDisplayGroup::kEffect;
         }
 
+        // ギミックのクラス名と地形モデルのフォルダーを判定する。
         if (className == "Gimmick")
-            return HierarchyDisplayGroup::Gimmick;
+            return HierarchyDisplayGroup::kGimmick;
         if (modelName.rfind("Stages/", 0) == 0)
-            return HierarchyDisplayGroup::Stage;
+            return HierarchyDisplayGroup::kStage;
 
         // モデルを持たない地形用の親も、子の地形と同じ分類で表示する。
         if (modelName.empty() && category == "Object") {
             for (const engine::Object3D* child : object->GetChildren()) {
                 if (child && child->GetModelName().rfind("Stages/", 0) == 0) {
-                    return HierarchyDisplayGroup::Stage;
+                    return HierarchyDisplayGroup::kStage;
                 }
             }
         }
 
+        // 専用の分類がなければ、ObjectカテゴリまたはModelクラスを一般オブジェクトへ置く。
         if (category == "Object" || className == "Model")
-            return HierarchyDisplayGroup::Object;
-        return HierarchyDisplayGroup::Other;
+            return HierarchyDisplayGroup::kObject;
+        return HierarchyDisplayGroup::kOther;
     }
 
     std::string GetHierarchyDisplaySubtype(const engine::Object3D* object) {
@@ -141,10 +151,12 @@ namespace {
             return object->GetItemType();
         const std::string modelName = object->GetModelName();
 
-        if (modelName.empty() && GetHierarchyDisplayGroup(object) == HierarchyDisplayGroup::Stage) {
+        // 地形をまとめる親に由来する分類なら、モデルなしでも用途を表示する。
+        if (modelName.empty() && GetHierarchyDisplayGroup(object) == HierarchyDisplayGroup::kStage) {
             return "地形グループ";
         }
 
+        // モデルがある場合はフォルダーを除いて末尾の名前だけ表示する。
         if (!modelName.empty()) {
             const size_t separator = modelName.find_last_of("/\\");
             return modelName.substr(separator == std::string::npos ? 0 : separator + 1);
@@ -155,6 +167,7 @@ namespace {
 
     std::string MakeUniqueName(BaseScene* scene, const std::string& baseName) {
         // シーン内で同名があれば連番を付け、既存オブジェクト名を変えずに追加する。
+        // 比較先のシーンがなければ、連番を付けず候補名を使う。
         if (!scene)
             return baseName;
 
@@ -167,18 +180,21 @@ namespace {
             return false;
         };
 
+        // 未使用の基準名を優先し、使用済みなら空いている連番を探す。
         if (!exists(baseName))
             return baseName;
 
-        for (int index = 1; index < 10000; ++index) {
+        for (std::int32_t index = 1; index < 10000; ++index) {
             std::string candidate = baseName + "_" + std::to_string(index);
             if (!exists(candidate))
                 return candidate;
         }
 
+        // 連番を探索する範囲を使い切ったときの代替名。
         return baseName + "_New";
     }
 
+    // 区切りを除いた末尾の名前を使い、空なら既定のプリセット名で補う。
     std::string GetLeafName(const std::string& path) {
         size_t slash = path.find_last_of("/\\");
 
@@ -190,6 +206,7 @@ namespace {
         return leaf.empty() ? "Preset" : leaf;
     }
 
+    // 同じプリセットを展開する今回の処理内で、すでに予約した名前かを調べる。
     bool ReservedHasName(const std::vector<std::string>& reservedNames, const std::string& name) {
         return std::find(reservedNames.begin(), reservedNames.end(), name) != reservedNames.end();
     }
@@ -199,13 +216,15 @@ namespace {
         std::string base = baseName.empty() ? "PresetObject" : GetLeafName(baseName);
         std::string uniqueName = MakeUniqueName(scene, base);
 
+        // シーンに存在しない候補が今回も未予約なら、再探索せず採用する。
         if (!ReservedHasName(reservedNames, uniqueName)) {
             return uniqueName;
         }
 
-        for (int index = 1; index < 10000; ++index) {
+        for (std::int32_t index = 1; index < 10000; ++index) {
             std::string candidate = base + "_" + std::to_string(index);
 
+            // 今回の予約にも既存シーンにも重複しない連番だけを採用する。
             if (!ReservedHasName(reservedNames, candidate) && MakeUniqueName(scene, candidate) == candidate) {
                 return candidate;
             }
@@ -216,6 +235,7 @@ namespace {
 
     void AssignPresetInstanceNames(BaseScene* scene, const std::string& presetName, std::vector<std::unique_ptr<engine::Object3D>>& objects) {
         // 同一プリセットの複数配置でも、ルートと子の名前がシーン内で衝突しないようにする。
+        // 生成結果が空なら命名する対象がない。
         if (objects.empty())
             return;
 
@@ -225,11 +245,13 @@ namespace {
         reservedNames.push_back(rootName);
 
         for (size_t index = 1; index < objects.size(); ++index) {
+            // 途中の生成に失敗して空になった個体は命名できないので飛ばす。
             if (!objects[index])
                 continue;
 
             std::string baseName = objects[index]->GetName();
 
+            // 子の名前が空なら、ルートの名前を使って由来を分かるようにする。
             if (baseName.empty()) {
                 baseName = rootName + "_Child";
             }
@@ -241,10 +263,11 @@ namespace {
     }
 
     float GetObjectYOffset(const engine::Object3D* object) {
+        // 対象を参照できなければ、床からの既定高として1ワールド単位を返す。
         if (!object)
             return 1.0f;
 
-        // 床からの初期オフセットはコライダーのY寸法を優先し、未設定なら表示倍率を目安にする。
+        // 床からの高さは正のコライダーY寸法を優先し、取れなければ正の表示倍率、最後に1を使う。
         engine::Object3D::ColliderConfig colConfig = object->GetColliderConfig();
         if (colConfig.size.y > 0.0f)
             return colConfig.size.y;
@@ -262,6 +285,7 @@ namespace {
         };
     }
 
+    // 選択中のオブジェクトかカメラを基準に、メニュー生成のワールド位置を決める。
     engine::Vector3 GetDefaultCreatePosition(DebugEditor* editor, const engine::Object3D* object) {
         if (!editor)
             return { 0.0f, 1.0f, 0.0f };
@@ -276,6 +300,7 @@ namespace {
 
         engine::Camera* camera = CameraManager::GetInstance()->GetActiveCamera();
 
+        // アクティブカメラがなければ、原点を床として対象のYオフセットだけ上げる。
         if (!camera) {
             return { 0.0f, GetObjectYOffset(object), 0.0f };
         }
@@ -289,7 +314,7 @@ namespace {
             eye.z + forward.z * 10.0f
         };
 
-        // カメラが床方向を向いている時は、画面中央の床付近に生成する
+        // 視線のY成分が十分にあれば、Y=0の平面との交点を計算する。カメラの前方にある短い交点だけ使う。
         if (std::abs(forward.y) > 0.0001f) {
             float t = (0.0f - eye.y) / forward.y;
 
@@ -309,6 +334,7 @@ namespace {
 
     void AddCreatedObject(DebugEditor* editor, BaseScene* scene, std::unique_ptr<engine::Object3D> object, const std::string& baseName, const std::string& commandLabel, bool useGameViewCursor) {
         // ゲームビュー配置だけは確定を遅らせ、半透明プレビューで位置を選ばせる。
+        // 編集先・シーン・生成物のどれかが欠けるなら配置できない。
         if (!editor || !scene || !object)
             return;
 
@@ -319,7 +345,7 @@ namespace {
             return;
         }
 
-        // その場で登録する場合は先に行列を更新し、追加直後から描画や選択に使えるようにする。
+        // クリック待ちをしない配置は選択物かカメラを基準に置き、登録前に行列を更新する。
         engine::Vector3 createPosition = useGameViewCursor
             ? editor->CalculateGameViewCreatePosition(object.get())
             : GetDefaultCreatePosition(editor, object.get());
@@ -333,15 +359,18 @@ namespace {
     }
 
     void AddCreatedObjects(DebugEditor* editor, BaseScene* scene, std::vector<std::unique_ptr<engine::Object3D>> objects, const std::string& baseName, const std::string& commandLabel, bool useGameViewCursor) {
-        // 複数Objectはルートだけを移動し、親子の相対位置を保ったまま一括で追加する。
+        // プリセットはルートだけを移動し、親子の相対位置を保ってシーンへ登録する。履歴は AddEditorObjects() が個体ごとに記録する。
+        // 編集先、シーン、生成結果が揃わない場合は配置を始めない。
         if (!editor || !scene || objects.empty())
             return;
 
         AssignPresetInstanceNames(scene, baseName, objects);
         engine::Object3D* rootObject = objects.front().get();
+        // 配置基準となるルートを取得できなければ処理を中止する。
         if (!rootObject)
             return;
 
+        // ゲームビューではルートと子をまとめてプレビューへ渡し、確定までシーン登録を待つ。
         if (useGameViewCursor) {
             editor->StartGameViewCreatePreview(std::move(objects), commandLabel);
             return;
@@ -360,6 +389,7 @@ namespace {
 
     void CreatePrimitive(DebugEditor* editor, BaseScene* scene, const std::string& modelName, const std::string& baseName, bool useGameViewCursor, const engine::Vector3& scale = { 1.0f, 1.0f, 1.0f }) {
         // モデルと初期倍率を決めたら、追加位置・命名・Undoは共通の配置経路に任せる。
+        // 3D共通基盤のあるシーンでのみモデルを初期化できる。
         if (!scene || !scene->GetObject3DCommon())
             return;
 
@@ -375,6 +405,7 @@ namespace {
     // 生成する箱の形状は共通。分類とUndo名はメニューの入口から渡す。
     void CreateInvisibleBox(DebugEditor* editor, BaseScene* scene, bool useGameViewCursor,
                             const char* category, const char* name, const char* command) {
+        // 3D共通基盤がなければ、コライダーだけを持つ配置物も初期化できない。
         if (!scene || !scene->GetObject3DCommon())
             return;
 
@@ -384,23 +415,26 @@ namespace {
         object->SetIsVisible(true);
         object->SetClassName("InvisibleBox");
         engine::Object3D::ColliderConfig colConfig;
-        colConfig.type = ColliderType::Aabb;
+        colConfig.type = engine::ColliderType::kAabb;
         colConfig.size = { 1.0f, 1.0f, 1.0f };
         object->SetColliderConfig(colConfig);
-        object->SetCollisionAttribute(CollisionCategories::Get(category));
+        object->SetCollisionAttribute(engine::collisionCategories::Get(category));
         AddCreatedObject(editor, scene, std::move(object), name, command, useGameViewCursor);
     }
 
+    // 接触を検出するトリガー属性の箱を作る。
     void CreateTriggerBox(DebugEditor* editor, BaseScene* scene, bool useGameViewCursor) {
         CreateInvisibleBox(editor, scene, useGameViewCursor, "trigger", "Trigger_Box", "Create Trigger Box");
     }
 
+    // 他の物体を遮る地面属性の箱を作る。
     void CreateCollisionBox(DebugEditor* editor, BaseScene* scene, bool useGameViewCursor) {
         CreateInvisibleBox(editor, scene, useGameViewCursor, "ground", "Collision_Box", "Create Collision Box");
     }
 
     void CreateCinematicCamera(DebugEditor* editor, BaseScene* scene, bool useGameViewCursor) {
         // 演出カメラを編集しやすい可視モデルとして作り、保存分類をカメラへ固定する。
+        // 演出カメラの可視モデルも3D共通基盤が揃ってから生成する。
         if (!scene || !scene->GetObject3DCommon())
             return;
 
@@ -418,6 +452,7 @@ namespace {
 
     void CreateDecal(DebugEditor* editor, BaseScene* scene, bool useGameViewCursor) {
         // 生成時は基準姿勢だけ指定し、画面上の配置位置は共通の配置経路へ任せる。
+        // デカールの生成にはシーンの3D共通基盤が必要。
         if (!scene || !scene->GetObject3DCommon())
             return;
 
@@ -431,25 +466,30 @@ namespace {
         AddCreatedObject(editor, scene, std::move(decal), "Surface_Decal", "Create Surface Decal", useGameViewCursor);
     }
 
+    // 登録されたギミックの型をFactoryで生成し、通常の配置処理へ渡す。
     void CreateGimmick(DebugEditor* editor, BaseScene* scene, const std::string& type, bool useGameViewCursor) {
+        // 追加先シーンと3D共通基盤がない場合はFactoryを呼ばない。
         if (!scene || !scene->GetObject3DCommon())
             return;
 
-        auto gimmick = EditorObjectFactoryRegistry::Create(EditorObjectFactoryRegistry::Kind::Gimmick, type, scene->GetObject3DCommon());
+        auto gimmick = EditorObjectFactoryRegistry::Create(EditorObjectFactoryRegistry::Kind::kGimmick, type, scene->GetObject3DCommon());
         AddCreatedObject(editor, scene, std::move(gimmick), "Gimmick_" + type, "Create Gimmick " + type, useGameViewCursor);
     }
 
+    // 登録された敵の型をFactoryで生成し、通常の配置処理へ渡す。
     void CreateEnemy(DebugEditor* editor, BaseScene* scene, const std::string& type, bool useGameViewCursor) {
+        // 追加先シーンと3D共通基盤がない場合はFactoryを呼ばない。
         if (!scene || !scene->GetObject3DCommon())
             return;
 
-        auto enemy = EditorObjectFactoryRegistry::Create(EditorObjectFactoryRegistry::Kind::Enemy, type, scene->GetObject3DCommon());
+        auto enemy = EditorObjectFactoryRegistry::Create(EditorObjectFactoryRegistry::Kind::kEnemy, type, scene->GetObject3DCommon());
         AddCreatedObject(editor, scene, std::move(enemy), "Enemy_" + type, "Create Enemy " + type, useGameViewCursor);
     }
 
     void DrawCreateContextMenu(DebugEditor* editor, BaseScene* scene, bool useGameViewCursor) {
 #ifdef USE_IMGUI
         // ゲームビュー上の配置はプレビューで位置を決め、Hierarchy側は選択位置を基準に作る。
+        // 編集先と配置先シーンが揃わなければ、配置操作を提示しない。
         if (!editor || !scene)
             return;
 
@@ -458,12 +498,14 @@ namespace {
             ImGui::TextDisabled("左クリックで確定 / 右クリック・Eでキャンセル");
             ImGui::TextDisabled("面スナップ・法線整列: 有効");
         }
+        // 階層からの作成は受け付けた時点で既定位置に置く。
         else {
             ImGui::TextDisabled("作成位置: 選択中オブジェクトの横 / 未選択ならカメラ前方");
         }
 
         ImGui::Separator();
 
+        // 基本オブジェクトのメニューを展開したとき、選ばれた項目に対応するモデルまたは装置を生成する。
         if (ImGui::BeginMenu(ICON_FA_CUBE " 基本オブジェクト")) {
             if (ImGui::MenuItem("ステージブロック"))
                 CreatePrimitive(editor, scene, "Stages/block", "Block", useGameViewCursor);
@@ -487,7 +529,7 @@ namespace {
 
         // ゲーム側で登録された種類一覧を使い、表示名とFactoryへ渡すIDを分ける。
         if (ImGui::BeginMenu(ICON_FA_PUZZLE_PIECE " ギミック")) {
-            for (const auto& type : EditorObjectFactoryRegistry::GetTypes(EditorObjectFactoryRegistry::Kind::Gimmick)) {
+            for (const auto& type : EditorObjectFactoryRegistry::GetTypes(EditorObjectFactoryRegistry::Kind::kGimmick)) {
                 if (ImGui::MenuItem(type.displayName.c_str()))
                     CreateGimmick(editor, scene, type.id, useGameViewCursor);
             }
@@ -497,7 +539,7 @@ namespace {
         // 敵は登録済みのうち新規配置できる種類に絞り、同じ表示名もIDで区別する。
         if (ImGui::BeginMenu(ICON_FA_SKULL " 敵")) {
             using Registry = EditorObjectFactoryRegistry;
-            for (const auto* type : Registry::GetTypes(Registry::Kind::Enemy, Registry::TypeList::Creation)) {
+            for (const auto* type : Registry::GetTypes(Registry::Kind::kEnemy, Registry::TypeList::kCreation)) {
                 ImGui::PushID(type->id.c_str());
                 if (ImGui::MenuItem(type->displayName.c_str()))
                     CreateEnemy(editor, scene, type->id, useGameViewCursor);
@@ -506,16 +548,19 @@ namespace {
             ImGui::EndMenu();
         }
 
+        // プリセットのメニューを展開した場合にだけ登録一覧を表示する。
         if (ImGui::BeginMenu(ICON_FA_SAVE " プリセット")) {
-            // 登録済みプリセットは生成Factoryと同じ導線へ渡し、まとめてUndoできるようにする。
+            // 選択したプリセットからルートと子を生成し、配置処理へまとめて渡す。履歴の登録単位は各個体。
             const auto& presets = PresetManager::GetInstance()->GetPresets();
 
+            // 登録がない場合は、空のメニューに理由を表示する。
             if (presets.empty()) {
                 ImGui::TextDisabled("プリセットがありません");
             }
 
             for (const auto& [presetName, data] : presets) {
                 if (ImGui::MenuItem(presetName.c_str())) {
+                    // プリセットを選んでも3D共通基盤が未準備なら、この項目の生成を行わない。
                     if (!scene->GetObject3DCommon())
                         continue;
                     auto objects = PresetManager::GetInstance()->CreateObjectsFromPreset(presetName, scene->GetObject3DCommon());
@@ -540,9 +585,11 @@ void HierarchyWindow::Draw() {
     // Asset Browserを先に描き、Sceneがある場合だけHierarchy本体を開く。
     editor_->DrawProjectWindow();
 
+    // 管理クラスがなければアセット一覧の描画だけで終える。
     if (editor_->GetSceneManager() == nullptr)
         return;
     BaseScene* currentScene = editor_->GetSceneManager()->GetCurrentScene();
+    // 管理クラスに現シーンがなければ、シーン内の行は描けない。
     if (currentScene == nullptr)
         return;
 
@@ -580,17 +627,20 @@ void HierarchyWindow::Draw() {
     if (editor_->IsPrefabEditMode()) {
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.08f, 0.18f, 0.28f, 1.0f));
 
+        // ヘッダーの表示領域を確保できた場合だけ、プレハブ名と終了操作を描く。
         if (ImGui::BeginChild("PrefabModeHeader", ImVec2(0.0f, 74.0f), true)) {
             ImGui::TextColored(ImVec4(0.35f, 0.78f, 1.0f, 1.0f),
                 ICON_FA_CUBE " Prefab Mode > %s%s",
                 editor_->GetPrefabEditName().c_str(),
                 editor_->IsPrefabEditDirty() ? " *" : "");
+            // 保存を選んだ場合は現在の編集内容をプリセットへ書き戻す。
             if (ImGui::Button(ICON_FA_SAVE " Prefabを保存")) {
                 editor_->SavePrefabEditSession();
             }
 
             ImGui::SameLine();
 
+            // 破棄を選んだ場合はプレハブ編集を取り消して元のシーンへ戻る。
             if (ImGui::Button(ICON_FA_TIMES " 破棄して戻る")) {
                 editor_->CancelPrefabEditSession();
             }
@@ -607,7 +657,7 @@ void HierarchyWindow::Draw() {
         ImGui::EndPopup();
     }
 
-    // 旧ツール一覧は選択中のIEditableを切り替え、Inspectorの編集対象を変える。
+    // 旧ツール一覧は、選択した行のIEditableをInspectorへ渡す。任意のツールは生成済みの場合だけ行を出し、通常は3D選択を外す。
     if (ImGui::CollapsingHeader(ICON_FA_COGS " システム設定 (System Settings)")) {
         ImGui::TextWrapped("ツールは上部の「ツール」メニューから分類別に開けます。ここは従来の一覧です。");
         IEditable* currentObj = EditorManager::GetInstance()->GetSelectedObject();
@@ -652,6 +702,7 @@ void HierarchyWindow::Draw() {
             EditorManager::GetInstance()->SetSelectedObject(editor_->GetGhostRecorder());
         }
 
+        // 演出タイムラインだけはシーン内の選択を保持し、Inspectorの参照先だけを変更する。
         if (editor_->GetGhostDirector() && ImGui::Selectable("  " ICON_FA_FILM " 演出タイムライン (Cinematic Timeline)", currentObj == editor_->GetGhostDirector())) {
             EditorManager::GetInstance()->SetSelectedObject(editor_->GetGhostDirector());
         }
@@ -724,6 +775,7 @@ void HierarchyWindow::Draw() {
 
         ImGui::Separator();
 
+        // ゲーム設定を選んだ場合は、個体の代わりに現在シーンをInspectorへ渡す。
         if (ImGui::Selectable("  " ICON_FA_GAMEPAD " ゲーム設定 (Game Settings)", currentObj == currentScene)) {
             editor_->SetSelectedObject(nullptr);
             EditorManager::GetInstance()->SetSelectedObject(currentScene);
@@ -735,6 +787,7 @@ void HierarchyWindow::Draw() {
     // SceneAssetの作成・切替と、SceneWorkspace固有の階層表示を先に置く。
     sceneAssetPanel_.DrawList();
 
+    // ワークスペースが用意されていれば、対応する階層欄も追加する。
     if (SceneWorkspace* workspace = editor_->GetSceneWorkspace()) {
         ImGui::Separator();
         workspace->DrawHierarchyPanel();
@@ -785,15 +838,17 @@ void HierarchyWindow::Draw() {
         ImGui::Text("選択: %zu個 / 操作: %s", selectedObjects.size(), primaryName.c_str());
         ImGui::SameLine();
         ImGui::PushItemWidth(74.0f);
-        int overlayMode = editor_->GetSelectionOverlayMode();
+        std::int32_t overlayMode = editor_->GetSelectionOverlayMode();
         const char* overlayModes[] = { "簡易", "詳細", "非表示" };
 
+        // 補助表示の選択肢が変更された場合だけ、エディターへ新しい設定を渡す。
         if (ImGui::Combo("##SelectionOverlayMode", &overlayMode, overlayModes, IM_ARRAYSIZE(overlayModes))) {
             editor_->SetSelectionOverlayMode(overlayMode);
         }
 
         ImGui::PopItemWidth();
 
+        // 補助表示の欄を指したときに、各モードの描画範囲を説明する。
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("簡易: 主選択は外枠、副選択は小さいマーカー\n詳細: すべて外枠\n非表示: ImGuizmoのみ");
         }
@@ -804,6 +859,7 @@ void HierarchyWindow::Draw() {
     // ここは表示方法だけを変え、Scene内の親子構造には触れません。
     ImGui::Checkbox("種類ごとにまとめる", &groupHierarchy_);
 
+    // 分類表示を指したときは、表示だけの切り替えであることを案内する。
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("一覧だけを分類します。親子関係やシーンの保存内容は変わりません。");
     }
@@ -818,18 +874,23 @@ void HierarchyWindow::Draw() {
         auto& objects = currentScene->GetObjects();
 
         for (auto& obj : objects) {
+            // プレハブ編集中は編集中の集合に属するものだけを候補にする。
             if (editor_->IsPrefabEditMode() && !editor_->IsPrefabEditObject(obj.get()))
                 continue;
             std::string name = obj->GetName();
+            // 検索結果では表示名のない行を省く。
             if (name.empty())
                 continue;
+            // 分類・レイヤーの表示条件から外れるものを除く。
             if (!HasMatchingCategory(obj.get()))
                 continue;
+            // 検索語に一致したものだけ選択可能な行として描く。
             if (MatchesHierarchySearch(obj.get(), filterStr)) {
                 bool isSelected = editor_->IsObjectSelected(obj.get());
                 ImGui::PushID(obj.get());
 
                 if (ImGui::Selectable(name.c_str(), isSelected)) {
+                    // Shiftで選択集合を切り替え、通常クリックでは単独選択にする。
                     if (ImGui::GetIO().KeyShift) {
                         editor_->ToggleSelectedObject(obj.get());
                     } else {
@@ -844,12 +905,15 @@ void HierarchyWindow::Draw() {
         }
     }
     else {
+        // 検索語が空なら通常のツリーと、配置アセットを受け取る専用の行を出す。
         ImGui::Button(ICON_FA_BOX_OPEN " [ ここにモデルをドロップして生成 ]", ImVec2(-1, 30));
 
+        // 配置用の行を指した場合は、右クリックでも作成できることを案内する。
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("右クリックで作成メニューを開けます");
         }
 
+        // 配置用の行を右クリックしたときも、階層の空白と同じ作成メニューへつなぐ。
         if (ImGui::BeginPopupContextItem("HierarchyDropCreateContext", ImGuiPopupFlags_MouseButtonRight)) {
             DrawCreateContextMenu(currentScene, false);
             ImGui::EndPopup();
@@ -861,6 +925,7 @@ void HierarchyWindow::Draw() {
                 const std::string modelName = ReadEditorAssetDragPath(payload->Data, payload->DataSize);
                 engine::Object3DCommon* common = currentScene->GetObject3DCommon();
 
+                // 3D共通基盤があり、有効なモデル名を受け取った場合だけ仮配置を作る。
                 if (common && !modelName.empty()) {
                     ModelManager::GetInstance()->LoadModel(modelName);
                     auto newObj = std::make_unique<engine::Object3D>();
@@ -879,9 +944,11 @@ void HierarchyWindow::Draw() {
                 const char* presetName = (const char*)payload->Data;
                 const auto& presets = PresetManager::GetInstance()->GetPresets();
 
+                // 登録情報が残っているプリセットだけを生成候補にする。
                 if (presets.count(presetName) > 0) {
                     engine::Object3DCommon* common = currentScene->GetObject3DCommon();
 
+                    // 該当プリセットでも3D共通基盤が揃う場合だけ親子を展開する。
                     if (common) {
                         auto objects = PresetManager::GetInstance()->CreateObjectsFromPreset(presetName, common);
                         AddCreatedObjects(editor_, currentScene, std::move(objects), presetName, "Create Preset " + std::string(presetName), false);
@@ -893,6 +960,7 @@ void HierarchyWindow::Draw() {
             if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("CINEMATIC_CAMERA_ASSET")) {
                 engine::Object3DCommon* common = currentScene ? currentScene->GetObject3DCommon() : nullptr;
 
+                // カメラを受け取った場合も、3D共通基盤の準備後に登録する。
                 if (common) {
                     auto newObj = std::make_unique<engine::Object3D>();
                     newObj->Initialize(common);
@@ -913,6 +981,7 @@ void HierarchyWindow::Draw() {
                 const char* presetName = (const char*)payload->Data;
                 engine::Object3DCommon* common = currentScene ? currentScene->GetObject3DCommon() : nullptr;
 
+                // 粒子プリセットを受け取ったら、3D共通基盤がある場合だけ位置調整用の仮配置を作る。
                 if (common) {
                     auto newObj = std::make_unique<engine::Object3D>();
                     newObj->Initialize(common);
@@ -921,9 +990,9 @@ void HierarchyWindow::Draw() {
                     newObj->SetClassName("GPUParticle");
                     newObj->SetGpuParticleName(presetName);
 
-                    // エディタ上で分かりやすいように色をオレンジ半透明っぽくする
+                    // 配置点を見分けられるよう、プレビューのブロックを半透明の橙色で表示する。
                     newObj->SetColor({1.0f, 0.5f, 0.0f, 0.5f});
-                    newObj->SetBlendMode(BlendMode::Normal);
+                    newObj->SetBlendMode(BlendMode::kNormal);
 
                     newObj->SetTranslate({ 0.0f, 0.0f, 0.0f });
                     newObj->UpdateLocalMatrix();
@@ -942,11 +1011,13 @@ void HierarchyWindow::Draw() {
         // グループ表示はルートObjectだけを分類し、親子関係そのものは変えない。
         if (groupHierarchy_) {
             // 親を持つObjectは既存のツリー内に表示する。ここではルートだけを仮想フォルダへ振り分ける。
-            std::array<std::vector<engine::Object3D*>, static_cast<size_t>(HierarchyDisplayGroup::Count)> groups;
+            std::array<std::vector<engine::Object3D*>, static_cast<size_t>(HierarchyDisplayGroup::kCount)> groups;
 
             for (auto& obj : objects) {
+                // 存在するルートのうち、分類・レイヤーの条件を通るものだけを分類する。
                 if (!obj || obj->GetParent() || !HasMatchingCategory(obj.get()))
                     continue;
+                // プレハブ編集中は編集中の集合に限定する。
                 if (editor_->IsPrefabEditMode() && !editor_->IsPrefabEditObject(obj.get()))
                     continue;
                 groups[static_cast<size_t>(GetHierarchyDisplayGroup(obj.get()))].push_back(obj.get());
@@ -954,13 +1025,16 @@ void HierarchyWindow::Draw() {
 
             for (size_t groupIndex = 0; groupIndex < groups.size(); ++groupIndex) {
                 const auto& rows = groups[groupIndex];
+                // 対象がない分類には見出しを出さない。
                 if (rows.empty())
                     continue;
-                ImGui::PushID(static_cast<int>(groupIndex));
+                ImGui::PushID(static_cast<std::int32_t>(groupIndex));
+                // 選択対象への経路に含まれるルートの分類は自動的に開く。
                 if (!revealPath_.empty() && std::find(rows.begin(), rows.end(), revealPath_.back()) != rows.end())
                     ImGui::SetNextItemOpen(true);
                 const bool groupOpen = ImGui::TreeNodeEx("Group", ImGuiTreeNodeFlags_DefaultOpen,
                     "%s (%zu)", kHierarchyGroupNames[groupIndex], rows.size());
+                // 分類が展開されたときだけ、タグやモデル名による内訳を組み立てる。
                 if (groupOpen) {
                     std::map<std::string, std::vector<engine::Object3D*>> subgroups;
 
@@ -972,12 +1046,14 @@ void HierarchyWindow::Draw() {
                     if (subgroups.size() == 1 && rows.size() == 1) {
                         DrawHierarchyNode(rows.front());
                     } else {
+                        // 複数の行がある場合は小分類を用意し、選択への経路を含むものは自動で開く。
                         for (const auto& [subtype, members] : subgroups) {
                             if (!revealPath_.empty() && std::find(members.begin(), members.end(), revealPath_.back()) != members.end())
                                 ImGui::SetNextItemOpen(true);
                             const bool subtypeOpen = ImGui::TreeNodeEx(subtype.c_str(), 0,
                                 "%s (%zu)", subtype.c_str(), members.size());
                             if (subtypeOpen) {
+                                // 小分類の中身は展開されているときだけ描く。
                                 for (engine::Object3D* object : members)
                                     DrawHierarchyNode(object);
                                 ImGui::TreePop();
@@ -991,6 +1067,7 @@ void HierarchyWindow::Draw() {
                 ImGui::PopID();
             }
         } else {
+            // 分類を無効にした場合は、未グループ化の親子ツリーをルートから描く。
             for (auto& obj : objects) {
                 if (editor_->IsPrefabEditMode() && !editor_->IsPrefabEditObject(obj.get()))
                     continue;
@@ -1004,7 +1081,8 @@ void HierarchyWindow::Draw() {
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(0.8f, 0.7f, 0.7f));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(0.8f, 0.8f, 0.8f));
 
-    // よく使う衝突用・演出用Objectは固定設定で作り、Undo対象としてEditorへ渡す。
+    // 固定配置ボタンは3D共通基盤がある場合にだけ生成し、結果をUndo対象としてEditorへ渡す。
+    // トリガーボックスはtrigger属性で、高さ2に配置する。
     if (ImGui::Button(ICON_FA_BOLT " 透明ボックス生成 (トリガー用)", ImVec2(-1, 40))) {
         engine::Object3DCommon* common = currentScene->GetObject3DCommon();
 
@@ -1016,15 +1094,16 @@ void HierarchyWindow::Draw() {
             newObj->SetClassName("InvisibleBox");
             newObj->SetName("Trigger_Box");
             engine::Object3D::ColliderConfig colConfig;
-            colConfig.type = ColliderType::Aabb;
+            colConfig.type = engine::ColliderType::kAabb;
             colConfig.size = { 1.0f, 1.0f, 1.0f };
             newObj->SetColliderConfig(colConfig);
-            newObj->SetCollisionAttribute(CollisionCategories::Get("trigger"));
+            newObj->SetCollisionAttribute(engine::collisionCategories::Get("trigger"));
             newObj->SetTranslate({ 0, 2.0f, 0 });
             editor_->AddEditorObject(std::move(newObj), "Create Trigger Box");
         }
     }
 
+    // 当たり判定ボックスはground属性で、高さ2に配置する。
     if (ImGui::Button(ICON_FA_SHIELD_ALT " 透明ボックス生成 (当たり判定用)", ImVec2(-1, 40))) {
         engine::Object3DCommon* common = currentScene->GetObject3DCommon();
 
@@ -1036,15 +1115,16 @@ void HierarchyWindow::Draw() {
             newObj->SetClassName("InvisibleBox");
             newObj->SetName("collision_Box");
             engine::Object3D::ColliderConfig colConfig;
-            colConfig.type = ColliderType::Aabb;
+            colConfig.type = engine::ColliderType::kAabb;
             colConfig.size = { 1.0f, 1.0f, 1.0f };
             newObj->SetColliderConfig(colConfig);
-            newObj->SetCollisionAttribute(CollisionCategories::Get("ground"));
+            newObj->SetCollisionAttribute(engine::collisionCategories::Get("ground"));
             newObj->SetTranslate({ 0, 2.0f, 0 });
             editor_->AddEditorObject(std::move(newObj), "Create Collision Box");
         }
     }
 
+    // 演出カメラは保存分類をCameraにし、固定の初期位置に登録する。
     if (ImGui::Button(ICON_FA_VIDEO " 演出用カメラ生成 (Cinematic)", ImVec2(-1, 40))) {
         engine::Object3DCommon* common = currentScene->GetObject3DCommon();
 
@@ -1073,6 +1153,7 @@ void HierarchyWindow::Draw() {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("HIERARCHY_OBJ")) {
             engine::Object3D* sourceObj = *(engine::Object3D**)payload->Data;
 
+            // 現在の親がある場合だけ解除し、変更前の状態をUndo用に記録する。
             if (sourceObj->GetParent() != nullptr) {
                 nlohmann::json beforeState = editor_->CaptureObjectState(sourceObj);
                 engine::Matrix4x4 worldMat = sourceObj->GetWorldMatrix();
@@ -1096,6 +1177,7 @@ void HierarchyWindow::Draw() {
     // 一覧内のクリックは既に見えているため、次フレームにスクロールを発生させない。
     lastHierarchySelection_ = editor_->GetSelectedObject();
     lastHierarchyScene_ = currentScene;
+    // 選択経路を表示する残りフレームがある場合だけカウントを減らす。
     if (revealFrames_ > 0)
         --revealFrames_;
     ImGui::End();
@@ -1122,19 +1204,21 @@ void HierarchyWindow::DrawCreateContextMenu(BaseScene* scene, bool useGameViewCu
 
 void HierarchyWindow::DrawHierarchyNode(engine::Object3D* obj) {
 #ifdef USE_IMGUI
+    // 空の参照やカテゴリ条件を通らないオブジェクトは行に出さない。
     if (!obj)
         return;
     if (!HasMatchingCategory(obj))
         return;
 
-    //  IDの衝突を防ぐためにPushIDを使用
+    // 同名の個体もそれぞれ操作できるよう、アドレスをImGuiの識別子に使う。
     ImGui::PushID(obj);
 
-    //  AllowItemOverlapを追加して、ツリーと同じ行にボタンを押せるようにする
+    // 矢印とダブルクリックで展開を切り替え、選択されている行には選択色を付ける。
     ImGuiTreeNodeFlags nodeFlags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick;
     if (editor_->IsObjectSelected(obj))
         nodeFlags |= ImGuiTreeNodeFlags_Selected;
 
+    // 名前が空なら代替名を使い、透明箱・タグ・既定外レイヤー・一時非表示の情報を該当する行に足す。
     std::string name = obj->GetName();
     if (name.empty())
         name = "NoName";
@@ -1154,7 +1238,7 @@ void HierarchyWindow::DrawHierarchyNode(engine::Object3D* obj) {
         name += " [一時非表示]";
     }
 
-    // 左側にツリーノードを描画
+    // 選択対象とその祖先の行を展開する。カメラの場合だけ設定に応じたバッジと文字色を使う。
     if (std::find(revealPath_.begin(), revealPath_.end(), obj) != revealPath_.end())
         ImGui::SetNextItemOpen(true);
     const bool showCameraBadge = obj->IsCameraObject();
@@ -1166,6 +1250,7 @@ void HierarchyWindow::DrawHierarchyNode(engine::Object3D* obj) {
     }
     const bool nodeOpen = ImGui::TreeNodeEx((void*)obj, nodeFlags, "%s",
         showCameraBadge ? cameraRow.c_str() : name.c_str());
+    // カメラ行で上書きした文字色を、次の行を描く前に戻す。
     if (showCameraBadge)
         ImGui::PopStyleColor();
 
@@ -1173,7 +1258,7 @@ void HierarchyWindow::DrawHierarchyNode(engine::Object3D* obj) {
     if (!revealPath_.empty() && obj == revealPath_.front())
         ImGui::SetScrollHereY(0.5f);
 
-    // アイテムがクリックされたら選択状態にする
+    // 左クリックで選択し、Shift併用では現在の選択集合に対して切り替える。
     if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
         if (ImGui::GetIO().KeyShift) {
             editor_->ToggleSelectedObject(obj);
@@ -1184,7 +1269,7 @@ void HierarchyWindow::DrawHierarchyNode(engine::Object3D* obj) {
         editor_->SyncObjectSelectionToInspector();
     }
 
-    // --- ドラッグ＆ドロップ処理 ---
+    // 行のドラッグでは個体の参照を渡し、受け取った行で親付けを判定する。
     if (ImGui::BeginDragDropSource()) {
         ImGui::SetDragDropPayload("HIERARCHY_OBJ", &obj, sizeof(engine::Object3D*));
         ImGui::Text("Move %s", name.c_str());
@@ -1206,12 +1291,10 @@ void HierarchyWindow::DrawHierarchyNode(engine::Object3D* obj) {
         ImGui::EndDragDropTarget();
     }
 
-    // ==========================================================
-    //  右端に目玉と南京錠のアイコンを配置する
-    // ==========================================================
+    // 表示とロックのボタンは行の右端へ置く。
     ImGui::SameLine(ImGui::GetWindowWidth() - 75.0f); // 右端から75pxの位置に寄せる
 
-    // 1. 表示・非表示トグル (目のアイコン)
+    // 非表示中は目のアイコンを灰色で示し、押した場合だけ表示状態の変更を履歴に記録する。
     bool isVisible = obj->GetIsVisible();
     const char* eyeIcon = isVisible ? ICON_FA_EYE : ICON_FA_EYE_SLASH;
     if (!isVisible)
@@ -1222,12 +1305,13 @@ void HierarchyWindow::DrawHierarchyNode(engine::Object3D* obj) {
         editor_->RegisterObjectEdited(obj, beforeState, "Toggle Visibility");
     }
 
+    // 非表示の行に適用したアイコン色だけを戻す。
     if (!isVisible)
         ImGui::PopStyleColor();
 
     ImGui::SameLine();
 
-    // 2. ロックトグル (南京錠アイコン)
+    // ロック中は南京錠を赤く示し、押した場合だけロック状態の変更を履歴に記録する。
     bool isLocked = obj->GetIsLocked();
     const char* lockIcon = isLocked ? ICON_FA_LOCK : ICON_FA_UNLOCK;
     if (isLocked)
@@ -1238,11 +1322,13 @@ void HierarchyWindow::DrawHierarchyNode(engine::Object3D* obj) {
         editor_->RegisterObjectEdited(obj, beforeState, "Toggle Lock");
     }
 
+    // ロックのアイコンに使った色を元に戻す。
     if (isLocked)
         ImGui::PopStyleColor();
 
     // 展開時だけ現在のシーンから直属の子を探し、同じカテゴリ・レイヤー条件で描画する。
     if (nodeOpen) {
+        // 描画時点で現シーンが取得できる場合だけ、直属の子を探す。
         if (editor_->GetSceneManager() && editor_->GetSceneManager()->GetCurrentScene()) {
             auto& allObjs = editor_->GetSceneManager()->GetCurrentScene()->GetObjects();
 
@@ -1260,11 +1346,11 @@ void HierarchyWindow::DrawHierarchyNode(engine::Object3D* obj) {
 }
 
 bool HierarchyWindow::HasMatchingCategory(engine::Object3D* obj) {
-    // 表示カテゴリとLayerの条件を共に満たすObjectだけHierarchyへ出します。
+    // 表示カテゴリとレイヤーの両方が対象か判定する。参照のない個体とエディター内部専用の個体は除外する。
     if (!obj || obj->IsEditorInternal())
         return false;
 
-    // カメラは保存カテゴリに加え、Objectが持つカメラ設定でも判定する。
+    // 分類がAllなら全種類を候補にする。個別分類は保存カテゴリを照合し、カメラだけはカメラ設定も見る。
     const std::string cat = obj->GetSaveCategory();
     bool categoryMatches = currentCategoryFilter_ == 0;
     if (currentCategoryFilter_ == 1 && cat == "Player")
@@ -1289,10 +1375,12 @@ bool HierarchyWindow::HasMatchingCategory(engine::Object3D* obj) {
 
     bool layerMatches = currentLayerFilter_ == 0;
 
+    // All以外で選択番号が範囲内なら、対応するレイヤー名と比較する。
     if (currentLayerFilter_ > 0 && currentLayerFilter_ < IM_ARRAYSIZE(layerFilterNames)) {
         layerMatches = obj->GetLayer() == layerFilterNames[currentLayerFilter_];
     }
 
+    // 両方に一致する行は、子の条件を調べずに表示する。
     if (categoryMatches && layerMatches)
         return true;
 

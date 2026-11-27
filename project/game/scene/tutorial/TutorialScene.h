@@ -1,4 +1,6 @@
 #pragma once
+#include <cstdint>
+#include <array>
 #include "BaseScene.h"
 #include "game/system/scene/SceneGameplayAccess.h"
 #include "Object3DCommon.h"
@@ -21,7 +23,7 @@
 #include "game/ui/SaveIndicatorOverlay.h"
 #include "game/system/navigation/DestinationGuide.h"
 #ifdef USE_IMGUI
-namespace TutorialExitGuideRuntimeProbe { struct Access; }
+namespace tutorialExitGuideRuntimeProbe { struct Access; }
 #endif
 
 #include "game/system/scene/ObjectManager.h"
@@ -55,6 +57,9 @@ class TutorialScene : public BaseScene, public ISceneGameplayAccess {
     /// 配置、プレイヤー、ガイド表示を初期化する。
     void Initialize() override;
 
+    /// 配布版ではチュートリアルのボタンをマウスで操作できるようにする。
+    void OnActivated() override;
+
     /// 読み込み画面中に必要な初期化を段階的に開始する。
     void BeginLoadingInitialize() override;
 
@@ -72,6 +77,9 @@ class TutorialScene : public BaseScene, public ISceneGameplayAccess {
 
     /// 操作ガイド、チュートリアル進行、配置物を更新する。
     void Update(float deltaTime) override;
+
+    /// 確認画面が開いている間は配置物の固定刻み更新も止める。
+    void FixedUpdate(float fixedDeltaTime) override;
 
     /// シーン専用 UI の状態を更新する。
     void UpdateUi();
@@ -108,7 +116,7 @@ class TutorialScene : public BaseScene, public ISceneGameplayAccess {
 
     void RequestRemoveObject(engine::Object3D* object) override { objectManager_->RequestRemove(object); }
 
-    // スプライトはシーンで保持 (ObjectManagerを拡張すれば移動可能)
+    // チュートリアルで使うスプライトはシーンが個別に保持する。
     const std::vector<std::unique_ptr<engine::Sprite>>& GetSprites() const override { return sprites_; }
 
     /// リプレイで状態を再現するスプライトを出力先へ追加する。
@@ -143,7 +151,8 @@ class TutorialScene : public BaseScene, public ISceneGameplayAccess {
 
     // スターコイン
     /// このプレイ中のスターコイン取得を、0～2 の番号で記録する。
-    void CollectStarCoin(int coinIndex) {
+    void CollectStarCoin(std::int32_t coinIndex) {
+        // 星コインの番号が0〜2の範囲に入るときだけ、このプレイ中の取得状態を記録する。
         if (coinIndex >= 0 && coinIndex < 3) {
             sessionStarCoins_[coinIndex] = true;
         }
@@ -165,12 +174,12 @@ class TutorialScene : public BaseScene, public ISceneGameplayAccess {
     void UpdateExitGuide(float deltaTime);
     void HideExitGuide();
 #ifdef USE_IMGUI
-    friend struct TutorialExitGuideRuntimeProbe::Access;
+    friend struct tutorialExitGuideRuntimeProbe::Access;
 #endif
 
-    enum class MovieState { None, BridgeDrop };
+    enum class MovieState { kNone, kBridgeDrop };
 
-    MovieState movieState_ = MovieState::None;
+    MovieState movieState_ = MovieState::kNone;
     float movieTimer_ = 0.0f;
     engine::Vector3 movieStartCameraEye_;
     engine::Vector3 movieStartCameraTarget_;
@@ -181,12 +190,12 @@ class TutorialScene : public BaseScene, public ISceneGameplayAccess {
     engine::InputManager* inputManager_ = nullptr;
 
     // --- サブシステム (機能を委譲するクラスたち) ---
-    std::unique_ptr<LevelLoader> levelLoader_ = nullptr;     // 配置読み込み
-    std::unique_ptr<LockOnSystem> lockOnSystem_ = nullptr;   // ロックオン管理
-    std::unique_ptr<ObjectManager> objectManager_ = nullptr; //  オブジェクト管理
+    std::unique_ptr<LevelLoader> levelLoader_;     // 配置読み込み
+    std::unique_ptr<LockOnSystem> lockOnSystem_;   // ロックオン管理
+    std::unique_ptr<ObjectManager> objectManager_; //  オブジェクト管理
 
     std::vector<std::unique_ptr<engine::Sprite>> sprites_;
-    std::unique_ptr<engine::ParticleSystem> particleSystem_ = nullptr;
+    std::unique_ptr<engine::ParticleSystem> particleSystem_;
     std::unique_ptr<Text> debugText_;
     std::unique_ptr<GameRule> gameRule_;
 
@@ -203,6 +212,25 @@ class TutorialScene : public BaseScene, public ISceneGameplayAccess {
     std::unique_ptr<Skybox> skybox_;
     uint32_t skyboxTextureHandle_ = 0;
 
+    // スキップボタンと確認画面の描画順を定義する。
+    enum class SkipUiPart : size_t { kOpen, kOpenLabel, kBackdrop, kPanel, kTitle,
+                                    kDescription, kSaveError, kCancel, kCancelLabel, kConfirm, kConfirmLabel, kHint, kCount };
+    void InitializeSkipUi();
+    bool UpdateSkipUi();
+    void DrawSkipUi();
+
+    std::array<std::unique_ptr<engine::Sprite>, static_cast<size_t>(SkipUiPart::kCount)> skipSprites_;
+    uint32_t skipButtonNormal_ = 0;
+    uint32_t skipButtonSelected_ = 0;
+    bool skipMenuOpen_ = false;
+    bool skipButtonHovered_ = false;
+    bool skipConfirmSelected_ = false;
+    bool skipSaveFailed_ = false;
+#ifndef USE_IMGUI
+    bool skipCursorEnabled_ = false;
+    bool skipPreviousCursorVisible_ = false;
+#endif
+
     bool isGoal_ = false;
     bool goalSavePerformed_ = false;
     bool goalSaveErrorShown_ = false;
@@ -216,7 +244,7 @@ class TutorialScene : public BaseScene, public ISceneGameplayAccess {
     CopyStyleHud copyStyleHud_;
     PlayerHealthHud healthHud_;
 
-    int loadingInitializePhase_ = 0;
+    std::int32_t loadingInitializePhase_ = 0;
     size_t loadingInitializeItemIndex_ = 0;
     size_t loadingInitializeCompletedUnits_ = 0;
     size_t loadingInitializeTotalUnits_ = 1;

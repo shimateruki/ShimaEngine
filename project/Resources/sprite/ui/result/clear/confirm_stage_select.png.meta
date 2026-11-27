@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "99b9fde44c54b329213b1a4d7e9f3d68",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/sprite/ui/result/clear/confirm_stage_select.png",
+  "version": 1
+}

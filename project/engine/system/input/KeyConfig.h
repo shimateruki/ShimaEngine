@@ -1,19 +1,17 @@
 #pragma once
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 
-#include <windows.h> // WORD型(パッド用)を使うために追加
+#include <windows.h> // XInputのボタン値を保持するWORDの定義。
 
-// ==================================================
-// ：1つのアクションにつき「キー」と「パッド」両方を保持する構造体
-// ==================================================
 // BindDataは、1つのアクションに割り当てるキーボード、マウス、パッド入力をまとめます。
 // 関連：KeyConfig（この型を使う機能の本体）
 struct BindData {
-    int keyCode = 0;   // キーボードのキー (DIK_***)
+    std::int32_t keyCode = 0; // DIKキーコード。0はキーボード未割当。
     // マウスは0が左ボタンとして有効なため、未割当には-1を使う。
-    int mouseButton = -1;
-    WORD padCode = 0;  // コントローラーのボタン (XINPUT_GAMEPAD_***)
+    std::int32_t mouseButton = -1;
+    WORD padCode = 0; // XInputのボタン値。0はパッド未割当。
 };
 
 // 担当：アクション名からキーボード・マウス・パッドの固定割当を返す。
@@ -27,26 +25,24 @@ public:
     /// <summary>既定のアクション割り当てを準備する。</summary>
     void Initialize();
 
-    // アクション名からデータを取得する関数群
     // 未登録アクションは0を返し、割当キーなしとして扱う。
-    int GetKeyCode(const std::string& actionName) const;
+    std::int32_t GetKeyCode(const std::string& actionName) const;
 
     // 未登録アクションは0を返す。複数デバイスの統合判定はInputManager側で行う。
     WORD GetPadCode(const std::string& actionName) const;
 
-    // パッドの数値を「A」や「RB」などの文字列に変換する
-    // 引数はDIKキーコード。未対応の値も数値を含む表示名として返す。
-    std::string GetKeyName(int keyCode) const;
+    // DIKキーコードを操作ガイド用の表示名へ変換する。未対応の非ゼロ値は16進表示。
+    std::string GetKeyName(std::int32_t keyCode) const;
 
     /// <summary>ゲームパッドのボタンコードに対応する表示名を返す。</summary>
     std::string GetPadName(WORD padCode) const;
 
     /// <summary>アクション名に対応する入力割り当てを取得する。</summary>
-    // 戻り値は固定表への借用参照。未登録ならnullptrで、呼び出し側から解放しない。
+    // 固定表の参照を返す。未登録ならnullptr。再初期化で参照は無効になる。
     const BindData* GetBindData(const std::string& actionName) const;
 
-    /// <summary>指定キーがいずれかのゲーム操作へ割り当てられているか返す。</summary>
-    bool IsKeyAssigned(int keyCode) const;
+    /// <summary>固定表に同じキーコードがある場合にtrueを返す。実キーの競合確認に使う。</summary>
+    bool IsKeyAssigned(std::int32_t keyCode) const;
 
 private:
     KeyConfig() = default;

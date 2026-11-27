@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include <cstdint>
 #include "DebugEditor.h"
 #include <numbers>
 #include "EditorToolSettings.h"
@@ -66,6 +67,7 @@ namespace {
     std::string GetLeafName(const std::string& path) {
         size_t slash = path.find_last_of("/\\");
 
+        // 区切りがなければ入力全体を使う。空文字や末尾が区切りのときは既定名を返す。
         if (slash == std::string::npos) {
             return path.empty() ? "Preset" : path;
         }
@@ -100,7 +102,8 @@ namespace {
             return base;
         }
 
-        for (int index = 1; index < 10000; ++index) {
+        // 基底名が使われていれば番号付きの候補を試し、上限に達した場合は _New を返す。
+        for (std::int32_t index = 1; index < 10000; ++index) {
             std::string candidate = base + "_" + std::to_string(index);
 
             if (!SceneHasObjectName(scene, candidate) && !ReservedHasName(reservedNames, candidate)) {
@@ -118,13 +121,13 @@ std::string DebugEditor::MakeUniquePresetObjectName(BaseScene* scene, const std:
 }
 
 // 選択表示や配置の箱には全軸で正の幅が必要。厚みが 0 の箱は別の境界へ切り替える。
-bool DebugEditor::IsValidAabb(const Aabb& aabb) {
+bool DebugEditor::IsValidAabb(const engine::Aabb& aabb) {
     return aabb.max.x > aabb.min.x &&
         aabb.max.y > aabb.min.y &&
         aabb.max.z > aabb.min.z;
 }
 
-engine::Vector3 DebugEditor::GetAabbCenter(const Aabb& aabb) {
+engine::Vector3 DebugEditor::GetAabbCenter(const engine::Aabb& aabb) {
     return {
         (aabb.min.x + aabb.max.x) * 0.5f,
         (aabb.min.y + aabb.max.y) * 0.5f,
@@ -134,13 +137,15 @@ engine::Vector3 DebugEditor::GetAabbCenter(const Aabb& aabb) {
 
 void DebugEditor::AssignPresetInstanceNames(BaseScene* scene, const std::string& presetName,
     std::vector<std::unique_ptr<engine::Object3D>>& objects, PresetRootName rootNameSource) {
+    // 生成結果が空ならルートも子も命名できないため終了する。
     if (objects.empty())
         return;
 
     std::vector<std::string> reservedNames;
     std::string baseName = GetLeafName(presetName);
 
-    if (rootNameSource == PresetRootName::DisplayName) {
+    // 表示名での配置が指定されたときだけ、プリセットの表示名をルート名候補にする。
+    if (rootNameSource == PresetRootName::kDisplayName) {
         const json& preset = PresetManager::GetInstance()->GetPreset(presetName);
         baseName = preset.value("presetDisplayName", baseName);
     }
@@ -156,6 +161,7 @@ void DebugEditor::AssignPresetInstanceNames(BaseScene* scene, const std::string&
 
         std::string childBaseName = objects[index]->GetName();
 
+        // 無名の子はルート名に接尾辞を付けた名前を起点にする。
         if (childBaseName.empty()) {
             childBaseName = rootName + "_Child";
         }
@@ -180,6 +186,7 @@ void DebugEditor::Initialize(SceneManager* sceneManager, engine::DirectXCommon* 
     EditorTransactionManager::GetInstance()->Clear();
     AssetDatabase* assetDatabase = AssetDatabase::GetInstance();
 
+    // 索引は初期化の成否をログに残す。失敗時も残りのエディター初期化は続ける。
     if (!assetDatabase->Initialize("Resources", true)) {
         DebugConsole::GetInstance()->AddLog("Asset Database Error: Resourcesを初期化できませんでした。");
     }
@@ -190,6 +197,7 @@ void DebugEditor::Initialize(SceneManager* sceneManager, engine::DirectXCommon* 
     PresetManager::GetInstance()->Initialize();
     PresetEditor::GetInstance()->Initialize();
     PresetEditor::GetInstance()->SetPlacePresetCallback([this](const std::string& presetName) {
+        // 配置の依頼は、現在の編集シーンがあり、再生・仮配置・パス編集のいずれでもない場合に受け付ける。
         if (!sceneManager_ || !sceneManager_->GetCurrentScene())
             return;
         if (sceneManager_->IsPlaying() || previewObject_ || isPathEditMode_)
@@ -197,6 +205,7 @@ void DebugEditor::Initialize(SceneManager* sceneManager, engine::DirectXCommon* 
 
         BaseScene* currentScene = sceneManager_->GetCurrentScene();
         engine::Object3DCommon* common = currentScene->GetObject3DCommon();
+        // 生成基盤がないか一つも生成できなければ、名前割り当てやプレビューを始めない。
         if (!common)
             return;
 
@@ -204,7 +213,7 @@ void DebugEditor::Initialize(SceneManager* sceneManager, engine::DirectXCommon* 
         if (objects.empty())
             return;
 
-        AssignPresetInstanceNames(currentScene, presetName, objects, PresetRootName::DisplayName);
+        AssignPresetInstanceNames(currentScene, presetName, objects, PresetRootName::kDisplayName);
 
         gameViewCreateMenuMousePos_ = gameViewMousePos_;
         StartGameViewCreatePreview(std::move(objects), "Create Preset: " + presetName);
@@ -227,6 +236,7 @@ void DebugEditor::Initialize(SceneManager* sceneManager, engine::DirectXCommon* 
     PresetEditor::GetInstance()->SetThumbnailInvalidator([this](const std::string& name) {
         projectWindow_.InvalidatePresetThumbnail(name);
     });
+    // 子ウィンドウへ編集主体を渡し、描画・プレビュー・復旧サービスも起動する。
     inspectorWindow_.Initialize(this);
     serializer_.Initialize(this);
     primitiveDrawer_.Initialize(dxCommon);
@@ -247,6 +257,7 @@ void DebugEditor::Initialize(SceneManager* sceneManager, engine::DirectXCommon* 
     const fs::path notificationLog = "Resources/.cache/dds_cache_notifications.jsonl";
     ddsCacheNotificationReadOffset_ = 0;
 
+    // 既存の通知ログは末尾から監視する。サイズが読めなければ先頭から始める。
     if (fs::exists(notificationLog)) {
         std::error_code ec;
         ddsCacheNotificationReadOffset_ = fs::file_size(notificationLog, ec);
@@ -277,6 +288,7 @@ bool DebugEditor::BeginPrefabEditSession(const std::string& prefabName) {
         return false;
     }
 
+    // 同じPrefabなら編集を継続し、別名なら前セッションを取り消してから生成する。
     if (prefabEditMode_) {
         if (prefabEditName_ == prefabName) {
             return true;
@@ -288,6 +300,7 @@ bool DebugEditor::BeginPrefabEditSession(const std::string& prefabName) {
     BaseScene* scene = sceneManager_->GetCurrentScene();
     engine::Object3DCommon* common = scene->GetObject3DCommon();
 
+    // 描画基盤と生成済みルートを確認し、どちらかが無ければシーンの可視状態を変更しない。
     if (!common) {
         return false;
     }
@@ -325,11 +338,12 @@ bool DebugEditor::BeginPrefabEditSession(const std::string& prefabName) {
 
     SetSelectedObject(prefabEditRoot_);
     EditorManager::GetInstance()->SetSelectedObject(this);
-    CameraEditor::GetInstance()->SetMode(CameraEditor::Mode::Editor);
+    CameraEditor::GetInstance()->SetMode(CameraEditor::Mode::kEditor);
     DebugConsole::GetInstance()->AddLog("Prefab Mode: " + prefabName);
     return true;
 }
 
+// 仮ルートが生存する編集中のPrefabを保存し、配置済みの同型インスタンスを同期する。
 bool DebugEditor::SavePrefabEditSession() {
     if (!prefabEditMode_ || !prefabEditRoot_ || !prefabEditScene_ ||
         !prefabEditScene_->IsAlive(prefabEditRoot_)) {
@@ -342,12 +356,13 @@ bool DebugEditor::SavePrefabEditSession() {
     PresetManager* prefabManager = PresetManager::GetInstance();
     const auto beforePrefabs = prefabManager->GetPrefabs();
 
+    // アセットの更新が失敗したら、仮オブジェクトを閉じずに失敗を返す。
     if (!prefabManager->UpdatePrefabFromObject(savedPrefabName, prefabEditRoot_)) {
         return false;
     }
 
     // 保存前後の Prefab 定義を比較して既存インスタンスへ反映し、編集用の仮 Object は同期の後に取り除く。
-    const int synchronizedObjects = prefabManager->SynchronizePrefabInstances(
+    const std::int32_t synchronizedObjects = prefabManager->SynchronizePrefabInstances(
         beforePrefabs,
         *prefabEditScene_,
         prefabEditScene_->GetObject3DCommon());
@@ -356,7 +371,7 @@ bool DebugEditor::SavePrefabEditSession() {
 
     if (synchronizedObjects > 0) {
         // 現行Scene形式はPrefab Instanceの実値も保存するため、同期結果をScene保存対象にします。
-        MarkDirty(SaveMode::All);
+        MarkDirty(SaveMode::kAll);
     }
 
     DebugConsole::GetInstance()->AddLog(
@@ -384,7 +399,8 @@ bool DebugEditor::IsPrefabEditObject(const engine::Object3D* object) const {
 
     const engine::Object3D* current = object;
 
-    for (int depth = 0; current && depth < 512; ++depth) {
+    // 選択対象から親を辿り、編集ルートに届いた場合に所属と判定する。最大512段で打ち切る。
+    for (std::int32_t depth = 0; current && depth < 512; ++depth) {
         if (current == prefabEditRoot_) {
             return true;
         }
@@ -400,6 +416,7 @@ void DebugEditor::EndPrefabEditSession(bool clearTransactions) {
     BaseScene* scene = prefabEditScene_;
     std::unordered_set<engine::Object3D*> editObjects;
 
+    // 編集していたシーンがある場合に、仮オブジェクトを外して元の可視状態を戻す。
     if (scene) {
         for (auto& object : scene->GetObjects()) {
             if (object && IsPrefabEditObject(object.get())) {
@@ -418,6 +435,7 @@ void DebugEditor::EndPrefabEditSession(bool clearTransactions) {
         }
 
         for (const auto& [object, wasVisible] : prefabEditPreviousVisibility_) {
+            // 元から存在した物体でも、生存しているものにだけ可視性を戻す。
             if (scene->IsAlive(object)) {
                 object->SetIsVisible(wasVisible);
             }
@@ -433,6 +451,7 @@ void DebugEditor::EndPrefabEditSession(bool clearTransactions) {
     prefabEditScene_ = nullptr;
     prefabEditPreviousVisibility_.clear();
 
+    // キャンセルなど履歴を引き継がない終了経路では、編集トランザクションも消去する。
     if (clearTransactions) {
         EditorTransactionManager::GetInstance()->Clear();
     }
@@ -458,6 +477,7 @@ void DebugEditor::ResetPrefabEditSessionForSceneChange() {
 void DebugEditor::Update() {
 #ifdef USE_IMGUI
     AssetDatabase::GetInstance()->Update();
+    // 現在のシーンがない間は、選択や配置などシーンを必要とするフレーム処理を行わない。
     if (!sceneManager_ || !sceneManager_->GetCurrentScene())
         return;
 
@@ -467,13 +487,13 @@ void DebugEditor::Update() {
 
     BaseScene* currentScene = sceneManager_->GetCurrentScene();
     engine::InputManager* input = engine::InputManager::GetInstance();
-    engine::Math math;
 
     // =========================================================
     // 1. シーン変更リセット (最優先で行う: ダングリングポインタ防止)
     // =========================================================
     if (lastUpdatedScene_ != currentScene) {
         PresetEditor::GetInstance()->ClearPropertyEditors();
+        // Prefab編集中にシーンが変わった場合、旧シーンの参照を操作せずセッションを無効にする。
         if (prefabEditMode_) {
             ResetPrefabEditSessionForSceneChange();
         }
@@ -493,7 +513,7 @@ void DebugEditor::Update() {
         previewCreateCommandLabel_ = "Place Preview Object";
         lastUpdatedScene_ = currentScene;
         EditorTransactionManager::GetInstance()->Clear();
-        ClearDirty(SaveMode::All);
+        ClearDirty(SaveMode::kAll);
         hasInspectorEditStart_ = false;
         inspectorEditStartStates_.clear();
         requestGameViewCreateMenu_ = false;
@@ -510,15 +530,15 @@ void DebugEditor::Update() {
         change();
     }
     IEditable* current = EditorManager::GetInstance()->GetSelectedObject();
-    static std::string lastSyncedSceneFilename = "";
+    static std::string sLastSyncedSceneFilename = "";
     std::string currentLoadedName = currentScene->GetLoadedFilename();
 
-    // ファイル名が前フレームから変わった時「だけ」同期する
+    // 遷移中の仮名や空名は使わず、ロード完了後のファイル名が変わったときに同期する。
     if (!sceneManager_->IsTransitioning() &&
         !currentLoadedName.empty() &&
-        lastSyncedSceneFilename != currentLoadedName) {
+        sLastSyncedSceneFilename != currentLoadedName) {
         SetSceneFilename(currentLoadedName);
-        lastSyncedSceneFilename = currentLoadedName;
+        sLastSyncedSceneFilename = currentLoadedName;
     }
 
     ClearInvalidSelectedObject();
@@ -530,7 +550,7 @@ void DebugEditor::Update() {
     if (actorToolsActive)
         return;
 
-    // 選択対象が「DebugEditor自身」である間は、以前選んだオブジェクトを保持し続ける
+    // 現在フォーカスがこのエディター以外に移っても、シーンObjectを選んだ場合に限り選択を同期する。
     if (current != nullptr && current != this) {
         engine::Object3D* obj = dynamic_cast<engine::Object3D*>(current);
 
@@ -544,11 +564,12 @@ void DebugEditor::Update() {
 
     if (isPreviewActive && !wasPreviewActive_) {
         CameraEditor* camEditor = CameraEditor::GetInstance();
-        previousCameraMode_ = (int)camEditor->GetMode();
-        camEditor->SetMode(CameraEditor::Mode::Editor);
+        previousCameraMode_ = (std::int32_t)camEditor->GetMode();
+        camEditor->SetMode(CameraEditor::Mode::kEditor);
 
-        // カメラを強制的に上空へ移動させる機能を削除し、現在の視点を維持
+        // 配置を開始したフレームは現在の視点を保ちながらエディターカメラモードにする。
     }
+    // 配置終了のフレームで、開始前に控えたカメラモードへ戻す。
     else if (!isPreviewActive && wasPreviewActive_) {
         CameraEditor::GetInstance()->SetMode((CameraEditor::Mode)previousCameraMode_);
     }
@@ -556,11 +577,12 @@ void DebugEditor::Update() {
     wasPreviewActive_ = isPreviewActive;
 
     // =========================================================
-    //  モードA: 古い設置モード (Hierarchy等からのプレビュー配置)
+    // 配置プレビュー中は通常選択を止め、位置の追従・配置確定・中断を処理する。
     // =========================================================
     if (SettingsMenuOverlay::IsAnyActive()) {
         // 設定項目をクリックしても背後のオブジェクトを選択・移動しないようにします。
     }
+    // 配置中はGame Viewの有効な左ボタン解放で確定する。
     else if (previewObject_) {
         UpdatePreviewPlacement();
 
@@ -589,33 +611,35 @@ void DebugEditor::Update() {
         if (!ImGui::GetIO().WantCaptureKeyboard) {
             // 入力欄で編集中はショートカットを実行しない。
             if (input->IsKeyTriggered(DIK_DELETE)) {
-                // パス編集モード中なら「点」を消す！
+                // パス編集中はレコーダーで選択している点だけを削除する。
                 if (isPathEditMode_ && selectedObject_ && selectedObject_->GetRecorder() && selectedObject_->GetRecorder()->IsPinSelected()) {
                     selectedObject_->GetRecorder()->DeleteSelectedPin();
                 }
 
-                // 通常モードなら「オブジェクト」を消す！
+                // パス編集中でなければ、通常の選択オブジェクトを削除する。
                 else if (!isPathEditMode_) {
-                    EditorCommandRegistry::GetInstance()->Execute(EditorCommandId::EditDelete);
+                    EditorCommandRegistry::GetInstance()->Execute(editorCommandId::kEditDelete);
                 }
             }
 
+            // Ctrl+C/Dは複製、Ctrl+Z/Yは履歴の戻し・やり直しに割り当てる。
             const bool isControlPressed =
                 input->IsKeyPressed(DIK_LCONTROL) || input->IsKeyPressed(DIK_RCONTROL);
             if (isControlPressed && (input->IsKeyTriggered(DIK_C) || input->IsKeyTriggered(DIK_D))) {
-                EditorCommandRegistry::GetInstance()->Execute(EditorCommandId::EditDuplicate);
+                EditorCommandRegistry::GetInstance()->Execute(editorCommandId::kEditDuplicate);
             }
 
             if (isControlPressed && input->IsKeyTriggered(DIK_Z)) {
-                EditorCommandRegistry::GetInstance()->Execute(EditorCommandId::EditUndo);
+                EditorCommandRegistry::GetInstance()->Execute(editorCommandId::kEditUndo);
             }
 
             if (isControlPressed && input->IsKeyTriggered(DIK_Y)) {
-                EditorCommandRegistry::GetInstance()->Execute(EditorCommandId::EditRedo);
+                EditorCommandRegistry::GetInstance()->Execute(editorCommandId::kEditRedo);
             }
 
+            // Endキーで選択オブジェクトを床へ移動するコマンドを実行する。
             if (input->IsKeyTriggered(DIK_END)) {
-                EditorCommandRegistry::GetInstance()->Execute(EditorCommandId::ObjectDropToFloor);
+                EditorCommandRegistry::GetInstance()->Execute(editorCommandId::kObjectDropToFloor);
             }
 
             // Fはカメラ編集を優先し、それ以外は選択中のScene Objectへ寄せる。
@@ -628,6 +652,7 @@ void DebugEditor::Update() {
             }
         }
 
+        // カメラエディター選択中だけ、軌道の中心を操作できるギズモを描く。
         if (isCameraEditorSelected) {
             cameraEditor->DrawOrbitCenterGizmo(gameViewOffset_, gameViewSize_, isGridSnapEnabled_, snapValue_);
         }
@@ -660,12 +685,14 @@ void DebugEditor::Update() {
                 isSelectionRectReady_ = absX >= kSelectionDragThreshold || absY >= kSelectionDragThreshold;
             }
 
+            // ボタンを離したとき、しきい値以上のドラッグなら矩形、未満なら押下点で個別選択する。
             if (isSelectionRectDragging_ && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
                 if (isSelectionRectReady_) {
                     SelectObjectsInGameViewRect(selectionRectStart_, selectionRectEnd_, isShiftPressed);
                 } else {
                     engine::Object3D* hit = PickObjectAtGameViewPos(selectionRectStart_);
 
+                    // ヒット時はShiftで選択を反転し、通常クリックは単独選択にする。空白クリックはShiftなしの場合のみ解除する。
                     if (hit) {
                         if (isShiftPressed) {
                             ToggleSelectedObject(hit);
@@ -685,195 +712,9 @@ void DebugEditor::Update() {
             }
         }
 
-        // --- ギズモ (ImGuizmo) 操作 ---
-        if (selectedObject_ && !editingCameraRegion) {
-            if (!isPathEditMode_ && !selectedObject_->GetIsLocked() && EditorToolSettings::Get().IsVisible("transformGizmo")) {
-                static ImGuizmo::OPERATION curOp = ImGuizmo::TRANSLATE;
+        UpdateTransformGizmo(input, editingCameraRegion);
 
-                if (!ImGui::GetIO().WantCaptureKeyboard && !ImGui::GetIO().WantTextInput) {
-                    if (input->IsKeyTriggered(DIK_T))
-                        curOp = ImGuizmo::TRANSLATE;
-                    if (input->IsKeyTriggered(DIK_R))
-                        curOp = ImGuizmo::ROTATE;
-                    if (input->IsKeyTriggered(DIK_S))
-                        curOp = ImGuizmo::SCALE;
-                }
-
-                engine::Camera* cam = CameraManager::GetInstance()->GetActiveCamera();
-
-                if (cam) {
-                    ImGuizmo::SetDrawlist();
-                    ImGuizmo::SetRect(gameViewOffset_.x, gameViewOffset_.y, gameViewSize_.x, gameViewSize_.y);
-
-                    engine::Matrix4x4 view = cam->GetViewMatrix();
-                    engine::Matrix4x4 proj = cam->GetProjectionMatrix();
-                    const Transform* tr = selectedObject_->GetTransform();
-
-                    selectedObject_->UpdateWorldMatrix();
-                    engine::Matrix4x4 world = selectedObject_->GetWorldMatrix();
-
-                    float snapVal = isGridSnapEnabled_ ? snapValue_ : 0.0f;
-                    float snapArr[3] = { snapVal, snapVal, snapVal };
-
-                    // ピボット変更はImGuizmo上の操作点だけをずらし、モデル本体のWorld行列は維持する。
-                    engine::Matrix4x4 gizmoWorld = world;
-                    engine::Vector3 gizmoPivotWorld = { world.m[3][0], world.m[3][1], world.m[3][2] };
-                    bool useTranslatedPivot = curOp == ImGuizmo::TRANSLATE && gizmoPivotMode_ != 0;
-
-                    if (useTranslatedPivot) {
-                        Aabb pivotAabb{};
-                        bool hasPivotAabb = false;
-
-                        if (gizmoPivotMode_ == 1) {
-                            pivotAabb = selectedObject_->GetModelWorldAabb();
-                            hasPivotAabb = IsValidAabb(pivotAabb);
-                        }
-                        else if (gizmoPivotMode_ == 2) {
-                            pivotAabb = selectedObject_->GetAabb();
-                            hasPivotAabb = IsValidAabb(pivotAabb);
-                        }
-
-                        if (hasPivotAabb) {
-                            gizmoPivotWorld = GetAabbCenter(pivotAabb);
-                            gizmoWorld.m[3][0] = gizmoPivotWorld.x;
-                            gizmoWorld.m[3][1] = gizmoPivotWorld.y;
-                            gizmoWorld.m[3][2] = gizmoPivotWorld.z;
-                        }
-                        else {
-                            useTranslatedPivot = false;
-                        }
-                    }
-
-                    ImGuizmo::Manipulate(&view.m[0][0], &proj.m[0][0], curOp, ImGuizmo::WORLD, &gizmoWorld.m[0][0], nullptr, isGridSnapEnabled_ ? snapArr : nullptr);
-
-                    if (ImGuizmo::IsUsing()) {
-                        if (!isDraggingTransform_) {
-                            // ドラッグ開始時の全選択状態を記録し、連続操作を一つのUndoとして戻せるようにする。
-                            isDraggingTransform_ = true;
-                            tempTransformStart_ = *tr;
-                            tempObjectStateStart_ = CaptureObjectState(selectedObject_);
-                            groupTransformStartStates_.clear();
-
-                            for (engine::Object3D* object : selectedObjects_) {
-                                if (!object || !IsObjectInCurrentScene(object))
-                                    continue;
-                                ObjectStateSnapshot snapshot;
-                                snapshot.object = object;
-                                snapshot.beforeState = CaptureObjectState(object);
-                                groupTransformStartStates_.push_back(snapshot);
-                            }
-                        }
-
-                        engine::Matrix4x4 primaryWorldBefore = world;
-                        engine::Matrix4x4 editedWorld = gizmoWorld;
-
-                        if (useTranslatedPivot) {
-                            // 操作点の移動差分だけを元のWorld行列へ戻し、ピボットの移動をObjectの移動へ変換する。
-                            engine::Vector3 editedPivotWorld = {
-                                gizmoWorld.m[3][0],
-                                gizmoWorld.m[3][1],
-                                gizmoWorld.m[3][2]
-                            };
-
-                            engine::Vector3 pivotDelta = {
-                                editedPivotWorld.x - gizmoPivotWorld.x,
-                                editedPivotWorld.y - gizmoPivotWorld.y,
-                                editedPivotWorld.z - gizmoPivotWorld.z
-                            };
-
-                            editedWorld = world;
-                            editedWorld.m[3][0] += pivotDelta.x;
-                            editedWorld.m[3][1] += pivotDelta.y;
-                            editedWorld.m[3][2] += pivotDelta.z;
-                        }
-
-                        engine::Matrix4x4 newLocalMat = editedWorld;
-
-                        // 親付きObjectはWorldのまま保存せず、親の逆行列でローカル姿勢へ戻す。
-                        if (selectedObject_->GetParent()) {
-                            engine::Matrix4x4 parentWorldInv = math.Inverse(selectedObject_->GetParent()->GetWorldMatrix());
-                            newLocalMat = math.Multiply(editedWorld, parentWorldInv);
-                        }
-
-                        engine::Vector3 s, rDeg, t;
-                        ImGuizmo::DecomposeMatrixToComponents(&newLocalMat.m[0][0], &t.x, &rDeg.x, &s.x);
-
-                        selectedObject_->SetTranslate(t);
-                        selectedObject_->SetScale(s);
-                        // 回転の本体はローカル行列から求めた Quaternion。Inspector の確認用回転は ImGuizmo の角度をラジアンに直して渡す。
-                        selectedObject_->SetQuaternionWithEulerHint(math_.MatrixToQuaternion(newLocalMat), { ToRadians(rDeg.x), ToRadians(rDeg.y), ToRadians(rDeg.z) });
-
-                        selectedObject_->UpdateLocalMatrix();
-                        selectedObject_->UpdateWorldMatrix();
-
-                        engine::Matrix4x4 primaryWorldAfter = selectedObject_->GetWorldMatrix();
-                        engine::Matrix4x4 groupDelta = math.Multiply(math.Inverse(primaryWorldBefore), primaryWorldAfter);
-                        // 複数選択では主ObjectのWorld差分を配る。親子を同時選択した場合は二重変換を避ける。
-
-                        for (engine::Object3D* object : selectedObjects_) {
-                            if (!object || object == selectedObject_ || !IsObjectInCurrentScene(object) || object->GetIsLocked())
-                                continue;
-
-                            bool hasSelectedAncestor = false;
-
-                            for (engine::Object3D* parent = object->GetParent(); parent != nullptr; parent = parent->GetParent()) {
-                                if (IsObjectSelected(parent)) {
-                                    hasSelectedAncestor = true;
-                                    break;
-                                }
-                            }
-
-                            if (hasSelectedAncestor) {
-                                continue;
-                            }
-
-                            object->UpdateWorldMatrix();
-                            engine::Matrix4x4 objectWorldBefore = object->GetWorldMatrix();
-                            engine::Matrix4x4 objectWorldAfter = math.Multiply(objectWorldBefore, groupDelta);
-                            engine::Matrix4x4 objectLocalAfter = objectWorldAfter;
-
-                            if (object->GetParent()) {
-                                engine::Matrix4x4 parentWorldInv = math.Inverse(object->GetParent()->GetWorldMatrix());
-                                objectLocalAfter = math.Multiply(objectWorldAfter, parentWorldInv);
-                            }
-
-                            engine::Vector3 otherScale, otherRotDeg, otherTranslate;
-                            ImGuizmo::DecomposeMatrixToComponents(&objectLocalAfter.m[0][0], &otherTranslate.x, &otherRotDeg.x, &otherScale.x);
-
-                            object->SetTranslate(otherTranslate);
-                            object->SetScale(otherScale);
-                            object->SetQuaternionWithEulerHint(math_.MatrixToQuaternion(objectLocalAfter), { ToRadians(otherRotDeg.x), ToRadians(otherRotDeg.y), ToRadians(otherRotDeg.z) });
-                            object->UpdateLocalMatrix();
-                            object->UpdateWorldMatrix();
-                        }
-
-                    }
-                    // ドラッグ終了時に編集履歴を確定し、Director の自動キーが有効なら選択対象の確定姿勢を記録する。
-                    else if (isDraggingTransform_) {
-                        isDraggingTransform_ = false;
-
-                        if (!groupTransformStartStates_.empty()) {
-                            RegisterObjectsEdited(groupTransformStartStates_,
-                                groupTransformStartStates_.size() > 1 ? "Gizmo Group Transform" : "Gizmo Transform");
-                            groupTransformStartStates_.clear();
-                        } else {
-                            RegisterObjectEdited(selectedObject_, tempObjectStateStart_, "Gizmo Transform");
-                        }
-
-                        if (ghostDirector_ &&
-                            EditorManager::GetInstance()->GetSelectedObject() == ghostDirector_ &&
-                            ghostDirector_->IsAutoKeyEnabled()) {
-                            for (engine::Object3D* object : selectedObjects_) {
-                                if (object && IsObjectInCurrentScene(object)) {
-                                    ghostDirector_->RecordTransformKey(object);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
+        // 選択境界の表示が有効な場合に、矩形と選択中の境界を重ねる。
         if (EditorToolSettings::Get().IsVisible("selectionBounds")) {
             DrawSelectionRectangleOverlay();
             DrawSelectedObjectBoundsOverlay();
@@ -893,6 +734,7 @@ void DebugEditor::Update() {
     // 再生中はゲーム画面を優先し、編集用のアイコンを重ねない。
     if (!sceneManager_->IsPlaying() && EditorToolSettings::Get().IsVisible("sceneIcons"))
         Draw3DIcons();
+    // 設定オーバーレイが閉じている間に、用途ごとの表示設定を確認して編集補助を重ねる。
     if (!SettingsMenuOverlay::IsAnyActive()) {
         if (!sceneManager_->IsPlaying() && EditorToolSettings::Get().IsVisible("eventIds"))
             DrawEventIdOverlay();
@@ -904,6 +746,217 @@ void DebugEditor::Update() {
     }
 #endif
 }
+
+#ifdef USE_IMGUI
+// 選択物のギズモ操作をローカル姿勢に変換し、ドラッグを一件のUndoへまとめる。
+void DebugEditor::UpdateTransformGizmo(engine::InputManager* input, bool editingCameraRegion) {
+    // 対象なし・ロック中・カメラ領域またはパス編集中・ツール非表示の場合は操作しない。
+    if (!selectedObject_ || editingCameraRegion || isPathEditMode_ ||
+        selectedObject_->GetIsLocked() || !EditorToolSettings::Get().IsVisible("transformGizmo")) {
+        return;
+    }
+
+    engine::Math math;
+
+    static ImGuizmo::OPERATION sCurOp = ImGuizmo::TRANSLATE;
+
+    // 入力欄がキーボードを使用していないときだけ、T/R/Sで移動・回転・拡縮を選べる。
+    if (!ImGui::GetIO().WantCaptureKeyboard && !ImGui::GetIO().WantTextInput) {
+        if (input->IsKeyTriggered(DIK_T))
+            sCurOp = ImGuizmo::TRANSLATE;
+        if (input->IsKeyTriggered(DIK_R))
+            sCurOp = ImGuizmo::ROTATE;
+        if (input->IsKeyTriggered(DIK_S))
+            sCurOp = ImGuizmo::SCALE;
+    }
+
+    engine::Camera* cam = CameraManager::GetInstance()->GetActiveCamera();
+
+    // アクティブカメラがあるときだけ、現在の対象姿勢と表示矩形からギズモを投影する。
+    if (cam) {
+        ImGuizmo::SetDrawlist();
+        ImGuizmo::SetRect(gameViewOffset_.x, gameViewOffset_.y, gameViewSize_.x, gameViewSize_.y);
+
+        engine::Matrix4x4 view = cam->GetViewMatrix();
+        engine::Matrix4x4 proj = cam->GetProjectionMatrix();
+        const Transform* tr = selectedObject_->GetTransform();
+
+        selectedObject_->UpdateWorldMatrix();
+        engine::Matrix4x4 world = selectedObject_->GetWorldMatrix();
+
+        float snapVal = isGridSnapEnabled_ ? snapValue_ : 0.0f;
+        float snapArr[3] = { snapVal, snapVal, snapVal };
+
+        // ピボット変更はImGuizmo上の操作点だけをずらし、モデル本体のWorld行列は維持する。
+        engine::Matrix4x4 gizmoWorld = world;
+        engine::Vector3 gizmoPivotWorld = { world.m[3][0], world.m[3][1], world.m[3][2] };
+        bool useTranslatedPivot = sCurOp == ImGuizmo::TRANSLATE && gizmoPivotMode_ != 0;
+
+        if (useTranslatedPivot) {
+            engine::Aabb pivotAabb{};
+            bool hasPivotAabb = false;
+
+            // ピボットの設定に応じてモデル境界か衝突境界を参照し、有効な箱がなければ原点を使う。
+            if (gizmoPivotMode_ == 1) {
+                pivotAabb = selectedObject_->GetModelWorldAabb();
+                hasPivotAabb = IsValidAabb(pivotAabb);
+            }
+            else if (gizmoPivotMode_ == 2) {
+                pivotAabb = selectedObject_->GetAabb();
+                hasPivotAabb = IsValidAabb(pivotAabb);
+            }
+
+            if (hasPivotAabb) {
+                gizmoPivotWorld = GetAabbCenter(pivotAabb);
+                gizmoWorld.m[3][0] = gizmoPivotWorld.x;
+                gizmoWorld.m[3][1] = gizmoPivotWorld.y;
+                gizmoWorld.m[3][2] = gizmoPivotWorld.z;
+            }
+            else {
+                useTranslatedPivot = false;
+            }
+        }
+
+        ImGuizmo::Manipulate(&view.m[0][0], &proj.m[0][0], sCurOp, ImGuizmo::WORLD, &gizmoWorld.m[0][0], nullptr, isGridSnapEnabled_ ? snapArr : nullptr);
+
+        // 操作中のフレームは姿勢を反映し、最初のフレームでだけ変更前を記録する。
+        if (ImGuizmo::IsUsing()) {
+            if (!isDraggingTransform_) {
+                BeginGizmoDrag(*tr);
+            }
+
+            engine::Matrix4x4 primaryWorldBefore = world;
+            engine::Matrix4x4 editedWorld = gizmoWorld;
+
+            if (useTranslatedPivot) {
+                // 操作点の移動差分だけを元のWorld行列へ戻し、ピボットの移動をObjectの移動へ変換する。
+                engine::Vector3 editedPivotWorld = {
+                    gizmoWorld.m[3][0],
+                    gizmoWorld.m[3][1],
+                    gizmoWorld.m[3][2]
+                };
+
+                engine::Vector3 pivotDelta = {
+                    editedPivotWorld.x - gizmoPivotWorld.x,
+                    editedPivotWorld.y - gizmoPivotWorld.y,
+                    editedPivotWorld.z - gizmoPivotWorld.z
+                };
+
+                editedWorld = world;
+                editedWorld.m[3][0] += pivotDelta.x;
+                editedWorld.m[3][1] += pivotDelta.y;
+                editedWorld.m[3][2] += pivotDelta.z;
+            }
+
+            engine::Matrix4x4 newLocalMat = editedWorld;
+
+            // 親付きObjectはWorldのまま保存せず、親の逆行列でローカル姿勢へ戻す。
+            if (selectedObject_->GetParent()) {
+                engine::Matrix4x4 parentWorldInv = math.Inverse(selectedObject_->GetParent()->GetWorldMatrix());
+                newLocalMat = math.Multiply(editedWorld, parentWorldInv);
+            }
+
+            engine::Vector3 s, rDeg, t;
+            ImGuizmo::DecomposeMatrixToComponents(&newLocalMat.m[0][0], &t.x, &rDeg.x, &s.x);
+
+            selectedObject_->SetTranslate(t);
+            selectedObject_->SetScale(s);
+            // 回転の本体はローカル行列から求めた Quaternion。Inspector の確認用回転は ImGuizmo の角度をラジアンに直して渡す。
+            selectedObject_->SetQuaternionWithEulerHint(math_.MatrixToQuaternion(newLocalMat), { ToRadians(rDeg.x), ToRadians(rDeg.y), ToRadians(rDeg.z) });
+
+            selectedObject_->UpdateLocalMatrix();
+            selectedObject_->UpdateWorldMatrix();
+
+            engine::Matrix4x4 primaryWorldAfter = selectedObject_->GetWorldMatrix();
+            engine::Matrix4x4 groupDelta = math.Multiply(math.Inverse(primaryWorldBefore), primaryWorldAfter);
+            // 複数選択では主ObjectのWorld差分を配る。親子を同時選択した場合は二重変換を避ける。
+
+            for (engine::Object3D* object : selectedObjects_) {
+                if (!object || object == selectedObject_ || !IsObjectInCurrentScene(object) || object->GetIsLocked())
+                    continue;
+
+                bool hasSelectedAncestor = false;
+
+                for (engine::Object3D* parent = object->GetParent(); parent != nullptr; parent = parent->GetParent()) {
+                    if (IsObjectSelected(parent)) {
+                        hasSelectedAncestor = true;
+                        break;
+                    }
+                }
+
+                if (hasSelectedAncestor) {
+                    continue;
+                }
+
+                object->UpdateWorldMatrix();
+                engine::Matrix4x4 objectWorldBefore = object->GetWorldMatrix();
+                engine::Matrix4x4 objectWorldAfter = math.Multiply(objectWorldBefore, groupDelta);
+                engine::Matrix4x4 objectLocalAfter = objectWorldAfter;
+
+                if (object->GetParent()) {
+                    engine::Matrix4x4 parentWorldInv = math.Inverse(object->GetParent()->GetWorldMatrix());
+                    objectLocalAfter = math.Multiply(objectWorldAfter, parentWorldInv);
+                }
+
+                engine::Vector3 otherScale, otherRotDeg, otherTranslate;
+                ImGuizmo::DecomposeMatrixToComponents(&objectLocalAfter.m[0][0], &otherTranslate.x, &otherRotDeg.x, &otherScale.x);
+
+                object->SetTranslate(otherTranslate);
+                object->SetScale(otherScale);
+                object->SetQuaternionWithEulerHint(math_.MatrixToQuaternion(objectLocalAfter), { ToRadians(otherRotDeg.x), ToRadians(otherRotDeg.y), ToRadians(otherRotDeg.z) });
+                object->UpdateLocalMatrix();
+                object->UpdateWorldMatrix();
+            }
+
+        }
+        // ギズモが操作中でなくなれば、一連のドラッグを確定する。
+        else if (isDraggingTransform_) {
+            FinishGizmoDrag();
+        }
+    }
+}
+
+void DebugEditor::BeginGizmoDrag(const Transform& transform) {
+    // ドラッグ開始時の全選択状態を記録し、連続操作を一つのUndoとして戻せるようにする。
+    isDraggingTransform_ = true;
+    tempTransformStart_ = transform;
+    tempObjectStateStart_ = CaptureObjectState(selectedObject_);
+    groupTransformStartStates_.clear();
+
+    for (engine::Object3D* object : selectedObjects_) {
+        if (!object || !IsObjectInCurrentScene(object))
+            continue;
+        ObjectStateSnapshot snapshot;
+        snapshot.object = object;
+        snapshot.beforeState = CaptureObjectState(object);
+        groupTransformStartStates_.push_back(snapshot);
+    }
+}
+
+void DebugEditor::FinishGizmoDrag() {
+    // 操作終了時にUndoを一件登録し、Directorの自動キーへ確定姿勢を渡す。
+    isDraggingTransform_ = false;
+
+    // 複数選択の開始状態を記録していればまとめて履歴へ登録し、それ以外は主対象の変更を確定する。
+    if (!groupTransformStartStates_.empty()) {
+        RegisterObjectsEdited(groupTransformStartStates_,
+            groupTransformStartStates_.size() > 1 ? "Gizmo Group Transform" : "Gizmo Transform");
+        groupTransformStartStates_.clear();
+    } else {
+        RegisterObjectEdited(selectedObject_, tempObjectStateStart_, "Gizmo Transform");
+    }
+
+    if (ghostDirector_ &&
+        EditorManager::GetInstance()->GetSelectedObject() == ghostDirector_ &&
+        ghostDirector_->IsAutoKeyEnabled()) {
+        for (engine::Object3D* object : selectedObjects_) {
+            if (object && IsObjectInCurrentScene(object)) {
+                ghostDirector_->RecordTransformKey(object);
+            }
+        }
+    }
+}
+#endif
 
 // ========================================================================
 // 終了処理
@@ -929,6 +982,7 @@ void DebugEditor::Finalize() {
 // ========================================================================
 void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
 #ifdef USE_IMGUI
+    // エディターの一時非表示、ゲーム再生、設定メニュー中は補助線を重ねない。
     if (EditorToolSettings::Get().IsTemporarilyHidden())
         return;
     if (sceneManager_ && sceneManager_->IsPlaying())
@@ -947,12 +1001,12 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
     // PrimitiveDrawer にパイプライン設定を委譲
     primitiveDrawer_.PreDraw(commandList);
 
-    int instanceCount = 0;
-    const int kMaxDrawLimit = 8192; // 描画上限（PrimitiveDrawerのバッファサイズと合わせる）
+    std::int32_t instanceCount = 0;
+    const std::int32_t kMaxDrawLimit = 8192; // 描画上限（PrimitiveDrawerのバッファサイズと合わせる）
     engine::Math math;
 
     // =========================================================
-    // 1. シーン内のオブジェクトを描画 (統合版)
+    // シーンオブジェクトのコライダー、非表示物の境界、選択した経路を描画する。
     // =========================================================
     auto& objects = currentScene->GetObjects();
 
@@ -966,12 +1020,12 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
         if (instanceCount >= kMaxDrawLimit)
             break;
 
-        ColliderType type = obj->GetColliderType();
+        engine::ColliderType type = obj->GetColliderType();
         bool isInvisibleObj = (obj->GetClassName() == "InvisibleBox");
 
         // --- 描画判定 ---
         // コライダーがなく、かつ「見える物体（モデルあり）」ならデバッグ線は不要
-        if (type == ColliderType::None && !isInvisibleObj)
+        if (type == engine::ColliderType::kNone && !isInvisibleObj)
             continue;
 
         // コライダー表示OFF設定の時、「見える物体」のコライダーは消すが、
@@ -979,6 +1033,7 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
         if (!drawColliders_ && !isInvisibleObj)
             continue;
 #ifdef USE_IMGUI
+        // 不可視物の境界も、対応する表示設定が無効なら省く。
         if (isInvisibleObj && !drawInvisibleBounds_)
             continue;
 #endif
@@ -987,11 +1042,11 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
         engine::Matrix4x4 drawWorldMatrix = math.MakeIdentity4x4();
 
         // コライダーがある場合は、その形状データ(Size/Center/Rotation)に合わせて枠を変形させる
-        if (type != ColliderType::None) {
+        if (type != engine::ColliderType::kNone) {
             // コライダー設定を直接取得 (ImGuiでの変更を即座に反映させるため)
             engine::Object3D::ColliderConfig config = obj->GetColliderConfig();
 
-            if (type == ColliderType::Obb) {
+            if (type == engine::ColliderType::kObb) {
                 // Obb (回転ありボックス) の計算
                 engine::Matrix4x4 matScale = math.MakeScaleMatrix(config.size * 2.0f);
                 engine::Matrix4x4 matRotX = math.MakeRotateXMatrix(config.rotation.x);
@@ -1003,7 +1058,7 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
                 drawWorldMatrix = math.Multiply(matColliderLocal, obj->GetWorldMatrix());
 
             }
-            else if (type == ColliderType::Aabb || type == ColliderType::Terrain) {
+            else if (type == engine::ColliderType::kAabb || type == engine::ColliderType::kTerrain) {
                 // Aabb (軸平行ボックス) の計算
                 engine::Matrix4x4 matScale = math.MakeScaleMatrix(config.size * 2.0f);
                 engine::Matrix4x4 matTrans = math.MakeTranslateMatrix(config.center);
@@ -1011,7 +1066,7 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
                 drawWorldMatrix = math.Multiply(matColliderLocal, obj->GetWorldMatrix());
 
             }
-            else if (type == ColliderType::Sphere) {
+            else if (type == engine::ColliderType::kSphere) {
                 // Sphere (球) の計算
                 float radius = config.size.x; // Sphereはxを半径とする
                 engine::Matrix4x4 matScale = math.MakeScaleMatrix({ radius * 2.0f, radius * 2.0f, radius * 2.0f });
@@ -1019,8 +1074,8 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
                 engine::Matrix4x4 matColliderLocal = math.Multiply(matScale, matTrans);
                 drawWorldMatrix = math.Multiply(matColliderLocal, obj->GetWorldMatrix());
             }
-            else if (type == ColliderType::Cylinder) {
-                // size.x を半径、size.y を高さ(の半分)として扱っている想定
+            else if (type == engine::ColliderType::kCylinder) {
+                // 円柱のXを半径、Yを半高として直径と全高の描画寸法を作る。
                 float radius = config.size.x;
                 float height = config.size.y;
                 engine::Matrix4x4 matScale = math.MakeScaleMatrix({ radius * 2.0f, height * 2.0f, radius * 2.0f });
@@ -1039,25 +1094,25 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
         // --- 色の決定 ---
         engine::Vector4 color;
 
-        if (isInvisibleObj) { // isInvisible ではなく isInvisibleObj を使用
+        if (isInvisibleObj) {
             // 見えないオブジェクトは「紫」固定
             color = { 0.6f, 0.0f, 0.8f, 1.0f };
         }
         else {
             // 通常オブジェクトはコライダー種別ごとの色
             switch (type) {
-            case ColliderType::Obb:    color = { 1.0f, 0.2f, 0.2f, 1.0f }; break; // 赤
+            case engine::ColliderType::kObb:    color = { 1.0f, 0.2f, 0.2f, 1.0f }; break; // 赤
 
-            case ColliderType::Aabb:   color = { 0.0f, 1.0f, 0.0f, 1.0f }; break; // 緑
+            case engine::ColliderType::kAabb:   color = { 0.0f, 1.0f, 0.0f, 1.0f }; break; // 緑
 
-            case ColliderType::Terrain: color = { 0.25f, 1.0f, 0.65f, 1.0f };
+            case engine::ColliderType::kTerrain: color = { 0.25f, 1.0f, 0.65f, 1.0f };
             break;
 
-            case ColliderType::Sphere: color = { 0.0f, 0.5f, 1.0f, 1.0f }; break; // 青
+            case engine::ColliderType::kSphere: color = { 0.0f, 0.5f, 1.0f, 1.0f }; break; // 青
 
-            case ColliderType::Cylinder: color = { 1.0f, 0.5f, 0.0f, 1.0f }; break; // オレンジ
+            case engine::ColliderType::kCylinder: color = { 1.0f, 0.5f, 0.0f, 1.0f }; break; // オレンジ
 
-            case ColliderType::Ring:   color = { 1.0f, 1.0f, 0.0f, 1.0f }; break; // 黄色
+            case engine::ColliderType::kRing:   color = { 1.0f, 1.0f, 0.0f, 1.0f }; break; // 黄色
 
             default:                    color = { 1.0f, 1.0f, 1.0f, 1.0f }; break; // 白
             }
@@ -1068,10 +1123,11 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
             const auto hull = obj->GetCollider()->GetWorldHull();
             std::vector<std::pair<engine::Vector3, engine::Vector3>> edges;
 
-            for (const auto& face : hull) for (int i=0; i<3; ++i) {
+            for (const auto& face : hull) for (std::int32_t i=0; i<3; ++i) {
                 const auto from=face[i],to=face[(i+1)%3];
                 const auto same=[](const engine::Vector3& a,const engine::Vector3& b){return engine::Math::Length(a-b)<0.0001f;};
 
+                // モデルの三角形が共有する辺は重複描画せず、残り枠と線の長さを確認してから描く。
                 if (std::any_of(edges.begin(),edges.end(),[&](const auto& e){return
                     (same(e.first,from)&&same(e.second,to)) || (same(e.first,to)&&same(e.second,from));})) continue;
                 edges.push_back({from,to});
@@ -1097,6 +1153,7 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
             const engine::Collider* collider = obj->GetCollider();
             const auto top = collider->GetFootprintWorldVertices(obj->GetColliderConfig().size.y);
             const auto drawSegment = [&](const engine::Vector3& from, const engine::Vector3& to) {
+                // 輪郭線は描画枠が残り、辺の長さが十分なときに細い箱として描く。
                 if (instanceCount >= kMaxDrawLimit)
                     return;
                 const engine::Vector3 delta = to - from;
@@ -1121,15 +1178,15 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
         }
 
         // PrimitiveDrawer で描画実行
-        if (type == ColliderType::Sphere) {
+        if (type == engine::ColliderType::kSphere) {
             primitiveDrawer_.DrawWireSphere(commandList, drawWorldMatrix, color, instanceCount);
         }
-        else if (type == ColliderType::Cylinder) {
+        else if (type == engine::ColliderType::kCylinder) {
             primitiveDrawer_.DrawWireCylinder(commandList, drawWorldMatrix, color, instanceCount);
         }
-        else if (type == ColliderType::Ring) {
-            // リング形状の描画 (クリーン版)
-            Ring ring = obj->GetCollider()->GetRing();
+        else if (type == engine::ColliderType::kRing) {
+            // リングは外周・内周・半径方向の線を組み合わせて厚みを示す。
+            engine::Ring ring = obj->GetCollider()->GetRing();
             float outerR = ring.outerRadius;
             float innerR = ring.innerRadius;
 
@@ -1144,7 +1201,7 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
 
             engine::Matrix4x4 matObjWorldNoScale = obj->GetWorldMatrix();
 
-            for (int i = 0; i < 3; ++i) {
+            for (std::int32_t i = 0; i < 3; ++i) {
                 engine::Vector3 axis = math.Normalize({ matObjWorldNoScale.m[i][0], matObjWorldNoScale.m[i][1], matObjWorldNoScale.m[i][2] });
                 matObjWorldNoScale.m[i][0] = axis.x;
                 matObjWorldNoScale.m[i][1] = axis.y;
@@ -1167,9 +1224,9 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
             }
 
             // 2. 断面をつなぐ線 (上下それぞれ8方向)
-            const int kLineCount = 8;
+            const std::int32_t kLineCount = 8;
 
-            for (int i = 0; i < kLineCount && instanceCount < kMaxDrawLimit; ++i) {
+            for (std::int32_t i = 0; i < kLineCount && instanceCount < kMaxDrawLimit; ++i) {
                 float angle = (2.0f * std::numbers::pi_v<float> / kLineCount) * i;
                 float s = std::sin(angle);
                 float c = std::cos(angle);
@@ -1179,7 +1236,7 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
                     engine::Vector3 pInner = { innerR * c, h, innerR * s };
                     engine::Vector3 pOuter = { outerR * c, h, outerR * s };
 
-                    // 線を細い箱で代用 (PrimitiveDrawerにDrawLineがあればそちらが良いが、無ければ極小Box)
+                    // 上下の面を構成する半径方向の線は、内外の端点の中間へ細い箱を置いて描く。
                     engine::Vector3 center = (pInner + pOuter) * 0.5f;
                     engine::Vector3 diff = pOuter - pInner;
                     float vectorLength = math.Length(diff);
@@ -1205,6 +1262,7 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
         if (obj->GetClassName() == "Enemy") {
             float range = 0.0f;
 
+            // 敵に能力値がある場合は検知距離を取り出す。正の距離で描画枠が残る場合だけ球を追加する。
             if (obj->GetParameters().has_value()) {
                 range = obj->GetParameters()->detectionRange;
             }
@@ -1242,6 +1300,7 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
                     math.MakeTranslateMatrix(point));
                 primitiveDrawer_.DrawWireSphere(commandList, pointWorld, pointColor, instanceCount++);
 
+                // 最初の経由点には前の点がない。描画枠切れの場合も点間の線を省く。
                 if (index == 0 || instanceCount >= kMaxDrawLimit)
                     continue;
                 const engine::Vector3 previous = path[index - 1] + engine::Vector3{ 0.0f, 0.12f, 0.0f };
@@ -1270,6 +1329,7 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
 #endif
         DrawPreviewWire(commandList, instanceCount, kMaxDrawLimit);
 
+    // 衝突表示が有効なら、生存していて判定種別がある弾の枠を表示する。
     if (drawColliders_) {
         const auto& bullets = BulletManager::GetInstance()->GetBullets();
 
@@ -1279,17 +1339,17 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
             if (instanceCount >= kMaxDrawLimit)
                 break;
 
-            ColliderType type = bullet->GetColliderType();
-            if (type == ColliderType::None)
+            engine::ColliderType type = bullet->GetColliderType();
+            if (type == engine::ColliderType::kNone)
                 continue;
 
             // 弾は黄色固定
             engine::Vector4 color = { 1.0f, 1.0f, 0.0f, 1.0f };
             engine::Matrix4x4 drawWorldMatrix = math.MakeIdentity4x4();
 
-            // 弾の場合は物理挙動の結果(GetObb)をそのまま信じて描画する
-            if (type == ColliderType::Obb) {
-                Obb obb = bullet->GetObb();
+            // 弾は物理更新後の判定位置・軸・寸法を使って表示用行列を組む。
+            if (type == engine::ColliderType::kObb) {
+                engine::Obb obb = bullet->GetObb();
                 engine::Matrix4x4 matScale = math.MakeScaleMatrix(obb.size * 2.0f);
 
                 // OBBの軸から回転行列を復元
@@ -1308,8 +1368,8 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
                 drawWorldMatrix = math.Multiply(matScale, math.Multiply(matRot, matTrans));
 
             }
-            else if (type == ColliderType::Aabb) {
-                Aabb aabb = bullet->GetAabb();
+            else if (type == engine::ColliderType::kAabb) {
+                engine::Aabb aabb = bullet->GetAabb();
                 engine::Vector3 center = (aabb.min + aabb.max) * 0.5f;
                 engine::Vector3 size = aabb.max - aabb.min;
                 engine::Matrix4x4 matScale = math.MakeScaleMatrix(size);
@@ -1317,7 +1377,7 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
                 drawWorldMatrix = math.Multiply(matScale, matTrans);
 
             }
-            else if (type == ColliderType::Sphere) {
+            else if (type == engine::ColliderType::kSphere) {
                 float radius = bullet->GetCollisionRadius();
                 engine::Vector3 center = bullet->GetWorldPosition();
                 engine::Matrix4x4 matScale = math.MakeScaleMatrix({ radius * 2.0f, radius * 2.0f, radius * 2.0f });
@@ -1326,10 +1386,10 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
             }
 
             // PrimitiveDrawer で弾も描画実行
-            if (type == ColliderType::Sphere) {
+            if (type == engine::ColliderType::kSphere) {
                 primitiveDrawer_.DrawWireSphere(commandList, drawWorldMatrix, color, instanceCount);
             }
-            else if (type == ColliderType::Cylinder) {
+            else if (type == engine::ColliderType::kCylinder) {
                 primitiveDrawer_.DrawWireCylinder(commandList, drawWorldMatrix, color, instanceCount);
             }
             else {
@@ -1342,6 +1402,7 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
         // =========================================================
     // 3. エフェクトのコライダー描画
     // =========================================================
+        // 衝突表示が有効なら、実行中とプレビューのエフェクトを同じ枠数の上限で描く。
         if (drawColliders_) {
             // ゲーム中のエフェクト ＋ エディタのプレビューエフェクトを両方収集
             std::vector<EffectObject3D*> effectsToDraw;
@@ -1355,13 +1416,13 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
                 effectsToDraw.push_back(preview);
             }
 
-            // 集めたエフェクトを描画！
+            // 描画枠が残り、形状が指定されたエフェクトだけを描く。
             for (EffectObject3D* effect : effectsToDraw) {
                 if (instanceCount >= kMaxDrawLimit)
                     break;
 
-                ColliderType type = effect->GetColliderType();
-                if (type == ColliderType::None)
+                engine::ColliderType type = effect->GetColliderType();
+                if (type == engine::ColliderType::kNone)
                     continue;
 
                 // エフェクトの判定枠はシアン（水色）にして区別
@@ -1370,7 +1431,7 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
 
                 engine::Object3D::ColliderConfig config = effect->GetColliderConfig();
 
-                if (type == ColliderType::Obb) {
+                if (type == engine::ColliderType::kObb) {
                     engine::Matrix4x4 matScale = math.MakeScaleMatrix(config.size * 2.0f);
                     engine::Matrix4x4 matRotX = math.MakeRotateXMatrix(config.rotation.x);
                     engine::Matrix4x4 matRotY = math.MakeRotateYMatrix(config.rotation.y);
@@ -1381,14 +1442,14 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
                     drawWorldMatrix = math.Multiply(matColliderLocal, effect->GetWorldMatrix());
 
                 }
-                else if (type == ColliderType::Aabb) {
+                else if (type == engine::ColliderType::kAabb) {
                     engine::Matrix4x4 matScale = math.MakeScaleMatrix(config.size * 2.0f);
                     engine::Matrix4x4 matTrans = math.MakeTranslateMatrix(config.center);
                     engine::Matrix4x4 matColliderLocal = math.Multiply(matScale, matTrans);
                     drawWorldMatrix = math.Multiply(matColliderLocal, effect->GetWorldMatrix());
 
                 }
-                else if (type == ColliderType::Sphere) {
+                else if (type == engine::ColliderType::kSphere) {
                     float radius = config.size.x;
                     engine::Matrix4x4 matScale = math.MakeScaleMatrix({ radius * 2.0f, radius * 2.0f, radius * 2.0f });
                     engine::Matrix4x4 matTrans = math.MakeTranslateMatrix(config.center);
@@ -1396,7 +1457,7 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
                     drawWorldMatrix = math.Multiply(matColliderLocal, effect->GetWorldMatrix());
 
                 }
-                else if (type == ColliderType::Cylinder) {
+                else if (type == engine::ColliderType::kCylinder) {
                     float radius = config.size.x;
                     float height = config.size.y;
                     engine::Matrix4x4 matScale = math.MakeScaleMatrix({ radius * 2.0f, height * 2.0f, radius * 2.0f });
@@ -1405,14 +1466,14 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
                     drawWorldMatrix = math.Multiply(matColliderLocal, effect->GetWorldMatrix());
                 }
 
-                // Ring形状の場合
-                if (type == ColliderType::Ring) {
-                    Ring ring;
+                // リングだけは円周と断面の組み合わせで描き、通常の枠描画を行わない。
+                if (type == engine::ColliderType::kRing) {
+                    engine::Ring ring;
 
                     if (effect->GetCollider()) {
                         ring = effect->GetCollider()->GetRing();
                     } else {
-                        // コライダーがない場合(エフェクト単体)の救済
+                        // コライダーが無いプレビューでは、メッシュの内径・外径を使う。
                         ring.center = effect->GetWorldPosition();
                         ring.normal = { 0, 1, 0 };
                         ring.innerRadius = effect->GetMeshSettings().ringInnerRadius;
@@ -1441,7 +1502,7 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
                     // 半径と高さで別途寸法を指定するため、Object のワールド行列は軸を正規化して回転・位置だけ使う。
                     engine::Matrix4x4 matObjWorldNoScale = effect->GetWorldMatrix();
 
-                    for (int i = 0; i < 3; ++i) {
+                    for (std::int32_t i = 0; i < 3; ++i) {
                         engine::Vector3 axis = math.Normalize({ matObjWorldNoScale.m[i][0], matObjWorldNoScale.m[i][1], matObjWorldNoScale.m[i][2] });
                         matObjWorldNoScale.m[i][0] = axis.x;
                         matObjWorldNoScale.m[i][1] = axis.y;
@@ -1464,9 +1525,9 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
                     }
 
                     // 2. 断面をつなぐ線
-                    const int kLineCount = 8;
+                    const std::int32_t kLineCount = 8;
 
-                    for (int i = 0; i < kLineCount && instanceCount < kMaxDrawLimit; ++i) {
+                    for (std::int32_t i = 0; i < kLineCount && instanceCount < kMaxDrawLimit; ++i) {
                         float angle = (2.0f * std::numbers::pi_v<float> / kLineCount) * i;
                         float s = std::sin(angle);
                         float c = std::cos(angle);
@@ -1488,10 +1549,10 @@ void DebugEditor::DrawDebug(ID3D12GraphicsCommandList* commandList) {
                     continue;
                 }
 
-                if (type == ColliderType::Sphere) {
+                if (type == engine::ColliderType::kSphere) {
                     primitiveDrawer_.DrawWireSphere(commandList, drawWorldMatrix, color, instanceCount);
                 }
-                else if (type == ColliderType::Cylinder) {
+                else if (type == engine::ColliderType::kCylinder) {
                     primitiveDrawer_.DrawWireCylinder(commandList, drawWorldMatrix, color, instanceCount);
                 }
                 else {
@@ -1524,6 +1585,7 @@ void DebugEditor::DrawImGui() {
     inspectorWindow_.Draw();
 
 #ifdef USE_IMGUI
+    // シーンObjectを選択している間だけ、操作対象とギズモ・選択表示の設定を出す。
     if (selectedObject_) {
         ImGui::Separator();
 
@@ -1531,14 +1593,16 @@ void DebugEditor::DrawImGui() {
             const char* pivotModes[] = { "原点", "モデル中心", "コリジョン中心" };
             ImGui::Combo("ギズモ基準", &gizmoPivotMode_, pivotModes, IM_ARRAYSIZE(pivotModes));
 
+            // 原点以外を選ぶときは、移動と回転・拡縮で基準が異なることを案内する。
             if (gizmoPivotMode_ != 0) {
                 ImGui::TextDisabled("移動ギズモの表示位置だけを補正します。回転とスケールは原点基準です。");
             }
 
             ImGui::SeparatorText("選択表示");
-            int overlayMode = static_cast<int>(selectionOverlayMode_);
+            std::int32_t overlayMode = static_cast<std::int32_t>(selectionOverlayMode_);
             const char* overlayModes[] = { "スマート", "詳細", "非表示" };
 
+            // 表示モードが選び直されたときに、選択枠の描画設定へ反映する。
             if (ImGui::Combo("選択オブジェクトの可視化", &overlayMode, overlayModes, IM_ARRAYSIZE(overlayModes))) {
                 selectionOverlayMode_ = static_cast<SelectionOverlayMode>(overlayMode);
             }
@@ -1546,10 +1610,11 @@ void DebugEditor::DrawImGui() {
             const std::string activeName = selectedObject_->GetName().empty() ? "Selected" : selectedObject_->GetName();
             ImGui::Text("選択: %zu個 / 操作対象: %s", selectedObjects_.size(), activeName.c_str());
 
-            if (selectionOverlayMode_ == SelectionOverlayMode::Compact) {
+            // 簡略表示と非表示のときは、それぞれ画面に出る補助表示を案内する。
+            if (selectionOverlayMode_ == SelectionOverlayMode::kCompact) {
                 ImGui::TextDisabled("四隅だけを表示し、巨大物や画面外の物体はマーカーへ自動で切り替えます。");
                 ImGui::TextDisabled("Altを押している間は回転に追従した詳細境界を表示します。");
-            } else if (selectionOverlayMode_ == SelectionOverlayMode::Hidden) {
+            } else if (selectionOverlayMode_ == SelectionOverlayMode::kHidden) {
                 ImGui::TextDisabled("選択枠を隠し、ImGuizmoだけを表示します。");
             }
         }

@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "game/system/combat/HitEffectDirector.h"
 #include <numbers>
 
@@ -47,6 +48,7 @@ void SpawnThunderShockHitBurst(engine::Object3D* target) {
     // 対象の横幅・高さに合わせて電撃を周囲へ分散し、大型敵でも接触位置を見せる。
     auto* manager = GpuParticleManager::GetInstance();
 
+    // 対象または初期化済みの粒子管理を取得できなければ、電撃の位置を組み立てない。
     if (!target || !manager || !manager->IsInitialized()) {
         return;
     }
@@ -61,11 +63,11 @@ void SpawnThunderShockHitBurst(engine::Object3D* target) {
 
     const float horizontalRadius = horizontalDiameter * 0.52f;
     const float verticalRadius = verticalDiameter * 0.38f;
-    constexpr int kSparkCount = 5;
+    constexpr std::int32_t kSparkCount = 5;
     constexpr float kTwoPi = (2.0f * std::numbers::pi_v<float>);
 
     // 接触を一点に重ねず、水平の輪と高さの揺れで電撃の位置を分散させます。
-    for (int i = 0; i < kSparkCount; ++i) {
+    for (std::int32_t i = 0; i < kSparkCount; ++i) {
         const float angle = kTwoPi * static_cast<float>(i) / static_cast<float>(kSparkCount) + 0.28f;
         engine::Vector3 pos = center;
         pos.x += std::cos(angle) * horizontalRadius;
@@ -80,6 +82,7 @@ engine::Vector3 ResolveBodyHitPosition(engine::Object3D* target, engine::Object3
     engine::Vector3 awayDirection = knockbackVelocity;
     awayDirection.y = 0.0f;
 
+    // 水平のノックバックがほぼなく、攻撃者と対象が揃う場合は、二者の位置から向きを求める。
     if (IsTinyPlanar(awayDirection) && target && attacker) {
         awayDirection = target->GetWorldPosition() - attacker->GetWorldPosition();
         awayDirection.y = 0.0f;
@@ -100,14 +103,17 @@ void SpawnFireDamageHit(engine::Object3D* target, engine::Object3D* attacker, co
     // 攻撃方向に炎と火の粉を飛ばし、ノックバックが無い場合は上向きへ補う。
     auto* manager = GpuParticleManager::GetInstance();
 
+    // 被弾対象か粒子管理を利用できなければ、炎と火の粉を生成しない。
     if (!target || !manager || !manager->IsInitialized()) {
         return;
     }
 
     const engine::Vector3 position = ResolveBodyHitPosition(target, attacker, knockbackVelocity);
     engine::Vector3 direction = knockbackVelocity;
+    // 炎と火の粉の向きには、ノックバックの水平成分に加え、上向き0.55以上を使う。
     direction.y = (std::max)(direction.y, 0.55f);
 
+    // 方向がほぼゼロの場合に備えて上向きを用意する。通常の有限値は上で0.55以上のY成分になる。
     if (engine::Math::Length(direction) <= 0.001f) {
         direction = {0.0f, 1.0f, 0.0f};
     }
@@ -120,14 +126,17 @@ void SpawnExplosionDamageHit(engine::Object3D* target, engine::Object3D* attacke
     // 衝突面から爆発の核と火花を出し、煙だけは上昇方向へ流す。
     auto* manager = GpuParticleManager::GetInstance();
 
+    // 被弾対象か粒子管理を利用できなければ、爆発の粒子を生成しない。
     if (!target || !manager || !manager->IsInitialized()) {
         return;
     }
 
     const engine::Vector3 position = ResolveBodyHitPosition(target, attacker, knockbackVelocity);
     engine::Vector3 direction = knockbackVelocity;
+    // 爆発の核と火花は、ノックバックに少なくとも0.42の上向き成分を加えた方向へ飛ばす。
     direction.y = (std::max)(direction.y, 0.42f);
 
+    // 方向がほぼゼロの場合に備えて上向きを用意する。通常の有限値は上で0.42以上のY成分になる。
     if (engine::Math::Length(direction) <= 0.001f) {
         direction = {0.0f, 1.0f, 0.0f};
     }
@@ -147,6 +156,7 @@ engine::Vector3 NormalizePlanar(engine::Vector3 value) {
     value.y = 0.0f;
     const float length = std::sqrt(value.x * value.x + value.z * value.z);
 
+    // 水平長が0.001以下なら正規化できる向きが無いため、+Zを使う。
     if (length <= 0.001f) {
         return {0.0f, 0.0f, 1.0f};
     }
@@ -163,6 +173,7 @@ void SpawnPlayerPuniDamageHit(engine::Object3D* target, engine::Object3D* attack
     engine::Vector3 awayDirection = knockbackVelocity;
     awayDirection.y = 0.0f;
 
+    // 水平成分がほぼ無く攻撃者を参照できる場合は、攻撃者の位置から向きを求める。
     if (IsTinyPlanar(awayDirection) && attacker) {
         awayDirection = target->GetWorldPosition() - attacker->GetWorldPosition();
         awayDirection.y = 0.0f;
@@ -211,9 +222,11 @@ void HitEffectDirector::SpawnThrowSlamShockwave(const engine::Vector3& position,
     VfxSequencer::PlayOneShot(kThrowSlamSequence, effectPos);
     SpawnDebris(kThrowSlamDebrisPreset, effectPos, groundPos.y);
 
+    // メッシュ効果の管理を取得できる場合は、共通VFXと破片に輪を重ねる。
     if (auto* meshEffect = MeshEffectManager::GetInstance()) {
         meshEffect->SpawnRingWaveEffect(effectPos);
 
+        // 補正後の衝撃の強さが1.1を超えた場合だけ、少し高い位置に二枚目の輪を重ねる。
         if (power > 1.1f) {
             meshEffect->SpawnRingWaveEffect(effectPos + engine::Vector3{0.0f, 0.02f, 0.0f});
         }
@@ -236,6 +249,7 @@ void HitEffectDirector::SpawnEnemyAbilityHit(const engine::Vector3& position) {
 
 void HitEffectDirector::SpawnDamageEventHit(engine::Object3D* target, engine::Object3D* attacker, const engine::Vector3& knockbackVelocity,
                                             DamageType damageType) {
+    // 被弾対象または攻撃者が無い場合は、演出を分類できないため生成しない。
     if (!target || !attacker) {
         return;
     }
@@ -243,9 +257,10 @@ void HitEffectDirector::SpawnDamageEventHit(engine::Object3D* target, engine::Ob
     const std::string attackerClass = attacker->GetClassName();
     const std::string targetClass = target->GetClassName();
 
-    // GameRuleでダメージ成立後に呼ばれるため、無敵や空振りには打撃を出しません。
+    // ピンク形態のプレイヤーが別クラスの対象へ物理攻撃を当てた場合は、専用の衝撃線を選ぶ。
     if (auto* player = dynamic_cast<Player*>(attacker);
-        player && player->IsPinkSlimeMorphed() && damageType == DamageType::Physical && targetClass != "Player") {
+        player && player->IsPinkSlimeMorphed() && damageType == DamageType::kPhysical && targetClass != "Player") {
+        // メッシュ効果の管理を取得できる場合にだけ、打撃の核と放射状の線を出す。
         if (auto* meshes = MeshEffectManager::GetInstance()) {
             const engine::Vector3 position = ResolveBodyHitPosition(target, attacker, knockbackVelocity);
             const engine::Vector3 direction = NormalizePlanar(target->GetWorldPosition() - attacker->GetWorldPosition());
@@ -255,28 +270,31 @@ void HitEffectDirector::SpawnDamageEventHit(engine::Object3D* target, engine::Ob
                                   {0.0f, yaw, 0.0f});
 
             // 打撃の接触点から短い衝撃線を出し、魔法陣に見える閉じた輪は使いません。
-            for (int i = 0; i < 3; ++i) {
+            for (std::int32_t i = 0; i < 3; ++i) {
                 meshes->SpawnEffectAt(
                     "Resources/json/effect/player/copy/pink/effect_player_pink_hit_spoke.json", position,
                     {-0.35f - 0.35f * static_cast<float>(i % 2), yaw + (static_cast<float>(i) - 1.0f) * 1.5f, 0.0f});
             }
         }
 
+        // 専用演出の条件に該当したため、この攻撃には属性・共通演出を重ねない。
         return;
     }
 
     // ピンクの物理攻撃に該当しなければ属性別の演出を選び、該当した時点で共通演出を省きます。
-    if (damageType == DamageType::Fire) {
+    if (damageType == DamageType::kFire) {
         SpawnFireDamageHit(target, attacker, knockbackVelocity);
         return;
     }
 
-    if (damageType == DamageType::Electric) {
+    // 電撃属性では、対象の大きさに合わせた火花を出して終了する。
+    if (damageType == DamageType::kElectric) {
         SpawnThunderShockHitBurst(target);
         return;
     }
 
-    if (damageType == DamageType::Explosion) {
+    // 爆発属性では、被弾の位置から核・火花・煙を出して終了する。
+    if (damageType == DamageType::kExplosion) {
         SpawnExplosionDamageHit(target, attacker, knockbackVelocity);
         return;
     }
@@ -302,6 +320,7 @@ void HitEffectDirector::EmitGpu(const char* presetName, const engine::Vector3& p
     // 先読み前などManager未初期化の場面では放出を見送る。
     auto* manager = GpuParticleManager::GetInstance();
 
+    // 粒子管理が未初期化の場合を含め、発生先を使えなければ要求を出さない。
     if (!manager || !manager->IsInitialized()) {
         return;
     }

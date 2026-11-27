@@ -1,6 +1,8 @@
 #define NOMINMAX
 #include "game/scene/gameplay/GamePlayScene.h"
 #include "engine/system/scene/SceneEngineIncludes.h"
+#include "engine/graphics/scene/SceneRenderCommands.h"
+#include "engine/graphics/3d/light/SceneLighting.h"
 #include "SceneController.h"
 #include "game/scene/GameSceneDrawing.h"
 #include "ParticleCommon.h"
@@ -73,23 +75,23 @@ void GamePlayScene::Draw() {
     bool isFirstPerson = false;
     engine::Camera* camera = CameraManager::GetInstance()->GetActiveCamera();
 #ifndef _DEBUG
-    if (camera->GetFollowTarget() && camera->GetFollowMode() == engine::Camera::FollowMode::FirstPerson) {
+    // このビルドでは、追従先がある一人称カメラなら、距離を測らずプレイヤーを描画対象から外す。
+    if (camera->GetFollowTarget() && camera->GetFollowMode() == engine::Camera::FollowMode::kFirstPerson) {
         isFirstPerson = true;
     }
 #endif
 
-    // 王冠の演出カメラでは、胸元に近づいても距離による非表示を適用しない。
+    // 王冠演出中は距離による非表示を行わない。その他の未判定時は共通処理で、視点が胸元から3ワールド単位未満にあるかを調べる。
     if (!crownFinale_.active && !crownDefeat_.active && !crownDefeat_.completed && !isFirstPerson) {
         isFirstPerson = IsCameraNearViewActor(camera, player_);
     }
 
-    // ワールド描画に使う光源バッファを先に取得し、通常時と残機喪失演出で共有します。
-    ID3D12Resource* pointLightRes = engine::LightManager::GetInstance()->GetPointLightResource();
-    ID3D12Resource* spotLightRes = engine::LightManager::GetInstance()->GetSpotLightResource();
+    // この描画で使うライトを一度借り、通常時と残機喪失演出の入口へ同じ値を渡す。
+    const auto lighting = engine::SceneLighting::Capture();
 
     // 残機喪失中は演出専用の世界だけを描き、通常のオブジェクト群を重ねません。
     if (lifeLostState_.IsActive()) {
-        DrawLifeLostPresentationWorld(pointLightRes, spotLightRes);
+        DrawLifeLostPresentationWorld(lighting);
         return;
     }
 
@@ -100,45 +102,43 @@ void GamePlayScene::Draw() {
 
     auto& objects = objectManager_->GetObjects();
 
-    // 背景を先に描き、以降は不透明→半透明→画面色・深度を読む特殊材質の順で重ねます。
-    if (skybox_ && camera && engine::LightManager::GetInstance()->IsSkyboxEnabled()) {
-        skybox_->SetTextureHandle(engine::LightManager::GetInstance()->GetSkyboxTextureHandle());
-        skybox_->Draw(camera->GetConstantBuffer());
-    }
+    // 背景を先に描き、通常3Dの設定を適用します。
+    BeginWorldObjectDrawing(skybox_.get(), camera);
 
     // 不透明パスでは、別のパイプラインを必要とする霧・流体・半透明を除きます。
-    GetObject3DCommon()->SetGraphicsCommand();
-    GetObject3DCommon()->SetPipelineState(BlendMode::None); // 不透明設定
+    GetObject3DCommon()->SetPipelineState(BlendMode::kNone); // 不透明設定
 
-    DrawSceneObjectPass(objects, MaterialRenderPolicy::Pass::Opaque, pointLightRes, spotLightRes,
+    DrawSceneObjectPass(objects, materialRenderPolicy::Pass::kOpaque, lighting,
         player_, isFirstPerson, true, [this](engine::Object3D* object) { return IsVisible(object); });
 
     // 王冠の継承・撃破演出が所有するモデルは通常の配置集合と別に描きます。
-    DrawCrownFinaleWorld(pointLightRes, spotLightRes);
-    DrawCrownDefeatWorld(pointLightRes, spotLightRes);
+    DrawCrownFinaleWorld(lighting);
+    DrawCrownDefeatWorld(lighting);
 
     // ロック対象の印は本体の視点非表示判定から独立させます。
     if (player_ && player_->GetHookMarker()) {
-        player_->GetHookMarker()->Draw(pointLightRes, spotLightRes);
+        lighting.Draw(*player_->GetHookMarker(), &engine::Object3D::Draw);
     }
 
+    // アニメーション確認用の立方体が用意されている場合だけ、通常の世界へ描く。
     if (animatedCube_) {
-        animatedCube_->Draw(pointLightRes, spotLightRes);
+        lighting.Draw(*animatedCube_, &engine::Object3D::Draw);
     }
 
     // 弾と攻撃予兆は背景・地形の後、半透明の粒子より前のパスで描きます。
-    DrawEnemyTelegraphs(*this, pointLightRes, spotLightRes);
-    BulletManager::GetInstance()->Draw(pointLightRes, spotLightRes);
+    DrawEnemyTelegraphs(*this, lighting);
+    lighting.Draw(*BulletManager::GetInstance(), &BulletManager::Draw);
     LightEditor::GetInstance()->Draw3D();
 
     // 半透明モデルは不透明物の深度が決まった後に描画します。
-    DrawSceneObjectPass(objects, MaterialRenderPolicy::Pass::Transparent, pointLightRes, spotLightRes,
+    DrawSceneObjectPass(objects, materialRenderPolicy::Pass::kTransparent, lighting,
         player_, isFirstPerson, true, {});
 
     // 敵が所有する加算・半透明の攻撃表示は、床を含むシーンの深度が揃ってから重ねます。
     for (const auto& object : objects) {
+        // 描画できる状態の実体にだけ、追加の半透明表示を描くよう依頼する。
         if (object && object->GetIsRenderVisible()) {
-            object->DrawOwnedTransparentVisuals(pointLightRes, spotLightRes);
+            lighting.Draw(*object, &engine::Object3D::DrawOwnedTransparentVisuals);
         }
     }
     particleSystem_->Draw();
@@ -146,13 +146,26 @@ void GamePlayScene::Draw() {
     // ローカルフォグは通常モデルと分け、深度を参照する描画区間へつなぎます。
     DrawLocalFogObjects(objects, player_, isFirstPerson);
 
+    // 描画コマンドを取得できない場合やカメラプレビュー中は、本編の背景色と深度を操作しない。
+    auto* commands = GetRenderCommands();
+    if (!commands || commands->IsCameraPreviewRendering()) {
+        return;
+    }
+
+    const bool sceneColorCopied = DrawDepthReadingEffects(*commands, objects, *camera, isFirstPerson);
+    DrawAttachedMeshEffects(*commands, objects, sceneColorCopied, lighting);
+}
+
+bool GamePlayScene::DrawDepthReadingEffects(
+    engine::SceneRenderCommands& commands, const std::vector<std::unique_ptr<engine::Object3D>>& objects, const engine::Camera& camera, bool isFirstPerson) {
     // 画面色のコピーは高コストなので、流体または歪み粒子が必要なフレームだけ行います。
-    // hasFluidにはObjectが所有する追加の特殊材質と弾の特殊描画も含めます。
-    bool hasFluid = BulletManager::GetInstance()->HasSpecialMaterialBullets();
+    // hasSpecialMaterialDrawsにはObjectが所有する追加の特殊材質と弾の特殊描画も含めます。
+    bool hasSpecialMaterialDraws = BulletManager::GetInstance()->HasSpecialMaterialBullets();
 
     for (auto& obj : objects) {
+        // 本体か所有する表示に特殊材質を使う物が一つでもあれば、特殊描画が必要になる。
         if (IsSpecialMaterialType(obj->GetMaterialType()) || obj->HasOwnedSpecialMaterialVisuals()) {
-            hasFluid = true;
+            hasSpecialMaterialDraws = true;
             break;
         }
     }
@@ -161,83 +174,75 @@ void GamePlayScene::Draw() {
     GpuParticleManager* gpuParticleManager = GpuParticleManager::GetInstance();
     const bool hasGpuParticles = !gpuParticleManager->IsEmpty();
     const bool gpuParticlesNeedGrab = hasGpuParticles && gpuParticleManager->RequiresSceneColorCopy();
-    bool grabUpdated = false;
-    const bool isCameraPreview = dxCommon_ && dxCommon_->IsCameraPreviewRendering();
+    bool sceneColorCopied = false;
 
-    if (!isCameraPreview && (hasFluid || hasGpuParticles)) {
+    // 特殊材質またはGPU粒子を描く場合は、深度を読み取る区間を用意する。
+    if (hasSpecialMaterialDraws || hasGpuParticles) {
         // 特殊マテリアルか歪みパーティクルが背景色を使う時だけ、画面全体をコピーする。
-        if (hasFluid || gpuParticlesNeedGrab) {
-            dxCommon_->UpdateGrabTexture();
-            grabUpdated = true;
+        if (hasSpecialMaterialDraws || gpuParticlesNeedGrab) {
+            commands.CopySceneColor();
+            sceneColorCopied = true;
         }
 
         // 水・炎・GPU粒子は深度をSRVとして読むため、この区間ではDSVを外します。
-        // PostDrawLocalFogで描画先を戻すまでは、通常の3D描画を挟めません。
-        dxCommon_->PreDrawLocalFog();
+        // EndDepthReadで描画先を戻すまでは、通常の3D描画を挟まない。
+        commands.BeginDepthRead();
 
-        if (hasFluid) {
+        // 画面の色を使う特殊材質がある場合に、地形・所有する表示・弾の専用描画を行う。
+        if (hasSpecialMaterialDraws) {
+            const uint32_t depthSrvHandle = commands.GetDepthSrvHandle();
+            const uint32_t sceneColorSrvHandle = commands.GetSceneColorSrvHandle();
             for (auto& obj : objects) {
-                bool isPlayerPart = false;
-
-                if (isFirstPerson) {
-                    engine::Object3D* current = obj.get();
-
-                    while (current) {
-                        if (current == player_) {
-                            isPlayerPart = true;
-                            break;
-                        }
-
-                        current = current->GetParent();
-                    }
+                // 近接視点で非表示となる本体と子は、特殊材質パスにも描かない。
+                if (IsHiddenByFirstPerson(obj.get(), player_, isFirstPerson)) {
+                    continue;
                 }
 
-                if (isPlayerPart)
-                    continue; // 流体の場合は分身になることはないので単純スキップ
-
                 // 描画順と画面色・深度の準備はシーンで管理し、材質ごとの選択は描画側に委ねる。
-                obj->DrawSpecialMaterial(dxCommon_->GetDepthSrvHandle(), dxCommon_->GetGrabSrvHandle());
-                obj->DrawOwnedSpecialMaterialVisuals(dxCommon_->GetDepthSrvHandle(), dxCommon_->GetGrabSrvHandle());
+                obj->DrawSpecialMaterial(depthSrvHandle, sceneColorSrvHandle);
+                obj->DrawOwnedSpecialMaterialVisuals(depthSrvHandle, sceneColorSrvHandle);
             }
 
-            BulletManager::GetInstance()->DrawSpecial(dxCommon_->GetDepthSrvHandle(), dxCommon_->GetGrabSrvHandle());
+            BulletManager::GetInstance()->DrawSpecial(depthSrvHandle, sceneColorSrvHandle);
         }
 
+        // GPU粒子が稼働している場合だけ、現カメラの行列と深度を渡して描く。
         if (hasGpuParticles) {
-            gpuParticleManager->Draw(dxCommon_->GetCommandList(), camera->GetViewMatrix(),
-                                     camera->GetProjectionMatrix(), gpuParticleTexHandle_,
-                                     dxCommon_->GetDepthSrvHandle());
+            commands.RecordGpuParticles(*gpuParticleManager, camera, gpuParticleTexHandle_);
         }
 
-        dxCommon_->PostDrawLocalFog();
+        commands.EndDepthRead();
     }
 
-    // アタッチ済みMeshEffectの歪みはGrabTextureの更新後に描きます。
-    // カメラプレビュー中は本編画面のコピーを触らないため、このパスを飛ばします。
-    {
-        bool hasMeshEffects = false;
+    return sceneColorCopied;
+}
 
-        for (auto& obj : objects) {
-            if (!obj->GetMeshEffect1Name().empty() || !obj->GetMeshEffect2Name().empty()) {
-                hasMeshEffects = true;
-                break;
-            }
+void GamePlayScene::DrawAttachedMeshEffects(
+    engine::SceneRenderCommands& commands, const std::vector<std::unique_ptr<engine::Object3D>>& objects, bool sceneColorCopied,
+    const engine::SceneLighting& lighting) {
+    bool hasMeshEffects = false;
+
+    for (auto& obj : objects) {
+        // 付属エフェクト欄のいずれかが設定された物を見つけたら、付属描画が必要と判断する。
+        if (!obj->GetMeshEffect1Name().empty() || !obj->GetMeshEffect2Name().empty()) {
+            hasMeshEffects = true;
+            break;
+        }
+    }
+
+    // 付属表示が必要なフレームだけ、背景を準備して各Objectを描く。
+    if (hasMeshEffects) {
+        // 深度を読む描画で背景をコピーしていない場合だけ、付属エフェクトの直前にコピーする。
+        if (!sceneColorCopied) {
+            commands.CopySceneColor();
         }
 
-        if (!isCameraPreview && hasMeshEffects) {
-            // GrabTextureがまだ更新されていなければ、ここで更新する
-            if (!grabUpdated) {
-                dxCommon_->UpdateGrabTexture();
-            }
-
-            // 各オブジェクトのアタッチ済みエフェクトを描画
-            for (auto& obj : objects) {
-                if (!obj->GetIsVisible())
-                    continue;
-                ID3D12Resource* ptLight = pointLightRes;
-                ID3D12Resource* spLight = spotLightRes;
-                obj->DrawAttachedEffects(ptLight, spLight);
-            }
+        // 各オブジェクトのアタッチ済みエフェクトを描画
+        for (auto& obj : objects) {
+            // 非表示のObjectは、取り付けたエフェクトも描かない。
+            if (!obj->GetIsVisible())
+                continue;
+            lighting.Draw(*obj, &engine::Object3D::DrawAttachedEffects);
         }
     }
 }
@@ -250,9 +255,11 @@ void GamePlayScene::DrawUi() {
     BeginSpriteDrawing();
 
     const auto drawGuideSigns = [&](engine::Camera* camera) {
+        // 配置管理が無ければ案内看板を列挙できないため、処理を省く。
         if (!objectManager_)
             return;
         for (const auto& object : objectManager_->GetObjects())
+            // 案内看板型に限り、現在のカメラ指定を渡す。null指定の場合は通常案内を表示しない。
             if (auto* sign = dynamic_cast<GimmickGuideSign*>(object.get()))
                 sign->DrawGuide(camera);
     };
@@ -290,14 +297,17 @@ void GamePlayScene::DrawUi() {
                            (settingsOverlay_ && settingsOverlay_->IsActive());
     // 図鑑などが動画を再生する前に、看板側の共有転送先を解放します。
     drawGuideSigns(modalOpen ? nullptr : CameraManager::GetInstance()->GetActiveCamera());
+    // モーダルが無い間だけ、疾走線をHUDの背後に重ねる。
     if (!modalOpen) {
         for (const auto& line : dashSpeedLineSprites_)
+            // 存在し、現在のフレームで表示が有効な線だけを描く。
             if (line && line->IsVisible())
                 line->Draw();
     }
 
     // JSON配置のSpriteとプレイヤーUIを描いた後、照準・HUD・モーダルの順に重ねます。
     for (auto& sprite : sprites_) {
+        // HUDで専用に描くものを除き、実体のある配置Spriteを先に描く。
         if (sprite && !IsGameplayHUDSprite(sprite.get())) {
             sprite->Draw();
         }
@@ -321,14 +331,17 @@ void GamePlayScene::DrawUi() {
         controlsGuideOverlay_->Draw();
     }
 
+    // ポーズを表示中で、設定画面が前面に出ていない場合にだけ描く。
     if (pauseMenuOverlay_ && pauseMenuOverlay_->IsActive() && !(settingsOverlay_ && settingsOverlay_->IsActive())) {
         pauseMenuOverlay_->Draw();
     }
 
+    // 設定画面が開いている場合に、共通HUDより手前へ重ねる。
     if (settingsOverlay_ && settingsOverlay_->IsActive()) {
         settingsOverlay_->Draw();
     }
 
+    // 保存通知が有効な場合は、メニューの描画後に重ねる。
     if (saveIndicatorOverlay_ && saveIndicatorOverlay_->IsActive()) {
         saveIndicatorOverlay_->Draw();
     }
@@ -348,13 +361,14 @@ void GamePlayScene::StartBridgeDropMovie() {
 }
 
 bool GamePlayScene::IsVisible(engine::Object3D* obj) {
+    // 実体が無い場合か非表示指定の場合は、画角の検査をする前に除外する。
     if (!obj || !obj->GetIsVisible()) {
         return false;
     }
 
     // 所有する槍・封印と王冠Morph中のプレイヤーは本体のAABBだけで除外しません。
     if (dynamic_cast<EnemyFalseKingSlime*>(obj) ||
-        (obj == player_ && player_->GetEnemyMorphType() == Player::EnemyMorphType::Crown)) {
+        (obj == player_ && player_->GetEnemyMorphType() == Player::EnemyMorphType::kCrown)) {
         return true;
     }
 

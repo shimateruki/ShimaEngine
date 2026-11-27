@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include <functional>
 #include <string>
@@ -7,21 +8,21 @@
 
 // Trigger は成立した遷移で消費される、一度限りの条件です。
 enum class AnimatorParameterType {
-    Float,
-    Int,
-    Bool,
-    Trigger
+    kFloat,
+    kInt,
+    kBool,
+    kTrigger
 };
 
 // Greater/Less は Float、Equals/NotEqual は Int、If/IfNot は Bool を参照します。
 enum class AnimatorConditionMode {
-    Greater,
-    Less,
-    Equals,
-    NotEqual,
-    If,
-    IfNot,
-    Trigger
+    kGreater,
+    kLess,
+    kEquals,
+    kNotEqual,
+    kIf,
+    kIfNot,
+    kTrigger
 };
 
 /// <summary>
@@ -31,9 +32,9 @@ enum class AnimatorConditionMode {
 // 関連：AnimatorControllerAsset（定義）、AnimatorControllerRuntime（再生）
 struct AnimatorParameterDefinition {
     std::string name;
-    AnimatorParameterType type = AnimatorParameterType::Float;
+    AnimatorParameterType type = AnimatorParameterType::kFloat;
     float defaultFloat = 0.0f;
-    int defaultInt = 0;
+    std::int32_t defaultInt = 0;
     bool defaultBool = false;
 };
 
@@ -60,7 +61,7 @@ struct AnimatorStateDefinition {
     float speed = 1.0f;
     bool loop = true;
     float blendDuration = 0.12f; // 状態へ入る際の補間時間（秒）。
-    int blendEasing = 4; // AnimationInterpolationの補間方式。
+    std::int32_t blendEasing = 4; // AnimationInterpolationの補間方式。
     float eventTimelineDuration = 1.0f; // クリップ長が不明なときのイベント・exitTime 判定用時間（秒）。
 
     std::vector<AnimatorEventDefinition> events;
@@ -85,7 +86,7 @@ struct AnimatorEventInstance {
 // 関連：AnimatorControllerAsset（定義）、AnimatorControllerRuntime（再生）
 struct AnimatorConditionDefinition {
     std::string parameter;
-    AnimatorConditionMode mode = AnimatorConditionMode::Greater;
+    AnimatorConditionMode mode = AnimatorConditionMode::kGreater;
     float threshold = 0.0f;
 };
 
@@ -98,7 +99,7 @@ struct AnimatorTransitionDefinition {
     std::string fromState; // 遷移元。空文字または*はAny State。
     std::string toState; // 遷移先の状態名。
     float duration = 0.12f;
-    int easing = 4;
+    std::int32_t easing = 4;
     bool hasExitTime = false; // 再生割合の到達を遷移条件に使うか。
     float exitTime = 0.9f; // hasExitTime が true のときに待つ正規化時刻。
     std::vector<AnimatorConditionDefinition> conditions;
@@ -108,9 +109,9 @@ struct AnimatorTransitionDefinition {
 // 関連：AnimatorControllerRuntime（再生）、AnimatorControllerEditor（編集）
 // 主な入口：Load / Save / FindState
 // 再生時刻と現在のパラメータ値はRuntime側が保持する。
-class AnimatorControllerAsset {
+struct AnimatorControllerAsset {
 public:
-    static constexpr int kCurrentVersion = 2;
+    static constexpr std::int32_t kCurrentVersion = 2;
 
     /// <summary>アセット定義を既定値へ戻し、状態・遷移・パラメータを空にする。</summary>
     void Clear();
@@ -120,7 +121,7 @@ public:
     /// </summary>
     /// <param name="stateName">探す状態名。</param>
     /// <returns>見つかった位置。存在しない場合は -1。</returns>
-    int FindStateIndex(const std::string& stateName) const;
+    std::int32_t FindStateIndex(const std::string& stateName) const;
 
     /// <summary>
     /// 名前が一致する状態の定義を探します。
@@ -143,7 +144,7 @@ public:
     /// <returns>ファイルへの書き込みに成功した場合は true。</returns>
     bool Save(const std::string& filePath) const;
 
-    int version = kCurrentVersion;
+    std::int32_t version = kCurrentVersion;
     std::string name = "animator_controller";
     std::string entryState; // 初期状態名。未指定・不明な名前なら先頭の状態を採用します。
     std::vector<AnimatorParameterDefinition> parameters;
@@ -171,8 +172,8 @@ public:
         float previousTime = 0.0f; // 遷移元の再生位置（秒）。
         float transitionElapsed = 0.0f; // ブレンド開始からの経過秒数。
         float transitionDuration = 0.0f; // ブレンド全体の秒数。
-        int transitionEasing = 4; // ブレンドに使う補間方式。
-        bool valid = false; // 再生中の状態があり、復元できる場合に true。
+        std::int32_t transitionEasing = 4; // ブレンドに使う補間方式。
+        bool valid = false; // 記録時に有効な状態名があれば true。
     };
 
     /// <summary>
@@ -195,7 +196,7 @@ public:
     /// 再生時刻を進め、自動遷移とイベント発火を処理します。
     /// </summary>
     /// <param name="deltaTime">前回更新からの経過秒数。0 以下なら更新しません。</param>
-    /// <param name="durationResolver">状態の実クリップ長を秒で返す関数。長さ不明ならイベントに代替時間を使います。</param>
+    /// <param name="durationResolver">実クリップ長を秒で返す関数。長さ不明時はイベントと exitTime の評価に代替時間を使います。</param>
     void Update(float deltaTime, const DurationResolver& durationResolver);
 
     /// <summary>
@@ -213,12 +214,13 @@ public:
     /// <param name="durationOverride">遷移時間（秒）。負値なら遷移定義、次に遷移先状態の既定値を使います。</param>
     /// <param name="easingOverride">補間方法。負値なら遷移定義、次に遷移先状態の既定値を使います。</param>
     /// <returns>指定状態が存在した場合は true。</returns>
-    bool CrossFade(const std::string& stateName, float durationOverride = -1.0f, int easingOverride = -1);
+    bool CrossFade(const std::string& stateName, float durationOverride = -1.0f, std::int32_t easingOverride = -1);
 
     /// <summary>指定名の状態を現在再生しているかを返します。</summary>
     bool IsPlayingState(const std::string& stateName) const;
 
     /// <summary>遷移元とのブレンドが進行中かを返します。</summary>
+    // 遷移元の状態番号があり、ブレンド時間が正の場合に遷移中として扱う。
     bool IsTransitioning() const { return previousStateIndex_ >= 0 && transitionDuration_ > 0.0f; }
 
     /// <summary>現在の状態を返します。再生していなければ nullptr です。</summary>
@@ -256,7 +258,7 @@ public:
     void SetFloat(const std::string& name, float value);
 
     /// <summary>Int パラメータの現在値を設定します。</summary>
-    void SetInt(const std::string& name, int value);
+    void SetInt(const std::string& name, std::int32_t value);
 
     /// <summary>Bool パラメータの現在値を設定します。</summary>
     void SetBool(const std::string& name, bool value);
@@ -274,7 +276,7 @@ public:
     float GetFloat(const std::string& name) const;
 
     /// <summary>Int パラメータを返します。未設定なら 0 です。</summary>
-    int GetInt(const std::string& name) const;
+    std::int32_t GetInt(const std::string& name) const;
 
     /// <summary>Bool パラメータを返します。未設定なら false です。</summary>
     bool GetBool(const std::string& name) const;
@@ -290,7 +292,7 @@ public:
     /// <summary>
     /// 再生位置を復元します。パラメータ値は維持し、未消費イベントは破棄します。
     /// </summary>
-    /// <param name="snapshot">復元する再生位置。無効な場合は何もしません。</param>
+    /// <param name="snapshot">復元する再生位置。無効な記録やコントローラー未設定時は処理しません。</param>
     void RestoreSnapshot(const Snapshot& snapshot);
 
 private:
@@ -326,7 +328,7 @@ private:
         float duration);
 
     // 明示的な CrossFade 用に、状態固有の設定を優先して遷移定義を探します。
-    const AnimatorTransitionDefinition* FindRequestedTransition(int fromIndex, int toIndex) const;
+    const AnimatorTransitionDefinition* FindRequestedTransition(std::int32_t fromIndex, std::int32_t toIndex) const;
 
     // exitTime と条件を満たす自動遷移を、状態固有、Any State の順に探します。
     const AnimatorTransitionDefinition* FindAutomaticTransition(float normalizedTime) const;
@@ -339,19 +341,19 @@ private:
 
     const AnimatorControllerAsset* controller_ = nullptr; // 共有定義への非所有参照。
 
-    int currentStateIndex_ = -1;  // Asset::states 内の現在位置。-1 は未再生。
-    int previousStateIndex_ = -1; // Asset::states 内のブレンド元位置。-1 は遷移なし。
+    std::int32_t currentStateIndex_ = -1;  // Asset::states 内の現在位置。-1 は未再生。
+    std::int32_t previousStateIndex_ = -1; // Asset::states 内のブレンド元位置。-1 は遷移なし。
 
     // 再生位置とブレンド経過は秒単位です。
     float currentTime_ = 0.0f;
     float previousTime_ = 0.0f;
     float transitionElapsed_ = 0.0f;
     float transitionDuration_ = 0.0f;
-    int transitionEasing_ = 4; // AnimationInterpolation::EasingType の番号。
+    std::int32_t transitionEasing_ = 4; // AnimationInterpolation::EasingType の番号。
 
     // パラメータは型別に保持し、Asset の初期値から Runtime ごとに更新します。
     std::unordered_map<std::string, float> floatParameters_;
-    std::unordered_map<std::string, int> intParameters_;
+    std::unordered_map<std::string, std::int32_t> intParameters_;
     std::unordered_map<std::string, bool> boolParameters_;
     std::unordered_map<std::string, bool> triggerParameters_;
 

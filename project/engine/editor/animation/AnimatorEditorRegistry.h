@@ -47,6 +47,7 @@ public:
 
     /// <summary>起動時に登録。同じAssetの再登録は置換する。ObjectやEditor表示中には登録しない。</summary>
     static bool Register(Entry entry) {
+        // 素材名と対象判定が両方必要。どちらかを省略した登録は、候補一覧を変更せず拒否する。
         if (entry.assetName.empty() || !entry.accepts) return false;
         const std::string key = entry.assetName;
         Entries().insert_or_assign(key, std::move(entry));
@@ -68,8 +69,8 @@ public:
 
 private:
     static std::unordered_map<std::string, Entry>& Entries() {
-        static std::unordered_map<std::string, Entry> entries;
-        return entries;
+        static std::unordered_map<std::string, Entry> sEntries;
+        return sEntries;
     }
 };
 } // namespace engine

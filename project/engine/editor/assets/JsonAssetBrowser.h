@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include <filesystem>
 #include <functional>
@@ -9,7 +10,7 @@
 class JsonAssetBrowser {
 public:
     // ワークスペースが作ったGame View下段へ全ファイル画面を固定する。
-    static void SetBottomDock(unsigned int dockId);
+    static void SetBottomDock(std::uint32_t dockId);
 
     using Path = std::filesystem::path;
     // 素材選択欄と実行時の名前を合わせる。拡張子なしのルート相対名を返す。

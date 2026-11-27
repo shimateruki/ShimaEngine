@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "EditorPropertyRegistry.h"
 #include "Object3D.h"
@@ -26,16 +27,17 @@ public:
         float speed = 0.05f;
         const char* format = "";
         const char* parameterId = "";
-        int integerDisplayOffset = 0;
+        std::int32_t integerDisplayOffset = 0;
         Condition enabled = nullptr;
         std::vector<nlohmann::json> values;
         const char* assetDirectory = "";
-        EditorPropertyAssetEditor assetEditor = EditorPropertyAssetEditor::None;
+        EditorPropertyAssetEditor assetEditor = EditorPropertyAssetEditor::kNone;
         float (*maximum)(const Owner&) = nullptr;
         std::string (*help)(const Owner&) = nullptr;
         nlohmann::json (*displayValue)(const Owner&) = nullptr;
     };
 
+    // Owner型のプロパティ用コンポーネントを登録する。登録に成功した定義だけが各項目も登録できる。
     ObjectPropertyDefinition(const Owner& defaults, const char* typeId, const char* label, const char* description = "")
         : defaults_(defaults), componentId_(std::string("Game_") + typeId) {
         auto* registry = EditorPropertyRegistry::GetInstance();
@@ -54,10 +56,11 @@ public:
     void Expose(const char* label, const char* id, Value Owner::* member,
                 float minimum = 0, float maximum = 0, Condition visible = nullptr,
                 const Options& options = {}) {
+        // コンポーネント登録に失敗した場合は、クラス独自の項目を登録しない。
         if (!enabled_) return;
         auto property = Describe<Value>(label, id, minimum, maximum, visible);
         ApplyOptions(property, options);
-        property.flags = property.flags | EditorPropertyFlags::ClassStorage;
+        property.flags = property.flags | EditorPropertyFlags::kClassStorage;
         property.serializedPath = "components." + componentId_ + "." + id;
         property.defaultValue = defaults_.*member;
         // 台帳にはメンバーの位置だけを保持する。取得・適用の対象は、そのとき選択または読み込みされた Object。
@@ -75,6 +78,7 @@ public:
     void Parameter(const char* label, const char* id, Value Object3D::EntityParameter::* member,
                    float minimum = 0, float maximum = 0, Condition visible = nullptr,
                    std::vector<std::string> choices = {}, const Options& options = {}) {
+        // コンポーネントを登録できていない場合は、旧param用の項目も登録しない。
         if (!enabled_) return;
         auto property = Describe<Value>(label, id, minimum, maximum, visible);
         property.serializedPath = std::string("param.") + (options.parameterId[0] ? options.parameterId : id);
@@ -88,6 +92,7 @@ public:
         };
         property.setter = [member](Object3D& object, const nlohmann::json& json) {
             Value value{};
+            // JSONをメンバー型に変換できない場合は、オブジェクトを変更せず失敗を返す。
             if (!Assign(value, json)) return false;
             // 入力の検証が通ってから既定パラメーターを作り、無効な値で状態が変わらないようにする。
             if (!object.GetParameters()) object.ResetParameters();
@@ -104,6 +109,7 @@ public:
                   std::function<void(Owner&, const Value&)> setter,
                   float minimum = 0, float maximum = 0, Condition visible = nullptr,
                   std::vector<std::string> choices = {}, const Options& options = {}) {
+        // コンポーネントの登録が成立していない場合は、専用の取得・設定処理を登録しない。
         if (!enabled_) return;
         auto property = Describe<Value>(label, id, minimum, maximum, visible);
         property.serializedPath = serializedPath;
@@ -115,6 +121,7 @@ public:
         };
         property.setter = [setter](Object3D& object, const nlohmann::json& json) {
             Value value{};
+            // 値を変換できる場合に限って、クラス側のSetterを呼び出す。
             if (!Assign(value, json)) return false;
             setter(static_cast<Owner&>(object), value);
             return true;
@@ -131,15 +138,19 @@ private:
         property.ui.assetDirectory = options.assetDirectory;
         property.ui.assetEditor = options.assetEditor;
         property.enumValues = options.values;
+        // 編集可否の判定関数が指定された場合は、対応するOwnerに対して判定する。
         if (options.enabled) property.enabled = [condition = options.enabled](const Object3D& object) {
             return condition(static_cast<const Owner&>(object));
         };
+        // 上限の計算が指定された場合は、対象のOwnerから現在の上限を求める。
         if (options.maximum) property.maximum = [maximum = options.maximum](const Object3D& object) {
             return maximum(static_cast<const Owner&>(object));
         };
+        // 表示値の変換関数が指定された場合だけ、通常の取得値とは別の表示値を提供する。
         if (options.displayValue) property.displayValue = [display = options.displayValue](const Object3D& object) {
             return display(static_cast<const Owner&>(object));
         };
+        // 説明の生成関数が指定された場合だけ、選択中のOwnerに合わせたヘルプを返す。
         if (options.help) property.help = [help = options.help](const Object3D& object) {
             return help(static_cast<const Owner&>(object));
         };
@@ -148,27 +159,33 @@ private:
     template<class Value>
     // ラベル・ID・範囲と表示条件から、Property定義を組み立てる。
     EditorPropertyDescriptor Describe(const char* label, const char* id, float minimum, float maximum, Condition visible) const {
-        static_assert(std::is_same_v<Value, bool> || std::is_same_v<Value, int> ||
+        static_assert(std::is_same_v<Value, bool> || std::is_same_v<Value, std::int32_t> ||
                       std::is_same_v<Value, float> || std::is_same_v<Value, std::string>,
                       "Expose currently supports bool, int, float and string");
         EditorPropertyDescriptor property;
         property.path = "class." + componentId_ + "." + id;
         property.componentTypeId = componentId_;
         property.displayName = label;
-        property.flags = EditorPropertyFlags::MultiEdit | EditorPropertyFlags::PrefabOverride;
+        property.flags = EditorPropertyFlags::kMultiEdit | EditorPropertyFlags::kPrefabOverride;
         property.applicable = [](const Object3D& object) { return dynamic_cast<const Owner*>(&object) != nullptr; };
+        // 表示条件が指定されているときだけ、対象に応じて項目を表示するか決める。
         if (visible) {
             property.visible = [visible](const Object3D& object) { return visible(static_cast<const Owner&>(object)); };
         }
-        if constexpr (std::is_same_v<Value, bool>) property.type = EditorPropertyType::Bool;
-        else if constexpr (std::is_same_v<Value, int>) property.type = EditorPropertyType::Integer;
-        else if constexpr (std::is_same_v<Value, float>) property.type = EditorPropertyType::Number;
-        else property.type = EditorPropertyType::String;
+        // 真偽値のメンバーはチェック欄で扱う。
+        if constexpr (std::is_same_v<Value, bool>) property.type = EditorPropertyType::kBool;
+        // 32ビット整数のメンバーは整数欄で扱う。
+        else if constexpr (std::is_same_v<Value, std::int32_t>) property.type = EditorPropertyType::kInteger;
+        // 単精度のメンバーは数値欄で扱う。
+        else if constexpr (std::is_same_v<Value, float>) property.type = EditorPropertyType::kNumber;
+        // 残る対応型の文字列は、文字入力や候補選択で扱う。
+        else property.type = EditorPropertyType::kString;
         property.ui.configured = true;
         property.ui.speed = 0.05f;
         property.ui.minValue = minimum;
         property.ui.maxValue = maximum;
-        if constexpr (std::is_same_v<Value, int>) property.ui.useSlider = maximum > minimum;
+        // 整数型で上限が下限より大きい場合は、指定した範囲でスライダーを使う。
+        if constexpr (std::is_same_v<Value, std::int32_t>) property.ui.useSlider = maximum > minimum;
         return property;
     }
 
@@ -177,13 +194,18 @@ private:
     static bool Assign(Value& target, const nlohmann::json& json) {
         // 保存済みの範囲外値は勝手に丸めません。UIの調整範囲と保存互換は別に扱います。
         if constexpr (std::is_same_v<Value, bool>) {
+            // 真偽値へ数値や文字列を暗黙変換しないよう、JSONの真偽値だけを受け付ける。
             if (!json.is_boolean()) return false;
+        // 文字列メンバーでは、JSONも文字列である必要がある。
         } else if constexpr (std::is_same_v<Value, std::string>) {
             if (!json.is_string()) return false;
-        } else if constexpr (std::is_same_v<Value, int>) {
-            if (!json.is_number_integer() || json.get<double>() < (std::numeric_limits<int>::min)() ||
-                json.get<double>() > (std::numeric_limits<int>::max)()) return false;
+        // 整数のメンバーには、JSON整数のうちint32_tの範囲に収まる値だけが入る。
+        } else if constexpr (std::is_same_v<Value, std::int32_t>) {
+            if (!json.is_number_integer() || json.get<double>() < (std::numeric_limits<std::int32_t>::min)() ||
+                json.get<double>() > (std::numeric_limits<std::int32_t>::max)()) return false;
+        // 単精度のメンバーには、有限でfloatに収まるJSON数値だけが入る。
         } else {
+            // JSON数値が非有限かfloatの上限を超える場合は、変換による無効値を防ぐため拒否する。
             if (!json.is_number() || !std::isfinite(json.get<double>()) ||
                 std::abs(json.get<double>()) > (std::numeric_limits<float>::max)()) return false;
         }

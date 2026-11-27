@@ -1,15 +1,19 @@
 #define NOMINMAX
 #include "game/scene/gameplay/GamePlayScene.h"
 #include "game/scene/gameplay/GoalCinematicVfx.h"
+#include "game/ui/InputGlyphResolver.h"
+#include "engine/system/input/InputManager.h"
 #include "Easing.h"
 #include "BaseEnemy.h"
 #include "CameraManager.h"
 #include "DebugConsole.h"
 #include "SceneManager.h"
+#include "game/system/progress/StageManager.h"
 #include "TextureManager.h"
 #include "WinApp.h"
 #include <algorithm>
 #include <cmath>
+#include <utility>
 #include <numbers>
 #include <fstream>
 #include <cstdio>
@@ -18,13 +22,117 @@
 #include "IconsFontAwesome5.h"
 #endif
 
-// ゴール演出のタイムライン・設定・画面表示。演出時間とプレビュー時の保存抑止条件は変更しない。
+// ゴール演出のタイムライン、調整値、クリア結果の画面表示を扱う。ワールドの進行はゴール演出の更新側が担当する。
 namespace {
 
+constexpr float kRewardStarSequenceSeconds = 0.64f;
+constexpr float kRewardStarStaggerSeconds = 0.12f;
+constexpr float kRewardStarFallSeconds = 0.19f;
+constexpr float kClearAtlasCellSize = 256.0f;
+constexpr size_t kClearTwinkleCell = 10;
+constexpr size_t kClearRimLightCell = 11;
+constexpr size_t kRewardTwinkleStart = 3; // 先頭3枚はスライムの周囲に配置。
+constexpr size_t kRimLightSprite = 6; // 最後の1枚は獲得枠の下辺に配置。
+constexpr float kRewardStarSize = 94.0f;
+constexpr float kRewardStarSpacing = 138.0f;
+constexpr float kRewardPanelWidth = 548.0f;
+constexpr float kRewardPanelStarHeight = 234.0f;
+constexpr float kRewardPanelCompactHeight = 124.0f;
+constexpr float kRewardSettleSeconds = 0.20f;
+constexpr float kReturnPromptWidth = 332.0f; // 入力画像の枠を含めた帯の設計幅。
+constexpr float kReturnPromptHeight = 51.0f;
 constexpr const char* kGoalPresentationTuningPath = "Resources/json/cinematic/goal_clear.json";
 constexpr const char* kGoalCinematicTimelinePath = "Resources/json/scenario/shared/goal_clear_timeline.json";
 
-// ゴール演出の補間率を0～1へ制限します。
+// リザルトの保存キーと、同じ値を編集・補正するための設定。
+template <typename Tuning>
+struct GoalResultUiField {
+    const char* jsonKey;
+    float Tuning::*value;
+    float minimum;
+    float maximum;
+    const char* label;
+    float dragSpeed;
+    const char* format;
+};
+
+// JSON・表示位置や時間の補正・ImGuiが、同じキーと値の範囲を使う。
+template <typename Tuning>
+constexpr GoalResultUiField<Tuning> kGoalResultUiFields[] = {
+    {"cardCenterX", &Tuning::resultUiCenterX, 0.58f, 0.80f, "獲得枠 X", 0.005f, "%.3f"},
+    {"headingY", &Tuning::resultUiCenterY, 0.14f, 0.36f, "見出し Y", 0.005f, "%.3f"},
+    {"panelTop", &Tuning::resultPanelTop, 0.33f, 0.63f, "獲得枠の上端 Y", 0.005f, "%.3f"},
+    {"scale", &Tuning::resultUiScale, 0.60f, 1.35f, "UIスケール", 0.005f, "%.3f"},
+    {"backdropAlpha", &Tuning::resultBackdropAlpha, 0.0f, 1.0f, "文字不透明度", 0.005f, "%.3f"},
+    {"glowAlpha", &Tuning::resultGlowAlpha, 0.0f, 1.0f, "着地とスターの光", 0.005f, "%.3f"},
+    {"letterStagger", &Tuning::resultLetterStagger, 0.02f, 0.20f, "文字間ディレイ", 0.001f, "%.3f 秒"},
+    {"letterFallDuration", &Tuning::resultLetterFallDuration, 0.18f, 0.75f, "落下時間", 0.005f, "%.3f 秒"},
+    {"letterDropHeight", &Tuning::resultLetterDropHeight, 80.0f, 520.0f, "落下距離", 1.0f, "%.0f px"},
+    {"letterBounceHeight", &Tuning::resultLetterBounceHeight, 8.0f, 120.0f, "跳ね返り高さ", 0.5f, "%.1f px"},
+    {"letterBounceDamping", &Tuning::resultLetterBounceDamping, 1.0f, 8.0f, "跳ね減衰", 0.05f, "%.2f"},
+    {"letterBounceFrequency", &Tuning::resultLetterBounceFrequency, 4.0f, 18.0f, "跳ね速度", 0.05f, "%.2f"},
+    {"coinCountDuration", &Tuning::resultCoinCountDuration, 0.20f, 1.80f, "コインを数える時間", 0.01f, "%.2f 秒"},
+};
+
+struct ClearLetterPose {
+    float x; // 見出し中央からの横位置、設計px。
+    float y; // 見出しの基準の高さからのずれ、設計px。
+    float tilt; // バウンドが収まった後にも残す角度、rad。
+};
+constexpr std::array<ClearLetterPose, 7> kClearLetterPoses{{
+    {-304.0f, 9.0f, -0.085f}, {-202.0f, -3.0f, -0.035f}, {-103.0f, -4.0f, 0.025f},
+    {-2.0f, -13.0f, -0.045f}, {101.0f, -8.0f, 0.030f}, {202.0f, 0.0f, 0.065f},
+    {304.0f, 9.0f, 0.083f},
+}};
+
+struct ClearTwinkle {
+    engine::Vector2 offset; // 基準点からの開始位置、設計px。
+    engine::Vector2 drift; // 消えるまでに移動する距離、設計px。
+    float size; // 元のSpriteの幅と高さ、設計px。
+    float delay; // 着地から発光までの秒数。
+    float duration; // 発光してから消えるまでの秒数。
+};
+constexpr std::array<ClearTwinkle, 3> kSlimeTwinkles{{
+    {{-159.0f, -15.0f}, {-18.0f, -24.0f}, 47.0f, 0.00f, 1.87f},
+    {{-151.0f, 32.0f}, {-13.0f, -33.0f}, 23.0f, 0.16f, 1.74f},
+    {{151.0f, 14.0f}, {15.0f, -28.0f}, 31.0f, 0.33f, 1.66f},
+}};
+constexpr std::array<ClearTwinkle, 3> kStarTwinkles{{
+    {{-52.0f, -24.0f}, {-10.0f, -16.0f}, 39.0f, 0.00f, 0.61f},
+    {{-32.0f, -48.0f}, {2.0f, -11.0f}, 24.0f, 0.07f, 0.48f},
+    {{-57.0f, 1.0f}, {-10.0f, -7.0f}, 19.0f, 0.10f, 0.39f},
+}};
+
+// 4列のアトラスから、透明な余白を含む1セルを指定する。
+void SetClearArtCell(engine::Sprite& sprite, size_t cell) {
+    sprite.SetTextureRect({static_cast<float>(cell % 4) * kClearAtlasCellSize,
+                           static_cast<float>(cell / 4) * kClearAtlasCellSize},
+                          {kClearAtlasCellSize, kClearAtlasCellSize});
+}
+
+// 発生点からの秒数を直接受け取り、現在時刻から光の大きさ・移動・透明度を再現する。座標は画面ピクセル。
+void UpdateClearTwinkle(engine::Sprite* sprite, const ClearTwinkle& twinkle, const engine::Vector2& origin,
+                        float age, float scale, float opacity) {
+    // 光のSpriteが生成されていなければ描画状態を更新しない。
+    if (!sprite) return;
+
+    const float localTime = age - twinkle.delay;
+    // 透明度が正のときに限り、設定された遅延を過ぎて寿命を迎えるまで光を表示する。
+    const bool active = opacity > 0.0f && localTime >= 0.0f && localTime < twinkle.duration;
+    sprite->SetVisible(active);
+    // 表示できる時間の外では、非表示だけ設定して姿勢更新を省く。
+    if (!active) return;
+
+    const float progress = localTime / twinkle.duration;
+    const float pulse = std::sin(std::numbers::pi_v<float> * std::sqrt(progress));
+    const float size = twinkle.size * (0.66f + 0.34f * pulse) * scale;
+    sprite->SetPosition({origin.x + (twinkle.offset.x + twinkle.drift.x * progress) * scale,
+                         origin.y + (twinkle.offset.y + twinkle.drift.y * progress) * scale});
+    sprite->SetSize({size, size});
+    sprite->SetColor({1.0f, 1.0f, 1.0f, opacity * pulse});
+    sprite->Update();
+}
+
 float GoalClamp01(float value) {
     // 演出曲線を0〜1の時間区間に収める。
     return std::clamp(value, 0.0f, 1.0f);
@@ -33,7 +141,6 @@ float GoalClamp01(float value) {
 
 } // namespace
 
-// タイムラインを読み、見つからない場合は現在の調整値から同等の演出を組み立てます。
 void GamePlayScene::InitializeGoalCinematicTimeline() {
     // タイムラインのアニメーションと合図をPlayer用処理へ結び付けてから読込む。
     goalCinematicPlayer_.Initialize(SceneManager::GetInstance());
@@ -48,7 +155,7 @@ void GamePlayScene::InitializeGoalCinematicTimeline() {
 
     goalCinematicTimelineLoaded_ = goalCinematicSequence_.Load(kGoalCinematicTimelinePath);
 
-    // 読めない場合は調整値から再生用の合図とクリップを組み立て、読めた場合はシーケンス側の時刻を採用します。
+    // タイムラインが読めない場合は調整値から合図とトラックを作る。読めた場合は記録された合図の時刻を採用する。
     if (!goalCinematicTimelineLoaded_) {
         DebugConsole::GetInstance()->AddLog(std::string("Goal Timeline load failed: ") + kGoalCinematicTimelinePath);
         goalCinematicSequence_.Clear();
@@ -59,51 +166,33 @@ void GamePlayScene::InitializeGoalCinematicTimeline() {
         ApplyGoalCinematicTimingFromSequence();
     }
 
+    // 用意したシーケンスを最後に再生器へ渡す。
     goalCinematicPlayer_.SetSequence(&goalCinematicSequence_);
 }
 
-// シグナル時刻を演出とプレイヤー動作の調整値へ反映します。
 void GamePlayScene::ApplyGoalCinematicTimingFromSequence() {
-    // JSONの合図時刻を演出パラメータへ反映し、旧来の固定値とずれないようにする。
+    // 有効な合図の時刻を秒で取り出し、対応する王冠やプレイヤーの調整値に反映する。
     GoalClearPlayerAnimator::Tuning animation = goalClearPlayerAnimator_.GetTuning();
 
-    // 無効なマーカーは飛ばし、以前の値を残したまま読み取れた時刻だけ置き換えます。
-    for (const auto& marker : goalCinematicSequence_.signals) {
-        if (!marker.enabled) {
-            continue;
-        }
-
-        if (marker.signal == "goal.crown_focus_end") {
-            goalPresentationTuning_.crownFocusEndTime = marker.time;
-        } else if (marker.signal == "goal.crown_move_start") {
-            goalPresentationTuning_.crownMoveStartTime = marker.time;
-        } else if (marker.signal == "goal.crown_land") {
-            animation.crownLandTime = marker.time;
-        } else if (marker.signal == "goal.anticipation") {
-            animation.anticipationStartTime = marker.time;
-        } else if (marker.signal == "goal.jump") {
-            animation.jumpStartTime = marker.time;
-        } else if (marker.signal == "goal.apex") {
-            animation.apexTime = marker.time;
-        } else if (marker.signal == "goal.result") {
-            animation.resultUiTime = marker.time;
-        } else if (marker.signal == "goal.victory_land") {
-            animation.victoryLandTime = marker.time;
-        } else if (marker.signal == "goal.ready") {
-            animation.readyTime = marker.time;
-        }
-    }
-
-    // 受け取った時刻の順序を補正してから、実際の姿勢更新で使います。
+    // VFXの開始・終了と同じ規則で合図を読み、タイムライン上の時刻を使う。
+    goalPresentationTuning_.crownFocusEndTime = goalCinematicSequence_.GetSignalTime("goal.crown_focus_end", goalPresentationTuning_.crownFocusEndTime);
+    goalPresentationTuning_.crownMoveStartTime = goalCinematicSequence_.GetSignalTime("goal.crown_move_start", goalPresentationTuning_.crownMoveStartTime);
+    animation.crownLandTime = goalCinematicSequence_.GetSignalTime("goal.crown_land", animation.crownLandTime);
+    animation.anticipationStartTime = goalCinematicSequence_.GetSignalTime("goal.anticipation", animation.anticipationStartTime);
+    animation.jumpStartTime = goalCinematicSequence_.GetSignalTime("goal.jump", animation.jumpStartTime);
+    animation.apexTime = goalCinematicSequence_.GetSignalTime("goal.apex", animation.apexTime);
+    animation.resultUiTime = goalCinematicSequence_.GetSignalTime("goal.result", animation.resultUiTime);
+    animation.victoryLandTime = goalCinematicSequence_.GetSignalTime("goal.victory_land", animation.victoryLandTime);
+    animation.readyTime = goalCinematicSequence_.GetSignalTime("goal.ready", animation.readyTime);
     goalClearPlayerAnimator_.SetTuning(animation);
-    SanitizeGoalPresentationTuning();
 }
 
-// エディターで変更した時刻をタイムラインへ戻し、該当トラックがなければ追加します。
+// 調整値を合図・アニメーション・VFXへ逆に反映する。対応する部分がなければ作る。
 void GamePlayScene::SyncGoalCinematicTimelineFromTuning() {
     const GoalClearPlayerAnimator::Tuning& animation = goalClearPlayerAnimator_.GetTuning();
     auto setSignalTime = [this](const char* signalId, const char* displayName, float time) {
         for (auto& marker : goalCinematicSequence_.signals) {
+            // 同じ信号IDがあれば新しい行を作らず、時刻を変更して有効にする。
             if (marker.signal == signalId) {
                 marker.time = time;
                 marker.enabled = true;
@@ -142,6 +231,7 @@ void GamePlayScene::SyncGoalCinematicTimelineFromTuning() {
         }
     }
 
+    // プレイヤーの姿勢を駆動するクリップがなければ、演出開始から帰還準備までを受け持つものを作る。
     if (!hasAnimationDriver) {
         CinematicAnimationClipData clip;
         clip.name = "Player Goal Celebration";
@@ -155,30 +245,38 @@ void GamePlayScene::SyncGoalCinematicTimelineFromTuning() {
 
     // 調整値と既存 VFX の開始時刻を同期し、未設定の演出だけ補完する。
     const auto* crown = FindGoalCrownObject();
-    auto syncVfxTrack = [this, crown](const GoalCinematicVfx::Cue& cue, float time) {
+    auto syncVfxTrack = [this, crown](const goalCinematicVfx::Cue& cue, float time, const char* signal) {
         bool found = false;
         for (auto& track : goalCinematicSequence_.vfxTracks) {
-            if (GoalCinematicVfx::FindCue(track.sequenceName) == &cue) {
+            // 同じ場面を扱う演出がすでにあれば、種類や対象を保ったまま開始時刻を合わせる。
+            if (goalCinematicVfx::FindCue(track.sequenceName) == &cue) {
                 track.startTime = time;
                 found = true;
             }
         }
+        // 同じ場面の演出がなければ、王冠かプレイヤーへ既定のVFXを結び付ける。
         if (!found) {
             CinematicVfxTrackData track;
             const auto* target = cue.followsCrown ? crown : player_;
             track.name = cue.label;
             track.sequenceName = cue.gold;
             track.startTime = time;
-            track.binding.targetName = target ? target->GetName() : (cue.followsCrown ? "goal" : "player");
-            track.binding.targetEventId = target ? target->GetEventId() : -1;
+            track.startSignal = signal;
+            // 対象が取れた場合は名前とイベントIDを登録する。未取得なら演出の参照名で解決する。
+            if (target) {
+                track.binding.targetName = target->GetName();
+                track.binding.targetEventId = target->GetEventId();
+            } else {
+                track.binding.targetName = cue.followsCrown ? "goal" : "player";
+                track.binding.targetEventId = -1;
+            }
             goalCinematicSequence_.vfxTracks.push_back(track);
         }
     };
 
-    syncVfxTrack(GoalCinematicVfx::kFocus, std::max(0.05f, goalPresentationTuning_.crownFocusEndTime - 0.22f));
-    syncVfxTrack(GoalCinematicVfx::kLanding, animation.crownLandTime);
-    syncVfxTrack(GoalCinematicVfx::kResult, animation.apexTime);
-    syncVfxTrack(GoalCinematicVfx::kVictory, animation.victoryLandTime);
+    syncVfxTrack(goalCinematicVfx::kLanding, animation.crownLandTime, "goal.crown_land");
+    syncVfxTrack(goalCinematicVfx::kResult, animation.apexTime, "goal.apex");
+    syncVfxTrack(goalCinematicVfx::kVictory, animation.victoryLandTime, "goal.victory_land");
 
     // 帰還できる時刻までを全尺とし、追加したトラックを含めて時刻順を整えます。
     goalCinematicSequence_.duration = animation.readyTime;
@@ -187,7 +285,7 @@ void GamePlayScene::SyncGoalCinematicTimelineFromTuning() {
 
 void GamePlayScene::HandleGoalCinematicAnimation(engine::Object3D* target, const CinematicAnimationClipData& clip,
                                                  float localTime, bool isPreview) {
-    // GoalClearPlayerドライバだけをPlayerへ適用し、他の対象のClipは無視する。
+    // ゴール用ドライバーでPlayerが存在し、対象未指定かPlayer自身に結び付くクリップだけを適用する。
     (void)isPreview;
 
     if (clip.driver != "GoalClearPlayer" || !player_ || (target && target != player_)) {
@@ -195,21 +293,21 @@ void GamePlayScene::HandleGoalCinematicAnimation(engine::Object3D* target, const
     }
 
     goalClearPlayerAnimator_.Update(localTime);
-    goalPlayerPosePosition_ = goalClearPlayerAnimator_.GetPosePosition();
+    goalPlayerPosePosition_ = player_->GetTranslate();
+    // ゴール状態では、共通再生器が着地VFXを発火する前に同じ時刻へ王冠を動かす。
     if (isGoal_) {
-        // 同じ時刻の王冠を確定してから、共通再生器が着地VFXを発火する。
         goalPresentationTimer_.Seek(clip.startTime+localTime/(std::max)(clip.playbackSpeed,0.001f));
         UpdateGoalCrownMotion(0.0f);
     }
 }
 
 void GamePlayScene::HandleGoalCinematicSignal(engine::Object3D* target, const CinematicSignalMarker& signal, bool isPreview) {
-    // goal.readyの合図で帰還可能状態へ進み、時計だけに依存しない。
+    // 祝福演出中にgoal.readyを受け取った場合だけ、帰還待ちへ進む。プレビューも同じ合図を使う。
     (void)target;
     (void)isPreview;
 
-    if (signal.signal == "goal.ready" && goalPresentationState_ == GoalPresentationState::Celebrating) {
-        goalPresentationState_ = GoalPresentationState::ReadyToReturn;
+    if (signal.signal == "goal.ready" && goalPresentationState_ == GoalPresentationState::kCelebrating) {
+        goalPresentationState_ = GoalPresentationState::kReadyToReturn;
     }
 }
 
@@ -219,198 +317,500 @@ void GamePlayScene::InitializeGoalPresentationOverlay() {
         return;
     }
 
-    const uint32_t whiteHandle = TextureManager::GetInstance()->Load("Resources/sprite/common/white.png");
-    const uint32_t splashHandle = TextureManager::GetInstance()->Load("Resources/sprite/common/circle2.png");
-    const uint32_t returnTextHandle =
-        TextureManager::GetInstance()->Load("Resources/sprite/ui/result/clear/returning_select_text.png");
+    const auto rippleHandle = engine::Sprite::LoadTexture("ui/result/clear/japanese/landing_ripple.png");
 
-    // 着地の全画面フラッシュは、文字とは独立した一枚として用意します。
-    goalOverlayFlash_ = std::make_unique<engine::Sprite>();
-    goalOverlayFlash_->Initialize(GetSpriteCommon(), whiteHandle);
-    goalOverlayFlash_->SetName("GoalClear_Flash");
-    goalOverlayFlash_->SetAnchorPoint({0.5f, 0.5f});
+    // カメラへ投影した足元に、地面側だけに広がる着地の波紋を描く。
+    goalOverlayLandingRipple_ = std::make_unique<engine::Sprite>();
+    goalOverlayLandingRipple_->Initialize(GetSpriteCommon(), rippleHandle);
+    goalOverlayLandingRipple_->SetName("GoalClear_LandingRipple");
+    goalOverlayLandingRipple_->SetAnchorPoint({0.5f, 0.5f});
 
-    static constexpr std::array<const char*, 10> kLetterTexturePaths = {
-        "Resources/sprite/ui/result/clear/slime_letters/letter_s.png",
-        "Resources/sprite/ui/result/clear/slime_letters/letter_t.png",
-        "Resources/sprite/ui/result/clear/slime_letters/letter_a.png",
-        "Resources/sprite/ui/result/clear/slime_letters/letter_g.png",
-        "Resources/sprite/ui/result/clear/slime_letters/letter_e.png",
-        "Resources/sprite/ui/result/clear/slime_letters/letter_c.png",
-        "Resources/sprite/ui/result/clear/slime_letters/letter_l.png",
-        "Resources/sprite/ui/result/clear/slime_letters/letter_e.png",
-        "Resources/sprite/ui/result/clear/slime_letters/letter_a.png",
-        "Resources/sprite/ui/result/clear/slime_letters/letter_r.png"};
+    const auto clearArt = engine::Sprite::LoadTexture("ui/result/clear/japanese/clear_celebration.png");
 
-    // 一文字ずつ落下させるため、文字と接地光を別々のSpriteに分けます。
+    // 見出しの各セルを独立させ、一文字ずつ落下させる。
     for (size_t i = 0; i < goalOverlayStageClearLetters_.size(); ++i) {
         auto& letter = goalOverlayStageClearLetters_[i];
         letter = std::make_unique<engine::Sprite>();
-        letter->Initialize(GetSpriteCommon(), TextureManager::GetInstance()->Load(kLetterTexturePaths[i]));
+        letter->Initialize(GetSpriteCommon(), clearArt);
+        SetClearArtCell(*letter, i);
         letter->SetName("GoalClear_Letter_" + std::to_string(i));
         letter->SetAnchorPoint({0.5f, 0.5f});
     }
 
-    goalOverlayReturnText_ = std::make_unique<engine::Sprite>();
-    goalOverlayReturnText_->Initialize(GetSpriteCommon(), returnTextHandle);
-    goalOverlayReturnText_->SetName("GoalClear_ReturnText");
-    goalOverlayReturnText_->SetAnchorPoint({0.5f, 0.5f});
-
     for (size_t i = 0; i < goalOverlaySparkles_.size(); ++i) {
         auto& sparkle = goalOverlaySparkles_[i];
         sparkle = std::make_unique<engine::Sprite>();
-        sparkle->Initialize(GetSpriteCommon(), splashHandle);
-        sparkle->SetName("GoalClear_LetterSplash_" + std::to_string(i));
+        sparkle->Initialize(GetSpriteCommon(), clearArt);
+        SetClearArtCell(*sparkle, i == kRimLightSprite ? kClearRimLightCell : kClearTwinkleCell);
+        sparkle->SetName("GoalClear_CelebrationLight_" + std::to_string(i));
+        sparkle->SetEmissive(i == kRimLightSprite ? 1.22f : 1.35f);
         sparkle->SetAnchorPoint({0.5f, 0.5f});
+    }
+
+    // HUDと同じコレクション画像で数字・アイコンの意味を揃える。
+    auto makeRewardSprite = [this](std::uint32_t texture, const std::string& name) {
+        auto sprite = std::make_unique<engine::Sprite>();
+        sprite->Initialize(GetSpriteCommon(), texture);
+        sprite->SetName(name);
+        sprite->SetAnchorPoint({0.5f, 0.5f});
+        return sprite;
+    };
+    // 帰還先の帯は固定画像、左側の操作アイコンは割り当てに合わせる。
+    goalOverlayReturnPrompt_ = makeRewardSprite(
+        engine::Sprite::LoadTexture("ui/result/clear/japanese/return_prompt.png"), "GoalClear_ReturnText");
+    const auto keyboardGlyph = MakeKeyboardGlyph(0);
+    goalOverlayReturnGlyph_ = makeRewardSprite(engine::Sprite::LoadTexture(keyboardGlyph.path), "GoalClear_ReturnGlyph");
+    goalOverlayReturnGlyph_->SetTextureName(keyboardGlyph.path);
+
+    goalOverlayResultPanel_ = makeRewardSprite(
+        engine::Sprite::LoadTexture("ui/result/clear/japanese/rewards_champagne_frame.png"), "GoalClear_ResultPanel");
+    goalOverlayClearTimeLabel_ = makeRewardSprite(
+        engine::Sprite::LoadTexture("ui/result/clear/japanese/clear_time_label.png"), "GoalClear_TimeLabel");
+    const auto timeDigitsTexture = engine::Sprite::LoadTexture("ui/result/clear/japanese/clear_time_digits.png");
+    for (std::size_t i = 0; i < goalOverlayClearTimeGlyphs_.size(); ++i) {
+        goalOverlayClearTimeGlyphs_[i] = makeRewardSprite(timeDigitsTexture, "GoalClear_TimeGlyph_" + std::to_string(i));
+    }
+
+    goalRewardFilledStarTexture_ = engine::Sprite::LoadTexture("ui/result/clear/japanese/result_star_gold.png");
+    goalRewardEmptyStarTexture_ = engine::Sprite::LoadTexture("ui/result/clear/japanese/result_star_slate.png");
+    for (std::size_t i = 0; i < goalOverlayRewardStars_.size(); ++i) {
+        goalOverlayRewardStars_[i] = makeRewardSprite(goalRewardEmptyStarTexture_, "GoalClear_Star_" + std::to_string(i));
+        goalOverlayNewStars_[i] = makeRewardSprite(goalRewardFilledStarTexture_, "GoalClear_NewStar_" + std::to_string(i));
+    }
+    const auto coinTexture = engine::Sprite::LoadTexture("ui/hud/coin_icon.png");
+    goalOverlayRewardCoin_ = makeRewardSprite(coinTexture, "GoalClear_Coin");
+    goalOverlayFalseKingCrown_ = makeRewardSprite(
+        engine::Sprite::LoadTexture("ui/result/clear/japanese/result_false_king_crown.png"), "GoalClear_FalseKingCrown");
+    for (std::size_t i = 0; i < goalOverlayCoinTrails_.size(); ++i) {
+        goalOverlayCoinTrails_[i] = makeRewardSprite(coinTexture, "GoalClear_CoinTrail_" + std::to_string(i));
+    }
+    const auto digitsTexture = engine::Sprite::LoadTexture("ui/result/clear/japanese/digits_light.png");
+    goalOverlayCoinMultiplier_ = makeRewardSprite(digitsTexture, "GoalClear_CoinMultiplier");
+    goalOverlayCoinMultiplier_->SetTextureRect({960.0f, 0.0f}, {96.0f, 128.0f});
+    for (std::size_t i = 0; i < goalOverlayRewardDigits_.size(); ++i) {
+        goalOverlayRewardDigits_[i] = makeRewardSprite(digitsTexture, "GoalClear_CoinDigit_" + std::to_string(i));
     }
 
     UpdateGoalPresentationOverlay();
 }
 
+float GamePlayScene::GetGoalResultTitleStartTime() const {
+    // 通常の喜びジャンプが着地してから、見出しの最初の文字を落とす。
+    const auto& animation = goalClearPlayerAnimator_.GetTuning();
+    return std::max(animation.resultUiTime, animation.victoryLandTime + 0.08f);
+}
+
+bool GamePlayScene::HasFalseKingGoalReward() const {
+    return goalCrownObject_ && goalCrownObject_->GetName() == kFalseKingRewardName;
+}
+
+float GamePlayScene::GetGoalRewardCoinStartTime() const {
+    // 最後の文字の着地を基準に、上段の報酬を表示する時間を取る。
+    const auto& tuning = goalPresentationTuning_;
+    const float lastLetterLanding = GetGoalResultTitleStartTime() +
+        static_cast<float>(goalOverlayStageClearLetters_.size() - 1) * tuning.resultLetterStagger +
+        tuning.resultLetterFallDuration;
+    const bool hasStars = StageManager::GetInstance()->GetCurrentStage().hasStarCoins;
+    return lastLetterLanding + 0.20f + (hasStars || HasFalseKingGoalReward() ? kRewardStarSequenceSeconds : 0.0f);
+}
+
+// 演出の帰還準備と報酬表示の遅い方を返す。コインがある本編とプレビューでは数え上げと静止まで待つ。
+float GamePlayScene::GetGoalRewardReadyTime() const {
+    const bool countsCoins = goalEditorPreviewMode_ || goalResultCoins_ > 0;
+    const float countDuration = countsCoins ? goalPresentationTuning_.resultCoinCountDuration + kRewardSettleSeconds : 0.0f;
+    return std::max(goalClearPlayerAnimator_.GetTuning().readyTime, GetGoalRewardCoinStartTime() + countDuration);
+}
+
+// 見出しの下に獲得物を並べる。時刻はゴール演出開始からの秒、座標は画面ピクセル。
+void GamePlayScene::UpdateGoalRewardOverlay(float time, float centerX, float rewardTop, float scale, bool visible) {
+    const bool hasStars = StageManager::GetInstance()->GetCurrentStage().hasStarCoins;
+    const float coinStart = GetGoalRewardCoinStartTime();
+    const float starStart = coinStart - kRewardStarSequenceSeconds;
+    const float appear = Easing::OutCubic01((time - starStart) / 0.18f);
+    const bool hasCrown = HasFalseKingGoalReward();
+    const bool hasTopReward = hasStars || hasCrown;
+    const float panelStart = hasTopReward ? starStart : coinStart;
+    const float panelIn = Easing::OutCubic01((time - panelStart) / 0.24f);
+    const float panelTop = rewardTop + (1.0f - panelIn) * 12.0f * scale;
+    const float panelHeight = hasTopReward ? kRewardPanelStarHeight : kRewardPanelCompactHeight;
+    const float starY = panelTop + 77.0f * scale;
+    const float coinY = panelTop + (hasTopReward ? 173.0f : 0.5f * panelHeight) * scale;
+    const bool showStars = visible && hasStars && !hasCrown && time >= starStart;
+    float latestStarImpactAge = -1.0f;
+    float latestStarX = centerX;
+
+    // 既取得は静止させ、新規スターだけ空枠へ落として着地の幅と輝きを変える。
+    for (std::size_t i = 0; i < goalOverlayRewardStars_.size(); ++i) {
+        auto& slot = goalOverlayRewardStars_[i];
+        auto& reward = goalOverlayNewStars_[i];
+        // 空枠と新規スターの両部品が揃わない枠は、表示の切替をできないので省く。
+        if (!slot || !reward) continue;
+        const auto earned = goalEditorPreviewMode_ && i < 2
+            ? (i == 0 ? GoalResultStar::kNew : GoalResultStar::kOwned) : goalResultStars_[i];
+        const float arrivalTime = time - starStart - 0.10f - static_cast<float>(i) * kRewardStarStaggerSeconds;
+        const float age = arrivalTime - kRewardStarFallSeconds;
+        const float fall = GoalClamp01(arrivalTime / kRewardStarFallSeconds);
+        const float impact = GoalClamp01(age / 0.15f);
+        const float pulse = std::sin(impact * std::numbers::pi_v<float>);
+        const float x = centerX + (static_cast<float>(i) - 1.0f) * kRewardStarSpacing * scale;
+        // 複数の新規スターが続けて着地すると、光は最後に着地した星へ移る。
+        if (showStars && earned == GoalResultStar::kNew && age >= 0.0f &&
+            (latestStarImpactAge < 0.0f || age < latestStarImpactAge)) {
+            latestStarImpactAge = age;
+            latestStarX = x;
+        }
+        slot->SetVisible(showStars && (earned != GoalResultStar::kNew || fall < 1.0f));
+        slot->SetTextureHandle(earned == GoalResultStar::kOwned ? goalRewardFilledStarTexture_ : goalRewardEmptyStarTexture_);
+        slot->SetPosition({x, starY});
+        slot->SetSize({kRewardStarSize * scale, kRewardStarSize * scale});
+        const float tone = earned == GoalResultStar::kOwned ? 0.91f : 1.0f;
+        const float slotAlpha = earned == GoalResultStar::kOwned ? appear : appear * 0.88f;
+        slot->SetColor({tone, tone, tone, slotAlpha});
+        slot->Update();
+
+        reward->SetVisible(showStars && earned == GoalResultStar::kNew && arrivalTime >= 0.0f);
+        reward->SetPosition({x, starY - (55.0f * (1.0f - fall * fall) + 8.0f * pulse) * scale});
+        reward->SetSize({(kRewardStarSize + 14.0f * pulse) * scale, (kRewardStarSize + 14.0f * pulse) * scale});
+        reward->SetColor({1.0f, 1.0f, 1.0f, appear * Easing::OutCubic01(arrivalTime / 0.08f)});
+        reward->SetEmissive(1.0f + 0.65f * pulse);
+        reward->Update();
+    }
+
+    // 獲得枠が生成済みなら、報酬が現れる時刻に合わせて位置と透明度を変える。
+    // 偽王の王冠は、スターと同じ着地の時計で獲得欄の中央に一個だけ置く。
+    if (goalOverlayFalseKingCrown_) {
+        const float arrival = time - starStart - 0.10f;
+        const float age = arrival - kRewardStarFallSeconds;
+        const float fall = GoalClamp01(arrival / kRewardStarFallSeconds);
+        const float pulse = std::sin(GoalClamp01(age / 0.15f) * std::numbers::pi_v<float>);
+        auto& crown = *goalOverlayFalseKingCrown_;
+        const bool show = visible && hasCrown && arrival >= 0.0f;
+        crown.SetVisible(show);
+        if (show) {
+            const float width = (150.0f + 10.0f * pulse) * scale;
+            crown.SetPosition({centerX, starY - (48.0f * (1.0f - fall * fall) + 6.0f * pulse) * scale});
+            crown.SetSize({width, width * (2.0f / 3.0f)});
+            crown.SetColor({1.0f, 1.0f, 1.0f, appear * Easing::OutCubic01(arrival / 0.08f)});
+            crown.Update();
+            if (age >= 0.0f) latestStarImpactAge = age;
+        }
+    }
+
+    if (goalOverlayResultPanel_) {
+        goalOverlayResultPanel_->SetVisible(visible && panelIn > 0.0f);
+        goalOverlayResultPanel_->SetPosition({centerX, panelTop + panelHeight * 0.5f * scale});
+        goalOverlayResultPanel_->SetSize({kRewardPanelWidth * scale, panelHeight * scale});
+        goalOverlayResultPanel_->SetColor({1.0f, 1.0f, 1.0f, panelIn});
+        goalOverlayResultPanel_->Update();
+    }
+
+    // 金の十字光は星の左上、水色の反射は枠の下辺へ配置する。
+    const float effectOpacity = visible && hasTopReward && !goalResultRevealed_ ? goalPresentationTuning_.resultGlowAlpha : 0.0f;
+    for (size_t i = 0; i < kStarTwinkles.size(); ++i) {
+        UpdateClearTwinkle(goalOverlaySparkles_[kRewardTwinkleStart + i].get(), kStarTwinkles[i],
+                           {latestStarX, starY}, latestStarImpactAge, scale, effectOpacity);
+    }
+    // 枠の下辺用の反射があれば、最後に着地した新規スターの経過時間で表示を決める。
+    if (auto* rimLight = goalOverlaySparkles_[kRimLightSprite].get()) {
+        const bool active = effectOpacity > 0.0f && latestStarImpactAge >= 0.0f && latestStarImpactAge < 0.57f;
+        rimLight->SetVisible(active);
+        // 演出が有効でスターの着地から0.57秒未満の間だけ、反射を横へ広げる。
+        if (active) {
+            const float progress = latestStarImpactAge / 0.57f;
+            const float pulse = std::sin(std::numbers::pi_v<float> * std::sqrt(progress));
+            rimLight->SetPosition({centerX, panelTop + (panelHeight - 8.0f) * scale});
+            rimLight->SetSize({(185.0f + 96.0f * progress) * scale, 52.0f * scale});
+            rimLight->SetColor({1.0f, 1.0f, 1.0f, effectOpacity * pulse});
+            rimLight->Update();
+        }
+    }
+
+    // 最終桁数の幅を先に確保し、数を増やす途中でアイコンや桁の基準がずれないようにする。
+    const float coinTime = time - coinStart;
+    const std::int32_t totalCoins = goalEditorPreviewMode_ ? 24 : goalResultCoins_;
+    const float duration = goalPresentationTuning_.resultCoinCountDuration;
+    const float countRate = GoalClamp01(coinTime / duration);
+    const std::int32_t count = countRate >= 1.0f ? totalCoins
+        : static_cast<std::int32_t>(static_cast<double>(totalCoins) * Easing::OutCubic01(countRate));
+    const std::string digits = std::to_string(count);
+    const auto maxDigits = std::to_string(totalCoins).size();
+    const float digitStep = std::min(25.0f, 109.0f / static_cast<float>(maxDigits));
+    const float coinX = centerX - (160.0f + 0.5f * static_cast<float>(maxDigits) * digitStep) * scale;
+    const float spin = totalCoins > 0 ? GoalClamp01(coinTime / 0.27f) : 1.0f;
+    const float width = 0.20f + 0.80f * std::abs(std::cos((spin - 1.0f) * std::numbers::pi_v<float>));
+    const float pop = totalCoins > 0 ? std::sin(GoalClamp01((coinTime - duration) / kRewardSettleSeconds) *
+                               std::numbers::pi_v<float>) : 0.0f;
+    const float alpha = Easing::OutCubic01(coinTime / 0.12f);
+    const bool coinVisible = visible && coinTime >= 0.0f;
+
+    // 獲得枚数の範囲内にある残像だけを時差で飛ばし、0.26秒でコインへ合流させる。
+    for (std::size_t i = 0; i < goalOverlayCoinTrails_.size(); ++i) {
+        auto& trail = goalOverlayCoinTrails_[i];
+        const float index = static_cast<float>(i);
+        const float age = coinTime - index * 0.055f;
+        // 残像の描画部品が無ければ飛行位置を計算しない。
+        if (!trail) continue;
+        const bool inFlight = coinVisible && totalCoins > static_cast<std::int32_t>(i) && age >= 0.0f && age < 0.26f;
+        trail->SetVisible(inFlight);
+        // 表示開始前・終了後・枚数超過の残像は、非表示だけ指定して位置などの更新を省く。
+        if (!inFlight) continue;
+        const float progress = GoalClamp01(age / 0.26f);
+        const float remaining = 1.0f - progress * progress * progress;
+        trail->SetPosition({coinX - (58.0f - index * 20.0f) * remaining * scale,
+                            coinY - (19.0f + index * 23.0f) * remaining * scale});
+        const float size = (20.0f - 6.0f * progress) * scale;
+        trail->SetSize({size, size});
+        trail->SetColor({1.0f, 1.0f, 1.0f, std::sin(progress * std::numbers::pi_v<float>) * 0.90f});
+        trail->Update();
+    }
+
+    // 桁数が増えても、数の右端と掛け記号は同じ位置を使う。生成済みのコインには回転と最後の跳ねを加える。
+    if (goalOverlayRewardCoin_) {
+        const float iconSize = (42.0f + 7.0f * pop) * scale;
+        goalOverlayRewardCoin_->SetVisible(coinVisible);
+        goalOverlayRewardCoin_->SetPosition({coinX, coinY - 5.0f * pop * scale});
+        goalOverlayRewardCoin_->SetSize({iconSize * width, iconSize});
+        goalOverlayRewardCoin_->SetColor({1.0f, 1.0f, 1.0f, alpha});
+        goalOverlayRewardCoin_->Update();
+    }
+    // 掛け記号がある場合は、コインの右に置いて数と同時に見せる。
+    if (goalOverlayCoinMultiplier_) {
+        goalOverlayCoinMultiplier_->SetVisible(coinVisible);
+        goalOverlayCoinMultiplier_->SetPosition({coinX + 36.0f * scale, coinY});
+        goalOverlayCoinMultiplier_->SetSize({22.0f * scale, 35.0f * scale});
+        goalOverlayCoinMultiplier_->SetColor({1.0f, 1.0f, 1.0f, alpha});
+        goalOverlayCoinMultiplier_->Update();
+    }
+    // 作成済みで、現在の枚数表示に必要な桁だけ画像の切り出しと座標を更新する。
+    for (std::size_t i = 0; i < goalOverlayRewardDigits_.size(); ++i) {
+        auto& digit = goalOverlayRewardDigits_[i];
+        if (!digit) continue;
+        digit->SetVisible(coinVisible && i < digits.size());
+        if (!coinVisible || i >= digits.size()) continue;
+        digit->SetTextureRect({static_cast<float>(digits[i] - '0') * 96.0f, 0.0f}, {96.0f, 128.0f});
+        digit->SetPosition({coinX + (59.0f + static_cast<float>(maxDigits - digits.size() + i) * digitStep) * scale, coinY});
+        digit->SetSize({(digitStep + 3.0f) * scale, 37.0f * scale});
+        digit->SetColor({1.0f, 1.0f, 1.0f, alpha});
+        digit->Update();
+    }
+
+    // クリア秒を分と秒へ分け、秒を2桁にそろえる。プレビューは例として4分38秒を表示する。
+    const std::int32_t seconds = goalEditorPreviewMode_ ? 278 : goalResultClearSeconds_;
+    const std::string clock = std::to_string(seconds / 60) + (seconds % 60 < 10 ? ":0" : ":") +
+                              std::to_string(seconds % 60);
+    // クリアタイムの見出しがあれば、コインと同時に結果枠の右へ表示する。
+    if (goalOverlayClearTimeLabel_) {
+        goalOverlayClearTimeLabel_->SetVisible(coinVisible);
+        goalOverlayClearTimeLabel_->SetPosition({centerX + 33.0f * scale, coinY});
+        goalOverlayClearTimeLabel_->SetSize({128.0f * scale, 30.0f * scale});
+        goalOverlayClearTimeLabel_->SetColor({1.0f, 1.0f, 1.0f, alpha});
+        goalOverlayClearTimeLabel_->Update();
+    }
+
+    const float glyphStep = std::min(26.0f, 135.0f / static_cast<float>(clock.size()));
+    float glyphLeft = centerX + (178.0f - 0.5f * (static_cast<float>(clock.size()) - 0.5f) * glyphStep) * scale;
+    // 必要な文字数に対応する部品だけを更新し、区切り記号には数字より狭い送り幅を使う。
+    for (std::size_t i = 0; i < goalOverlayClearTimeGlyphs_.size(); ++i) {
+        auto& glyph = goalOverlayClearTimeGlyphs_[i];
+        if (!glyph) continue;
+        glyph->SetVisible(coinVisible && i < clock.size());
+        if (!coinVisible || i >= clock.size()) continue;
+        const bool separator = clock[i] == ':';
+        const float cell = separator ? 10.0f : static_cast<float>(clock[i] - '0');
+        const float glyphWidth = glyphStep * (separator ? 0.50f : 1.0f) * scale;
+        glyph->SetTextureRect({cell * 96.0f, 0.0f}, {96.0f, 128.0f});
+        glyph->SetPosition({glyphLeft + glyphWidth * 0.5f, coinY});
+        glyphLeft += glyphWidth;
+        glyph->SetSize({(glyphStep + 2.0f) * scale, 42.0f * scale});
+        glyph->SetColor({1.0f, 1.0f, 1.0f, alpha});
+        glyph->Update();
+    }
+}
+
 void GamePlayScene::UpdateGoalPresentationOverlay() {
-    // ゴールの再達成では色を変え、同じタイムラインでも報酬の有無を視覚で分ける。
-    const bool visible = isGoal_ && goalPresentationState_ != GoalPresentationState::Inactive;
+    // ワールドの演出時計から、見出し・獲得欄・帰還案内の表示順を決める。
+    const bool visible = isGoal_ && goalPresentationState_ != GoalPresentationState::kInactive;
     const float screenW = static_cast<float>(WinApp::GetClientWidth());
     const float screenH = static_cast<float>(WinApp::GetClientHeight());
-    const float t = goalPresentationTimer_.Elapsed();
-    const GoalClearPlayerAnimator::Tuning& animation = goalClearPlayerAnimator_.GetTuning();
+    const float returnStartTime = GetGoalRewardReadyTime();
+    // 早送りは表示用の時刻に限定し、カメラやプレイヤーの演出時計には触れない。
+    const float t = goalResultRevealed_ ? std::max(goalPresentationTimer_.Elapsed(), returnStartTime + 0.34f)
+                                       : goalPresentationTimer_.Elapsed();
+    const float titleStart = GetGoalResultTitleStartTime();
     const GoalPresentationTuning& presentation = goalPresentationTuning_;
-    const bool replayClear = goalWasStageCleared_;
-    const engine::Vector3 themePrimary = replayClear ? engine::Vector3{0.90f, 0.92f, 0.96f} : engine::Vector3{1.0f, 0.72f, 0.12f};
-    const engine::Vector3 themeSecondary = replayClear ? engine::Vector3{0.58f, 0.64f, 0.74f} : engine::Vector3{1.0f, 0.34f, 0.06f};
     const float baseScale = (std::min)(screenW / 1280.0f, screenH / 720.0f);
     const float uiScale = baseScale * presentation.resultUiScale;
-    const float centerX = screenW * presentation.resultUiCenterX;
-    const float baselineY = screenH * presentation.resultUiCenterY;
-    // 戻る案内は結果の直後に出さず、文字が見えた後か帰還可能の手前の遅い方に合わせます。
-    const float returnStartTime = std::max(animation.resultUiTime + 0.52f, animation.readyTime - 0.48f);
-    const float returnIn = Easing::SmoothStep01((t - returnStartTime) / 0.34f);
-    const float flashIn = Easing::OutCubic01((t - animation.resultUiTime) / 0.04f);
-    const float flashOut = 1.0f - Easing::OutCubic01((t - animation.resultUiTime - 0.04f) / 0.20f);
-    const float flash = visible ? flashIn * flashOut : 0.0f;
+    // 見出しを画面全体の中央、獲得枠を右側に置き、共通スケールで画面内に収める。
+    const float panelMargin = (0.5f * kRewardPanelWidth + 30.0f) * uiScale;
+    const float centerX = std::clamp(screenW * presentation.resultUiCenterX, panelMargin, screenW - panelMargin);
+    const bool hasStars = StageManager::GetInstance()->GetCurrentStage().hasStarCoins;
+    const float panelHeight = hasStars || HasFalseKingGoalReward() ? kRewardPanelStarHeight : kRewardPanelCompactHeight;
+    const float rewardTop = std::min(screenH * presentation.resultPanelTop,
+                                     screenH - (panelHeight + 78.0f) * uiScale);
+    const float baselineY = std::min(screenH * presentation.resultUiCenterY, rewardTop - 69.0f * uiScale);
 
-    if (goalOverlayFlash_) {
-        goalOverlayFlash_->SetPosition({screenW * 0.5f, screenH * 0.5f});
-        goalOverlayFlash_->SetSize({screenW + 8.0f, screenH + 8.0f});
-        goalOverlayFlash_->SetColor({themePrimary.x, themePrimary.y, themePrimary.z, flash * 0.075f});
-        goalOverlayFlash_->Update();
+    // 波紋Spriteがあれば、通常の祝福着地から0.44秒の表示を更新する。早送りや撃破演出経由では表示しない。
+    if (goalOverlayLandingRipple_) {
+        const float contactTime = goalClearPlayerAnimator_.GetTuning().victoryLandTime;
+        const float age = goalPresentationTimer_.Elapsed() - contactTime;
+        auto* camera = CameraManager::GetInstance()->GetActiveCamera();
+        const bool show = visible && !goalResultRevealed_ &&
+                          (!crownDefeat_.completed || goalCrownSnapshotValid_) &&
+                          player_ && player_->GetModel() && camera && age >= 0.0f && age < 0.44f;
+        goalOverlayLandingRipple_->SetVisible(show);
+        // 表示条件が揃う場合だけ、プレイヤーモデルの足元をカメラで画面へ投影する。
+        if (show) {
+            const auto lo = player_->GetModel()->GetLocalAabbMin();
+            const auto hi = player_->GetModel()->GetLocalAabbMax();
+            const auto foot = engine::Math::Transform({(lo.x + hi.x) * 0.5f, lo.y, (lo.z + hi.z) * 0.5f},
+                                                       player_->GetWorldMatrix());
+            const auto ndc = engine::Math::Transform(foot, camera->GetViewProjectionMatrix());
+            const float progress = GoalClamp01(age / 0.44f);
+            const float spread = Easing::OutCubic01(progress);
+            goalOverlayLandingRipple_->SetPosition({(ndc.x + 1.0f) * screenW * 0.5f,
+                                                    (1.0f - ndc.y) * screenH * 0.5f + 4.0f * baseScale});
+            goalOverlayLandingRipple_->SetSize({(234.0f + 172.0f * spread) * baseScale,
+                                                (19.0f + 27.0f * spread) * baseScale});
+            goalOverlayLandingRipple_->SetColor({1.0f, 1.0f, 1.0f, 0.95f * (1.0f - progress)});
+            goalOverlayLandingRipple_->Update();
+        }
     }
 
-    // 文字ごとの送り幅と画像幅を分離し、フォント画像の余白に左右されず中央揃えにする。
-    static constexpr std::array<float, 10> kAdvanceWidths = {62.0f, 60.0f, 66.0f, 68.0f, 56.0f,
-                                                             68.0f, 54.0f, 56.0f, 66.0f, 64.0f};
-    static constexpr std::array<float, 10> kSpriteWidths = {88.0f, 90.0f, 96.0f, 100.0f, 84.0f,
-                                                            96.0f, 82.0f, 84.0f, 96.0f,  92.0f};
-    static constexpr std::array<float, 10> kInitialTilts = {-0.10f, 0.075f,  -0.055f, 0.095f,  -0.070f,
-                                                            0.060f, -0.085f, 0.050f,  -0.060f, 0.080f};
-    constexpr float kLetterGap = 6.0f;
-    constexpr float kWordGap = 28.0f;
-    float totalWidth = kWordGap + kLetterGap * 9.0f;
-
-    for (float advance : kAdvanceWidths) {
-        totalWidth += advance;
+    // スライムの胴の少し上を投影し、ワールドの着地に合わせて周りに金の光を散らす。
+    const float heroAge = goalPresentationTimer_.Elapsed() - goalClearPlayerAnimator_.GetTuning().victoryLandTime;
+    auto* camera = CameraManager::GetInstance()->GetActiveCamera();
+    const bool showHeroGlints = visible && !goalResultRevealed_ &&
+                          (!crownDefeat_.completed || goalCrownSnapshotValid_) &&
+                               player_ && player_->GetModel() && camera && heroAge >= 0.0f && heroAge < 2.0f;
+    engine::Vector2 heroCenter{};
+    // 通常の着地から2秒以内でモデルとカメラが揃う場合にだけ、胴の少し上を光の基準として投影する。
+    if (showHeroGlints) {
+        const auto lo = player_->GetModel()->GetLocalAabbMin();
+        const auto hi = player_->GetModel()->GetLocalAabbMax();
+        const auto center = engine::Math::Transform({(lo.x + hi.x) * 0.5f, std::lerp(lo.y, hi.y, 0.62f),
+                                                     (lo.z + hi.z) * 0.5f}, player_->GetWorldMatrix());
+        const auto ndc = engine::Math::Transform(center, camera->GetViewProjectionMatrix());
+        heroCenter = {(ndc.x + 1.0f) * screenW * 0.5f, (1.0f - ndc.y) * screenH * 0.5f};
+    }
+    for (size_t i = 0; i < kSlimeTwinkles.size(); ++i) {
+        UpdateClearTwinkle(goalOverlaySparkles_[i].get(), kSlimeTwinkles[i], heroCenter, heroAge,
+                           baseScale, showHeroGlints ? presentation.resultGlowAlpha : 0.0f);
     }
 
-    float cursorX = centerX - totalWidth * 0.5f * uiScale;
-
+    // 文字ごとの着地点をゆるい弧にし、バウンドの終点でも高さと傾きを残す。
+    constexpr float kGlyphSize = 126.0f;
     for (size_t i = 0; i < goalOverlayStageClearLetters_.size(); ++i) {
         engine::Sprite* letter = goalOverlayStageClearLetters_[i].get();
-        engine::Sprite* splash = goalOverlaySparkles_[i].get();
-        const float letterCenterX = cursorX + kAdvanceWidths[i] * 0.5f * uiScale;
-        const float localTime = t - animation.resultUiTime - static_cast<float>(i) * presentation.resultLetterStagger;
+        const auto& pose = kClearLetterPoses[i];
+        const float letterCenterX = screenW * 0.5f + pose.x * uiScale;
+        const float settledY = baselineY + (pose.y - 7.0f) * uiScale;
+        const float localTime = t - titleStart - static_cast<float>(i) * presentation.resultLetterStagger;
         // 各文字に時間差を与え、落下前・接地後・静止後の姿勢を同じ時計から再現する。
-        float letterY = baselineY - presentation.resultLetterDropHeight * uiScale;
+        float letterY = settledY - presentation.resultLetterDropHeight * 0.44f * uiScale;
         float scaleX = 0.82f;
         float scaleY = 1.18f;
-        float rotation = kInitialTilts[i];
+        float rotation = pose.tilt * 2.0f;
         float letterAlpha = 0.0f;
 
+        // 文字ごとの開始時刻より前は透明を保ち、開始後にだけ落下と着地反応を計算する。
         if (localTime >= 0.0f) {
             letterAlpha = Easing::OutCubic01(localTime / 0.10f);
 
+            // 落下時間内は下方向へ加速させながら、最終の大きさと傾きへ近づける。
             if (localTime < presentation.resultLetterFallDuration) {
                 const float fallRate = GoalClamp01(localTime / presentation.resultLetterFallDuration);
                 const float acceleratedFall = fallRate * fallRate;
-                letterY = baselineY - presentation.resultLetterDropHeight * (1.0f - acceleratedFall) * uiScale;
+                letterY = settledY - presentation.resultLetterDropHeight * 0.44f * (1.0f - acceleratedFall) * uiScale;
                 const float approach = Easing::SmoothStep01(fallRate);
                 scaleX = 0.82f + 0.18f * approach;
                 scaleY = 1.18f - 0.18f * approach;
-                rotation = kInitialTilts[i] * (1.0f - approach);
+                rotation = pose.tilt * (2.0f - approach);
             } else {
-                // 接地後の振幅を減衰させ、反発から待機中の微揺れへ連続的につなぐ。
+                // 接地した一文字を横に広げ、跳ね返りを減衰させて読みやすい位置に止める。
                 const float bounceTime = localTime - presentation.resultLetterFallDuration;
-                const float damping = std::exp(-bounceTime * presentation.resultLetterBounceDamping);
+                const float damping = std::exp(-bounceTime * (presentation.resultLetterBounceDamping + 2.4f));
                 const float bouncePhase = bounceTime * presentation.resultLetterBounceFrequency;
                 const float rebound = std::abs(std::sin(bouncePhase)) * damping;
                 const float contactWave = (std::max)(0.0f, std::cos(bouncePhase));
                 const float contact = std::pow(contactWave, 7.0f) * damping;
-                letterY = baselineY - presentation.resultLetterBounceHeight * rebound * uiScale;
+                letterY = settledY - presentation.resultLetterBounceHeight * 0.37f * rebound * uiScale;
                 scaleX = 1.0f + contact * 0.34f - rebound * 0.075f;
                 scaleY = 1.0f - contact * 0.26f + rebound * 0.11f;
-                rotation = kInitialTilts[i] * std::cos(bouncePhase) * damping * 0.70f;
-
-                const float idleBlend = Easing::SmoothStep01((bounceTime - 1.15f) / 0.45f);
-                const float idleWobble = std::sin(bounceTime * 2.7f + static_cast<float>(i) * 0.62f);
-                scaleX += idleWobble * 0.018f * idleBlend;
-                scaleY -= idleWobble * 0.014f * idleBlend;
-                letterY += std::sin(bounceTime * 2.2f + static_cast<float>(i) * 0.35f) * 1.4f * idleBlend * uiScale;
+                rotation = pose.tilt + 0.07f * std::sin(bouncePhase) * damping;
             }
         }
 
+        // 文字のSpriteが用意されていれば、求めた姿勢を反映する。リザルトが無効なら透明にする。
         if (letter) {
             letter->SetPosition({letterCenterX, letterY});
-            letter->SetSize({kSpriteWidths[i] * scaleX * uiScale, 176.0f * scaleY * uiScale});
+            letter->SetSize({kGlyphSize * scaleX * uiScale, kGlyphSize * scaleY * uiScale});
             letter->SetRotation(rotation);
-            letter->SetColor({themePrimary.x, themePrimary.y, themePrimary.z,
+            letter->SetColor({1.0f, 1.0f, 1.0f,
                               visible ? letterAlpha * presentation.resultBackdropAlpha : 0.0f});
             letter->Update();
         }
 
-        if (splash) {
-            // 着地した文字だけ短時間の接地光を出し、次の文字の落下とは独立させる。
-            const float impactAge = localTime - presentation.resultLetterFallDuration;
-            const float splashRate = GoalClamp01(impactAge / 0.30f);
-            const float splashAlpha =
-                impactAge >= 0.0f ? std::sin(splashRate * std::numbers::pi_v<float>) * presentation.resultGlowAlpha : 0.0f;
-            splash->SetPosition({letterCenterX, baselineY + 45.0f * uiScale});
-            splash->SetSize({(20.0f + 48.0f * splashRate) * uiScale, (13.0f - 9.0f * splashRate) * uiScale});
-            splash->SetRotation(0.0f);
-            splash->SetColor({themeSecondary.x, themeSecondary.y, themeSecondary.z, visible ? splashAlpha : 0.0f});
-            splash->Update();
-        }
-
-        cursorX += (kAdvanceWidths[i] + kLetterGap) * uiScale;
-
-        if (i == 4) {
-            cursorX += kWordGap * uiScale;
-        }
     }
 
-    // 戻る案内は文字の跳ねに追従させず、文章の下へ独立して滑り込ませます。
-    if (goalOverlayReturnText_) {
-        goalOverlayReturnText_->SetPosition({centerX, baselineY + (100.0f + 8.0f * (1.0f - returnIn)) * uiScale});
-        goalOverlayReturnText_->SetSize({278.0f * uiScale, 33.0f * uiScale});
-        goalOverlayReturnText_->SetRotation(0.0f);
-        goalOverlayReturnText_->SetColor({0.92f, 0.98f, 1.0f, visible ? returnIn * 0.90f : 0.0f});
-        goalOverlayReturnText_->Update();
+    UpdateGoalRewardOverlay(t, centerX, rewardTop, uiScale, visible);
+
+    // 記録を保存した後、報酬表示が揃うか早送り済みの場合に帰還案内を出す。すでに帰還中の場合は隠す。
+    const bool returnReady = visible && goalSavePerformed_ &&
+                             goalPresentationState_ != GoalPresentationState::kReturning &&
+                             (goalResultRevealed_ || t >= returnStartTime);
+    const float reveal = GoalClamp01((t - returnStartTime) / 0.34f);
+    const float fade = Easing::OutCubic01(reveal);
+    const float pop = std::sin(std::numbers::pi_v<float> * reveal);
+    const float promptScale = uiScale * (1.0f + 0.031f * pop);
+    const float promptY = rewardTop + (panelHeight + 39.0f + (1.0f - fade) * 10.0f - pop * 4.0f) * uiScale;
+    // 帯のSpriteが生成済みなら表示可否とフェードを反映する。
+    if (goalOverlayReturnPrompt_) {
+        goalOverlayReturnPrompt_->SetVisible(returnReady);
+        goalOverlayReturnPrompt_->SetPosition({centerX, promptY});
+        goalOverlayReturnPrompt_->SetSize({kReturnPromptWidth * promptScale, kReturnPromptHeight * promptScale});
+        goalOverlayReturnPrompt_->SetColor({1.0f, 1.0f, 1.0f, fade});
+        goalOverlayReturnPrompt_->Update();
+    }
+
+    // 操作画像があり、帰還できる状態で入力機器が使える場合に、決定処理と同じJumpの割り当てを表示する。
+    if (goalOverlayReturnGlyph_) {
+        const bool showGlyph = returnReady && inputManager_;
+        goalOverlayReturnGlyph_->SetVisible(showGlyph);
+        if (showGlyph) {
+            const auto glyph = ResolveActionGlyph("Jump", inputManager_->IsGamepadMode());
+            // 画像パスが変わった場合だけ再読み込みし、同じアトラス内のキー変更でも切り抜きは更新する。
+            if (goalOverlayReturnGlyph_->GetTextureName() != glyph.path) {
+                goalOverlayReturnGlyph_->SetTextureHandle(engine::Sprite::LoadTexture(glyph.path));
+                goalOverlayReturnGlyph_->SetTextureName(glyph.path);
+            }
+
+            // キーキャップと円形のパッド画像を同じ表示領域へ縦横比を保って収める。
+            const auto& metadata = engine::TextureManager::GetInstance()->GetMetadata(goalOverlayReturnGlyph_->GetTextureHandle());
+            const float width = glyph.useCrop ? glyph.width : static_cast<float>(metadata.width);
+            const float height = glyph.useCrop ? glyph.height : static_cast<float>(metadata.height);
+            const float fit = std::min(66.0f / width, 40.0f / height) * promptScale;
+            goalOverlayReturnGlyph_->SetTextureRect({glyph.cropX, glyph.cropY}, {width, height});
+            goalOverlayReturnGlyph_->SetPosition({centerX - 115.0f * promptScale, promptY});
+            goalOverlayReturnGlyph_->SetSize({width * fit, height * fit});
+            goalOverlayReturnGlyph_->SetColor({1.0f, 1.0f, 1.0f, fade});
+            goalOverlayReturnGlyph_->Update();
+        }
     }
 }
 
 void GamePlayScene::DrawGoalPresentationOverlay() {
-    // ゴール演出が無効なら一時Spriteを描かず、通常HUDへ戻す。
-    if (!isGoal_ || goalPresentationState_ == GoalPresentationState::Inactive) {
+    // ゴール中で演出の状態が有効な場合だけ、作成済みのオーバーレイ部品を順に描く。可視性は各Spriteが判定する。
+    if (!isGoal_ || goalPresentationState_ == GoalPresentationState::kInactive) {
         return;
     }
 
-    // フラッシュと接地光を先に重ね、その上に文字と帰還案内を描きます。
-    if (goalOverlayFlash_) {
-        goalOverlayFlash_->Draw();
+    // 波紋をワールドの手前に描き、獲得枠は報酬アイコンの下に重ねる。
+    if (goalOverlayLandingRipple_) {
+        goalOverlayLandingRipple_->Draw();
     }
 
-    for (auto& sparkle : goalOverlaySparkles_) {
-        if (sparkle) {
-            sparkle->Draw();
-        }
+    for (size_t i = 0; i < kRewardTwinkleStart; ++i) {
+        if (goalOverlaySparkles_[i]) goalOverlaySparkles_[i]->Draw();
     }
 
     for (auto& letter : goalOverlayStageClearLetters_) {
@@ -419,13 +819,36 @@ void GamePlayScene::DrawGoalPresentationOverlay() {
         }
     }
 
-    if (goalOverlayReturnText_) {
-        goalOverlayReturnText_->Draw();
+    if (goalOverlayResultPanel_) goalOverlayResultPanel_->Draw();
+    if (goalOverlayFalseKingCrown_) goalOverlayFalseKingCrown_->Draw();
+    for (const auto& star : goalOverlayRewardStars_) {
+        if (star) star->Draw();
     }
+    for (const auto& star : goalOverlayNewStars_) {
+        if (star) star->Draw();
+    }
+    // 枠とスターより手前に着地光を重ね、コイン・タイムの文字を読みやすくする。
+    for (size_t i = kRewardTwinkleStart; i < goalOverlaySparkles_.size(); ++i) {
+        if (goalOverlaySparkles_[i]) goalOverlaySparkles_[i]->Draw();
+    }
+    for (const auto& trail : goalOverlayCoinTrails_) {
+        if (trail) trail->Draw();
+    }
+    if (goalOverlayRewardCoin_) goalOverlayRewardCoin_->Draw();
+    if (goalOverlayCoinMultiplier_) goalOverlayCoinMultiplier_->Draw();
+    for (const auto& digit : goalOverlayRewardDigits_) {
+        if (digit) digit->Draw();
+    }
+    if (goalOverlayClearTimeLabel_) goalOverlayClearTimeLabel_->Draw();
+    for (const auto& glyph : goalOverlayClearTimeGlyphs_) {
+        if (glyph) glyph->Draw();
+    }
+    if (goalOverlayReturnPrompt_) goalOverlayReturnPrompt_->Draw();
+    if (goalOverlayReturnGlyph_) goalOverlayReturnGlyph_->Draw();
 }
 
 void GamePlayScene::LoadGoalPresentationTuning() {
-    // 設定JSONがない・壊れている場合も、既定値を安全な時刻順に補正する。
+    // ゴール演出のJSONから存在する設定欄を読み、ファイル不在時や解析例外時も現在の値を範囲内に補正する。
     std::ifstream file(kGoalPresentationTuningPath, std::ios::binary);
 
     if (!file.is_open()) {
@@ -438,7 +861,7 @@ void GamePlayScene::LoadGoalPresentationTuning() {
         file >> root;
         GoalClearPlayerAnimator::Tuning animation = goalClearPlayerAnimator_.GetTuning();
 
-        // カット全体の長さと各動作の開始時刻を読み、後続の再生が参照する基準を作る。
+        // timelineがオブジェクトなら、動作と表示の開始時刻を現在値へ読み込む。
         if (const auto it = root.find("timeline"); it != root.end() && it->is_object()) {
             const auto& j = *it;
             goalPresentationTuning_.crownFocusEndTime =
@@ -454,21 +877,13 @@ void GamePlayScene::LoadGoalPresentationTuning() {
             animation.readyTime = j.value("readyTime", animation.readyTime);
         }
 
-        // 操作を引き取った後のプレイヤーの姿勢や動きを、カメラとは独立して読み込む。
+        // playerがオブジェクトなら、着地から祝福までのプレイヤーの移動と変形を読み込む。
         if (const auto it = root.find("player"); it != root.end() && it->is_object()) {
             const auto& j = *it;
             animation.settleDuration = j.value("settleDuration", animation.settleDuration);
-            animation.jumpHeight = j.value("jumpHeight", animation.jumpHeight);
-            animation.forwardDistance = j.value("forwardDistance", animation.forwardDistance);
-            animation.anticipationDepth = j.value("anticipationDepth", animation.anticipationDepth);
-            animation.landingSquash = j.value("landingSquash", animation.landingSquash);
-            animation.anticipationSquash = j.value("anticipationSquash", animation.anticipationSquash);
-            animation.takeoffStretch = j.value("takeoffStretch", animation.takeoffStretch);
-            animation.resultStretch = j.value("resultStretch", animation.resultStretch);
-            animation.resultYawBias = j.value("resultYawBias", animation.resultYawBias);
         }
 
-        // 王冠の移動・回転・最後の揺れの調整を、この演出専用の設定へ反映する。
+        // crownがオブジェクトなら、降り始める高さ、頭への沈み込み、体幅に対する大きさを読み込む。
         if (const auto it = root.find("crown"); it != root.end() && it->is_object()) {
             const auto& j = *it;
             goalPresentationTuning_.crownDropHeight = j.value("dropHeight", goalPresentationTuning_.crownDropHeight);
@@ -476,59 +891,25 @@ void GamePlayScene::LoadGoalPresentationTuning() {
             goalPresentationTuning_.crownWearWidthRatio = j.value("wearWidthRatio", goalPresentationTuning_.crownWearWidthRatio);
         }
 
-        // カメラの寄り方と画角を読み、プレイヤーと王冠を画面内に収める計算に使う。
+        // cameraがオブジェクトなら、カットごとの距離・位置・画角を読み込む。
         if (const auto it = root.find("camera"); it != root.end() && it->is_object()) {
             const auto& j = *it;
             goalPresentationTuning_.cameraSafeMargin = j.value("safeMargin", goalPresentationTuning_.cameraSafeMargin);
-            goalPresentationTuning_.crownFocusDistance =
-                j.value("crownFocusDistance", goalPresentationTuning_.crownFocusDistance);
-            goalPresentationTuning_.crownFocusSide = j.value("crownFocusSide", goalPresentationTuning_.crownFocusSide);
-            goalPresentationTuning_.crownFocusHeight =
-                j.value("crownFocusHeight", goalPresentationTuning_.crownFocusHeight);
-            goalPresentationTuning_.landingCameraDistance =
-                j.value("landingDistance", goalPresentationTuning_.landingCameraDistance);
-            goalPresentationTuning_.landingCameraSide =
-                j.value("landingSide", goalPresentationTuning_.landingCameraSide);
-            goalPresentationTuning_.landingCameraHeight =
-                j.value("landingHeight", goalPresentationTuning_.landingCameraHeight);
-            goalPresentationTuning_.jumpCameraDistance =
-                j.value("jumpDistance", goalPresentationTuning_.jumpCameraDistance);
-            goalPresentationTuning_.jumpCameraSide = j.value("jumpSide", goalPresentationTuning_.jumpCameraSide);
-            goalPresentationTuning_.jumpCameraHeight = j.value("jumpHeight", goalPresentationTuning_.jumpCameraHeight);
             goalPresentationTuning_.resultCameraDistance =
                 j.value("resultDistance", goalPresentationTuning_.resultCameraDistance);
-            goalPresentationTuning_.resultCameraSide = j.value("resultSide", goalPresentationTuning_.resultCameraSide);
             goalPresentationTuning_.resultCameraHeight =
                 j.value("resultHeight", goalPresentationTuning_.resultCameraHeight);
             goalPresentationTuning_.resultTargetSide =
                 j.value("resultTargetSide", goalPresentationTuning_.resultTargetSide);
-            goalPresentationTuning_.crownFocusFov = j.value("crownFocusFov", goalPresentationTuning_.crownFocusFov);
-            goalPresentationTuning_.landingFov = j.value("landingFov", goalPresentationTuning_.landingFov);
-            goalPresentationTuning_.jumpFov = j.value("jumpFov", goalPresentationTuning_.jumpFov);
             goalPresentationTuning_.resultFov = j.value("resultFov", goalPresentationTuning_.resultFov);
         }
 
-        // クリア後に見せるリザルトの時刻など、表示側の値を読み込む。
+        // uiがオブジェクトなら、位置と時間などを共通の設定表に従って読み込む。キーがない欄は現在値を保つ。
         if (const auto it = root.find("ui"); it != root.end() && it->is_object()) {
-            const auto& j = *it;
-            goalPresentationTuning_.resultUiCenterX = j.value("centerX", goalPresentationTuning_.resultUiCenterX);
-            goalPresentationTuning_.resultUiCenterY = j.value("centerY", goalPresentationTuning_.resultUiCenterY);
-            goalPresentationTuning_.resultUiScale = j.value("scale", goalPresentationTuning_.resultUiScale);
-            goalPresentationTuning_.resultBackdropAlpha =
-                j.value("backdropAlpha", goalPresentationTuning_.resultBackdropAlpha);
-            goalPresentationTuning_.resultGlowAlpha = j.value("glowAlpha", goalPresentationTuning_.resultGlowAlpha);
-            goalPresentationTuning_.resultLetterStagger =
-                j.value("letterStagger", goalPresentationTuning_.resultLetterStagger);
-            goalPresentationTuning_.resultLetterFallDuration =
-                j.value("letterFallDuration", goalPresentationTuning_.resultLetterFallDuration);
-            goalPresentationTuning_.resultLetterDropHeight =
-                j.value("letterDropHeight", goalPresentationTuning_.resultLetterDropHeight);
-            goalPresentationTuning_.resultLetterBounceHeight =
-                j.value("letterBounceHeight", goalPresentationTuning_.resultLetterBounceHeight);
-            goalPresentationTuning_.resultLetterBounceDamping =
-                j.value("letterBounceDamping", goalPresentationTuning_.resultLetterBounceDamping);
-            goalPresentationTuning_.resultLetterBounceFrequency =
-                j.value("letterBounceFrequency", goalPresentationTuning_.resultLetterBounceFrequency);
+            for (const auto& field : kGoalResultUiFields<GoalPresentationTuning>) {
+                float& value = goalPresentationTuning_.*field.value;
+                value = it->value(field.jsonKey, value);
+            }
         }
 
         goalClearPlayerAnimator_.SetTuning(animation);
@@ -555,46 +936,19 @@ void GamePlayScene::SaveGoalPresentationTuning() const {
                         {"victoryLandTime", a.victoryLandTime},
                         {"readyTime", a.readyTime}};
     // 時間の節目と見た目の補正値を、読み込み時と同じ区分・キーで書き出します。
-    root["player"] = {{"settleDuration", a.settleDuration}, {"jumpHeight", a.jumpHeight},
-                      {"forwardDistance", a.forwardDistance},
-                      {"anticipationDepth", a.anticipationDepth},
-                      {"landingSquash", a.landingSquash},
-                      {"anticipationSquash", a.anticipationSquash},
-                      {"takeoffStretch", a.takeoffStretch},
-                      {"resultStretch", a.resultStretch},
-                      {"resultYawBias", a.resultYawBias}};
+    root["player"] = {{"settleDuration", a.settleDuration}};
     root["crown"] = {{"dropHeight", g.crownDropHeight}, {"seatDepth", g.crownSeatDepth}, {"wearWidthRatio", g.crownWearWidthRatio}};
-    root["camera"] = {{"safeMargin", g.cameraSafeMargin}, {"crownFocusDistance", g.crownFocusDistance},
-                      {"crownFocusSide", g.crownFocusSide},
-                      {"crownFocusHeight", g.crownFocusHeight},
-                      {"landingDistance", g.landingCameraDistance},
-                      {"landingSide", g.landingCameraSide},
-                      {"landingHeight", g.landingCameraHeight},
-                      {"jumpDistance", g.jumpCameraDistance},
-                      {"jumpSide", g.jumpCameraSide},
-                      {"jumpHeight", g.jumpCameraHeight},
-                      {"resultDistance", g.resultCameraDistance},
-                      {"resultSide", g.resultCameraSide},
-                      {"resultHeight", g.resultCameraHeight},
-                      {"resultTargetSide", g.resultTargetSide},
-                      {"crownFocusFov", g.crownFocusFov},
-                      {"landingFov", g.landingFov},
-                      {"jumpFov", g.jumpFov},
+    root["camera"] = {{"safeMargin", g.cameraSafeMargin}, {"resultDistance", g.resultCameraDistance},
+                      {"resultHeight", g.resultCameraHeight}, {"resultTargetSide", g.resultTargetSide},
                       {"resultFov", g.resultFov}};
-    root["ui"] = {{"centerX", g.resultUiCenterX},
-                  {"centerY", g.resultUiCenterY},
-                  {"scale", g.resultUiScale},
-                  {"backdropAlpha", g.resultBackdropAlpha},
-                  {"glowAlpha", g.resultGlowAlpha},
-                  {"letterStagger", g.resultLetterStagger},
-                  {"letterFallDuration", g.resultLetterFallDuration},
-                  {"letterDropHeight", g.resultLetterDropHeight},
-                  {"letterBounceHeight", g.resultLetterBounceHeight},
-                  {"letterBounceDamping", g.resultLetterBounceDamping},
-                  {"letterBounceFrequency", g.resultLetterBounceFrequency}};
+    auto& ui = root["ui"];
+    for (const auto& field : kGoalResultUiFields<GoalPresentationTuning>) {
+        ui[field.jsonKey] = g.*field.value;
+    }
 
     std::ofstream file(kGoalPresentationTuningPath, std::ios::binary);
 
+    // 書き込み先が開けた場合だけ、4スペースで整形したJSONを出力する。
     if (file.is_open()) {
         file << root.dump(4);
     }
@@ -615,38 +969,22 @@ void GamePlayScene::SanitizeGoalPresentationTuning() {
     a.readyTime = std::max(a.readyTime, a.victoryLandTime + 0.55f);
     // イベントの順序を決めた後、姿勢・画角・UIの値を描画可能な範囲へ制限します。
     a.settleDuration = std::clamp(a.settleDuration, 0.05f, 0.65f);
-    a.jumpHeight = std::clamp(a.jumpHeight, 1.0f, 7.0f);
-    a.forwardDistance = std::clamp(a.forwardDistance, 0.0f, 3.0f);
-    a.anticipationDepth = std::clamp(a.anticipationDepth, 0.02f, 0.65f);
-    a.landingSquash = std::clamp(a.landingSquash, 0.0f, 0.40f);
-    a.anticipationSquash = std::clamp(a.anticipationSquash, 0.0f, 0.50f);
-    a.takeoffStretch = std::clamp(a.takeoffStretch, 0.0f, 0.65f);
-    a.resultStretch = std::clamp(a.resultStretch, 0.0f, 0.35f);
     g.crownWearWidthRatio = std::clamp(g.crownWearWidthRatio, 0.35f, 1.10f);
     g.cameraSafeMargin = std::clamp(g.cameraSafeMargin, 0.04f, 0.20f);
     g.crownDropHeight = std::clamp(g.crownDropHeight, 0.30f, 4.0f);
     g.crownSeatDepth = std::clamp(g.crownSeatDepth, 0.0f, 0.45f);
-    g.crownFocusFov = std::clamp(g.crownFocusFov, 0.30f, 1.10f);
-    g.landingFov = std::clamp(g.landingFov, 0.30f, 1.10f);
-    g.jumpFov = std::clamp(g.jumpFov, 0.30f, 1.10f);
     g.resultFov = std::clamp(g.resultFov, 0.30f, 1.10f);
-    g.resultUiCenterX = std::clamp(g.resultUiCenterX, 0.30f, 0.70f);
-    g.resultUiCenterY = std::clamp(g.resultUiCenterY, 0.12f, 0.82f);
-    g.resultUiScale = std::clamp(g.resultUiScale, 0.60f, 1.35f);
-    g.resultBackdropAlpha = std::clamp(g.resultBackdropAlpha, 0.0f, 1.0f);
-    g.resultGlowAlpha = std::clamp(g.resultGlowAlpha, 0.0f, 1.0f);
-    g.resultLetterStagger = std::clamp(g.resultLetterStagger, 0.02f, 0.20f);
-    g.resultLetterFallDuration = std::clamp(g.resultLetterFallDuration, 0.18f, 0.75f);
-    g.resultLetterDropHeight = std::clamp(g.resultLetterDropHeight, 80.0f, 520.0f);
-    g.resultLetterBounceHeight = std::clamp(g.resultLetterBounceHeight, 8.0f, 120.0f);
-    g.resultLetterBounceDamping = std::clamp(g.resultLetterBounceDamping, 1.0f, 8.0f);
-    g.resultLetterBounceFrequency = std::clamp(g.resultLetterBounceFrequency, 4.0f, 18.0f);
+    for (const auto& field : kGoalResultUiFields<GoalPresentationTuning>) {
+        float& value = g.*field.value;
+        value = std::clamp(value, field.minimum, field.maximum);
+    }
     goalClearPlayerAnimator_.SetTuning(a);
 }
 
 void GamePlayScene::DrawGoalPresentationEditor() {
     // Development/Debugの調整UIで変更した値を演出へ反映する。
 #ifdef USE_IMGUI
+    // シーケンスの見出しを開いた場合だけ、編集と再生の欄を描く。
     if (!ImGui::CollapsingHeader(ICON_FA_FILM " ゴール演出シーケンス", ImGuiTreeNodeFlags_DefaultOpen)) {
         return;
     }
@@ -654,27 +992,9 @@ void GamePlayScene::DrawGoalPresentationEditor() {
     GoalClearPlayerAnimator::Tuning& a = goalClearPlayerAnimator_.EditTuning();
     GoalPresentationTuning& g = goalPresentationTuning_;
     bool changed = false;
-    ImGui::TextUnformatted("タイムライン");
-    changed |= ImGui::DragFloat("王冠フォーカス完了", &g.crownFocusEndTime, 0.01f, 0.20f, 1.50f, "%.2f 秒");
-    changed |= ImGui::DragFloat("王冠移動開始", &g.crownMoveStartTime, 0.01f, 0.30f, 2.00f, "%.2f 秒");
-    changed |= ImGui::DragFloat("王冠着地", &a.crownLandTime, 0.01f, 1.00f, 4.00f, "%.2f 秒");
-    changed |= ImGui::DragFloat("溜め開始", &a.anticipationStartTime, 0.01f, 1.10f, 4.50f, "%.2f 秒");
-    changed |= ImGui::DragFloat("大ジャンプ開始", &a.jumpStartTime, 0.01f, 1.20f, 5.00f, "%.2f 秒");
-    changed |= ImGui::DragFloat("ジャンプ頂点", &a.apexTime, 0.01f, 1.60f, 6.50f, "%.2f 秒");
-    changed |= ImGui::DragFloat("リザルト表示", &a.resultUiTime, 0.01f, 1.70f, 7.00f, "%.2f 秒");
-    changed |= ImGui::DragFloat("勝利着地", &a.victoryLandTime, 0.01f, 2.00f, 7.50f, "%.2f 秒");
-    changed |= ImGui::DragFloat("帰還案内開始", &a.readyTime, 0.01f, 2.20f, 8.00f, "%.2f 秒");
-
     ImGui::Separator();
     ImGui::TextUnformatted("プレイヤー");
     changed |= ImGui::DragFloat("取得姿勢を整える時間", &a.settleDuration, 0.01f, 0.05f, 0.65f, "%.2f 秒");
-    changed |= ImGui::DragFloat("ジャンプ高さ", &a.jumpHeight, 0.02f, 1.0f, 7.0f, "%.2f");
-    changed |= ImGui::DragFloat("前進距離", &a.forwardDistance, 0.01f, 0.0f, 3.0f, "%.2f");
-    changed |= ImGui::DragFloat("溜め沈み", &a.anticipationDepth, 0.005f, 0.02f, 0.65f, "%.3f");
-    changed |= ImGui::DragFloat("王冠着地の潰れ", &a.landingSquash, 0.005f, 0.0f, 0.40f, "%.3f");
-    changed |= ImGui::DragFloat("ジャンプ前の潰れ", &a.anticipationSquash, 0.005f, 0.0f, 0.50f, "%.3f");
-    changed |= ImGui::DragFloat("離陸の伸び", &a.takeoffStretch, 0.005f, 0.0f, 0.65f, "%.3f");
-    changed |= ImGui::DragFloat("決め姿勢の伸び", &a.resultStretch, 0.005f, 0.0f, 0.35f, "%.3f");
 
     ImGui::Separator();
     ImGui::TextUnformatted("王冠");
@@ -683,90 +1003,77 @@ void GamePlayScene::DrawGoalPresentationEditor() {
     changed |= ImGui::DragFloat("体幅に対する王冠の幅", &g.crownWearWidthRatio, 0.01f, 0.35f, 1.10f, "%.2f");
 
     ImGui::Separator();
-    ImGui::TextUnformatted("カメラ");
+    ImGui::TextUnformatted("リザルトの構図補正");
     changed |= ImGui::DragFloat("画面端の余白", &g.cameraSafeMargin, 0.005f, 0.04f, 0.20f, "%.3f");
-    changed |= ImGui::DragFloat3("王冠ショット 距離/横/高さ", &g.crownFocusDistance, 0.01f, -10.0f, 10.0f, "%.2f");
-    changed |= ImGui::DragFloat3("着地ショット 距離/横/高さ", &g.landingCameraDistance, 0.01f, -12.0f, 12.0f, "%.2f");
-    changed |= ImGui::DragFloat3("ジャンプショット 距離/横/高さ", &g.jumpCameraDistance, 0.01f, -14.0f, 14.0f, "%.2f");
-    changed |= ImGui::DragFloat3("リザルト 距離/横/高さ", &g.resultCameraDistance, 0.01f, -16.0f, 16.0f, "%.2f");
-    changed |= ImGui::DragFloat("リザルト注視点の横ずらし", &g.resultTargetSide, 0.01f, -4.0f, 4.0f, "%.2f");
-    changed |= ImGui::DragFloat4("FOV 王冠/着地/ジャンプ/結果", &g.crownFocusFov, 0.005f, 0.30f, 1.10f, "%.3f");
+    changed |= ImGui::DragFloat("注視点の横ずらし", &g.resultTargetSide, 0.01f, -4.0f, 4.0f, "%.2f");
+    changed |= ImGui::DragFloat("撃破直後のリザルト距離", &g.resultCameraDistance, 0.01f, 1.0f, 16.0f, "%.2f");
+    changed |= ImGui::DragFloat("撃破直後のリザルト高さ", &g.resultCameraHeight, 0.01f, -4.0f, 12.0f, "%.2f");
+    changed |= ImGui::DragFloat("撃破直後のリザルトFOV", &g.resultFov, 0.005f, 0.30f, 1.10f, "%.3f");
 
     ImGui::Separator();
     ImGui::TextUnformatted("クリアUI");
-    changed |= ImGui::DragFloat("表示位置 X", &g.resultUiCenterX, 0.005f, 0.30f, 0.70f, "%.3f");
-    changed |= ImGui::DragFloat("表示位置 Y", &g.resultUiCenterY, 0.005f, 0.12f, 0.82f, "%.3f");
-    changed |= ImGui::DragFloat("UIスケール", &g.resultUiScale, 0.005f, 0.60f, 1.35f, "%.3f");
-    changed |= ImGui::DragFloat("文字不透明度", &g.resultBackdropAlpha, 0.005f, 0.0f, 1.0f, "%.3f");
-    changed |= ImGui::DragFloat("着地しぶき", &g.resultGlowAlpha, 0.005f, 0.0f, 1.0f, "%.3f");
-    changed |= ImGui::DragFloat("文字間ディレイ", &g.resultLetterStagger, 0.001f, 0.02f, 0.20f, "%.3f 秒");
-    changed |= ImGui::DragFloat("落下時間", &g.resultLetterFallDuration, 0.005f, 0.18f, 0.75f, "%.3f 秒");
-    changed |= ImGui::DragFloat("落下距離", &g.resultLetterDropHeight, 1.0f, 80.0f, 520.0f, "%.0f px");
-    changed |= ImGui::DragFloat("跳ね返り高さ", &g.resultLetterBounceHeight, 0.5f, 8.0f, 120.0f, "%.1f px");
-    changed |= ImGui::DragFloat("跳ね減衰", &g.resultLetterBounceDamping, 0.05f, 1.0f, 8.0f, "%.2f");
-    changed |= ImGui::DragFloat("跳ね速度", &g.resultLetterBounceFrequency, 0.05f, 4.0f, 18.0f, "%.2f");
+    for (const auto& field : kGoalResultUiFields<GoalPresentationTuning>) {
+        changed |= ImGui::DragFloat(field.label, &(g.*field.value), field.dragSpeed, field.minimum, field.maximum, field.format);
+    }
 
-    // 編集のたびに時刻順を補正し、現在の調整値をプレビューが使用するタイムラインへ渡します。
+    // 見た目の値を有効範囲へ戻し、演出時計にはDirectorで保存した合図を使う。
     if (changed) {
         SanitizeGoalPresentationTuning();
-        SyncGoalCinematicTimelineFromTuning();
+        ApplyGoalCinematicTimingFromSequence();
     }
 
+    // GhostDirectorで保存した最新データを、実ステージでの確認に読み込む。
+    ImGui::BeginDisabled(isGoal_ && !goalEditorPreviewMode_);
     if (ImGui::Button(ICON_FA_PLAY " 実ステージでプレビュー")) {
-        StartGoalPresentationPreview();
+        CinematicSequence edited;
+        // 保存の途中などで読めなければ、動作中のシーケンスを維持する。
+        if (edited.Load(kGoalCinematicTimelinePath)) {
+            StopGoalPresentationPreview();
+            goalCinematicSequence_ = std::move(edited);
+            ApplyGoalCinematicTimingFromSequence();
+            goalCinematicPlayer_.SetSequence(&goalCinematicSequence_);
+            goalCinematicTimelineLoaded_ = true;
+            StartGoalPresentationPreview();
+        } else {
+            DebugConsole::GetInstance()->AddLog(std::string("Goal Timeline reload failed: ") + kGoalCinematicTimelinePath);
+        }
     }
+    ImGui::EndDisabled();
 
     ImGui::SameLine();
 
+    // 停止を押したらプレビューだけを閉じ、利用したシーン状態の復元へ進む。
     if (ImGui::Button(ICON_FA_STOP " プレビュー停止")) {
         StopGoalPresentationPreview();
     }
 
-    // 設定とタイムラインを同じ調整値で保存し、次回ロードしても時刻が食い違わないようにします。
+    // 見た目の設定は従来のJSONへ保存する。タイムラインはGhostDirectorが保存する。
     if (ImGui::Button(ICON_FA_SAVE " JSON保存")) {
         SanitizeGoalPresentationTuning();
-        SyncGoalCinematicTimelineFromTuning();
+        ApplyGoalCinematicTimingFromSequence();
         SaveGoalPresentationTuning();
-        goalCinematicSequence_.Save(kGoalCinematicTimelinePath);
     }
 
     ImGui::SameLine();
 
+    // 設定の再読込を押したら調整用JSONを読み、現在のシーケンスにも対応する時刻を反映する。
     if (ImGui::Button(ICON_FA_FOLDER_OPEN " JSON再読込")) {
         LoadGoalPresentationTuning();
-        SyncGoalCinematicTimelineFromTuning();
+        ApplyGoalCinematicTimingFromSequence();
     }
 
-    ImGui::SameLine();
-    // ゴール演出の最中は参照中のタイムラインを読み替えないようにします。
-    ImGui::BeginDisabled(isGoal_);
 
-    if (ImGui::Button(ICON_FA_FILM " Timeline再読込")) {
-        goalCinematicTimelineLoaded_ = goalCinematicSequence_.Load(kGoalCinematicTimelinePath);
-
-        if (goalCinematicTimelineLoaded_) {
-            ApplyGoalCinematicTimingFromSequence();
-            goalCinematicPlayer_.SetSequence(&goalCinematicSequence_);
-        }
-    }
-
-    ImGui::EndDisabled();
-    ImGui::TextDisabled("保存先: %s", kGoalPresentationTuningPath);
-    ImGui::TextDisabled("Timeline: %s", kGoalCinematicTimelinePath);
-    ImGui::TextColored(goalCinematicTimelineLoaded_ ? ImVec4(0.45f, 0.92f, 0.55f, 1.0f)
-                                                    : ImVec4(0.95f, 0.45f, 0.35f, 1.0f),
-                       goalCinematicTimelineLoaded_ ? "Timeline Runtime: Ready" : "Timeline Runtime: Load Failed");
 #endif
 }
 
 engine::Object3D* GamePlayScene::FindGoalCrownObject() const {
-    // シーン内のゴールイベントを持つ王冠を、プレビュー対象として探す。
+    // ObjectManagerがあれば、最初のゴールイベント付きObjectの参照を返す。見つからなければnullptr。
     if (!objectManager_) {
         return nullptr;
     }
 
     for (const auto& object : objectManager_->GetObjects()) {
-        if (object && object->GetEventType() == EventType::Goal) {
+        if (object && object->GetEventType() == EventType::kGoal) {
             return object.get();
         }
     }
@@ -782,23 +1089,26 @@ void GamePlayScene::StartGoalPresentationPreview() {
             return;
         }
 
+        // 既に編集中のプレビューなら、一度終了して演出開始前の状態へ戻す。
         StopGoalPresentationPreview();
     }
 
     engine::Object3D* crown = FindGoalCrownObject();
 
+    // 王冠かPlayerを取得できなければ、開始せずログに必要な対象を示す。
     if (!crown || !player_) {
         DebugConsole::GetInstance()->AddLog("Goal presentation preview requires player and crown.");
         return;
     }
 
+    // プレビューとして開始し、リザルトを表示できる状態にする。クリア保存の実行は本編側でプレビューを除外する。
     goalEditorPreviewMode_ = true;
     StartGoalPresentation(crown);
     goalSavePerformed_ = true;
 }
 
 void GamePlayScene::StopGoalPresentationPreview() {
-    // 編集プレビューが使ったカメラを戻してから、ゴール状態を解除する。
+    // プレビューフラグが立っている場合だけゴール状態を解除し、SetIsGoal(false)で操作・カメラ・姿勢を復元する。
     if (!goalEditorPreviewMode_) {
         return;
     }

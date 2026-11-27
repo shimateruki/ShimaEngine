@@ -12,14 +12,14 @@
 
 /// エディターが拡張子から識別する資産の種類。
 enum class EditorAssetType {
-    Unknown,
-    Model,
-    Texture,
-    Json,
-    Audio,
-    Shader,
-    Font,
-    Binary,
+    kUnknown,
+    kModel,
+    kTexture,
+    kJson,
+    kAudio,
+    kShader,
+    kFont,
+    kBinary,
 };
 
 /// ソースファイルと .meta を合わせた一件分の索引情報。
@@ -28,7 +28,7 @@ struct EditorAssetRecord {
     std::string guid;
     std::string sourcePath;
     std::string metaPath;
-    EditorAssetType type = EditorAssetType::Unknown;
+    EditorAssetType type = EditorAssetType::kUnknown;
     std::string importer;
     std::uintmax_t fileSize = 0;
     std::filesystem::file_time_type lastWriteTime{};
@@ -36,14 +36,14 @@ struct EditorAssetRecord {
 };
 
 enum class AssetDatabaseIssueSeverity {
-    Warning,
-    Error,
+    kWarning,
+    kError,
 };
 
 /// 走査中に見つけた問題。path は表示と原因特定に使用します。
 // 関連：AssetDatabase（この型を使う機能の本体）
 struct AssetDatabaseIssue {
-    AssetDatabaseIssueSeverity severity = AssetDatabaseIssueSeverity::Warning;
+    AssetDatabaseIssueSeverity severity = AssetDatabaseIssueSeverity::kWarning;
     std::string path;
     std::string message;
 };
@@ -63,11 +63,11 @@ struct AssetDatabaseRefreshResult {
 
 /// DDS キャッシュを作る外部プロセスの状態。
 enum class DdsCacheBuildState {
-    Idle,
-    Queued,
-    Running,
-    Succeeded,
-    Failed,
+    kIdle,
+    kQueued,
+    kRunning,
+    kSucceeded,
+    kFailed,
 };
 
 // 担当：Resourcesと.metaを索引化し、GUID・パス・欠損情報を管理する。
@@ -316,7 +316,7 @@ private:
     bool filesystemChangePending_ = false;
     std::chrono::steady_clock::time_point filesystemChangeReadyAt_{};
     AssetDatabaseRefreshResult lastRefreshResult_;
-    DdsCacheBuildState ddsCacheBuildState_ = DdsCacheBuildState::Idle;
+    DdsCacheBuildState ddsCacheBuildState_ = DdsCacheBuildState::kIdle;
     std::string ddsCacheBuildMessage_;
     std::uint32_t lastDdsCacheBuildExitCode_ = 0;
     void* ddsCacheProcessHandle_ = nullptr;

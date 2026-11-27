@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "DirectXCommon.h"
 #include "engine/utility/math/Math.h"
 #include <wrl.h>
@@ -142,7 +143,7 @@ public:
         engine::Matrix4x4 projection;
 
         float softParticleFade;
-        int blendMode;
+        std::int32_t blendMode;
         engine::Vector2 screenSize;
 
         uint32_t spriteSheetColumns;

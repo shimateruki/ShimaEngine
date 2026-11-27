@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "CopyAbilitySupport.h"
 #include "CrownLanceSettings.h"
 #include "CrownAbilityEffects.h"
@@ -31,7 +32,8 @@ class CrownGateWarp {
         const auto bounds = player.GetAabb();
         Vec center = (bounds.min + bounds.max) * 0.5f;
         Vec half = (bounds.max - bounds.min) * 0.5f;
-        if (player.GetColliderType() == ColliderType::Sphere) {
+        // 球コライダーなら、各軸の半寸法をコライダーの半径に揃える。
+        if (player.GetColliderType() == engine::ColliderType::kSphere) {
             const float radius = player.GetCollider()->GetRadius();
             half = {radius, radius, radius};
         }
@@ -44,22 +46,25 @@ class CrownGateWarp {
     // 基本距離で中心を越えても出口が偽王の体内なら、反対側の体表までを候補にします。
     // 実際に採用する距離は、この後で全区間の壁と足場を検査してから決めます。
     static float BeyondCrownArmor(Player& player, const Body& body, Vec dir, float distance) {
-        PhysicsQueryFilter enemies;
-        enemies.mask = CollisionCategories::Get("enemy");
+        engine::PhysicsQueryFilter enemies;
+        enemies.mask = engine::collisionCategories::Get("enemy");
         enemies.ignoredObject = &player;
         const Vec end = body.center + dir * distance;
-        for (const auto& hit : CollisionManager::GetInstance()->OverlapAabb({end-body.half,end+body.half}, enemies)) {
-            auto* king = dynamic_cast<EnemyFalseKingSlime*>(CopyAbilityDetail::FindEnemyRoot(hit.object));
+        for (const auto& hit : engine::CollisionManager::GetInstance()->OverlapAabb({end-body.half,end+body.half}, enemies)) {
+            auto* king = dynamic_cast<EnemyFalseKingSlime*>(copyAbilityDetail::FindEnemyRoot(hit.object));
+            // 調べるのは、第三形態に入り王冠演出中ではない偽王だけ。
             if (!king || king->GetBattlePhase() != 3 || king->IsCrownInterlude()) continue;
             const auto bounds = king->GetAabb();
             const auto center = (bounds.max + bounds.min) * 0.5f;
             const float along = engine::Math::Dot(center - body.center, dir);
+            // 偽王の中心が始点より先で、元の出口以下の距離にある場合だけ、反対側への抜けを探す。
             if (along <= 0.0f || along > distance) continue;
             const auto extent = (bounds.max - bounds.min) * 0.5f + body.half;
             // 軸平行境界のうち進行方向に最初に抜ける面まで求めます。
             float extra = distance;
             for (auto [offset, half, speed] : {std::array{end.x-center.x,extent.x,dir.x},
                                               std::array{end.z-center.z,extent.z,dir.z}}) {
+                // その軸に十分な速度成分があるときだけ、除算して境界までの距離を候補にする。
                 if (std::abs(speed) > 0.0001f)
                     extra = (std::min)(extra, (half - std::copysign(1.0f,speed) * offset) / std::abs(speed));
             }
@@ -71,10 +76,10 @@ class CrownGateWarp {
     // 地形は全経路、敵は出口だけを塞ぐ。地上からの回避では足場のある出口を選びます。
     // 候補経路の遮蔽物を調べ、身体を通せる距離へ短縮する。
     static float SafeDistance(Player& player, const Body& body, Vec dir, float wanted, bool needsFloor) {
-        auto* world = CollisionManager::GetInstance();
-        PhysicsQueryFilter terrain;
+        auto* world = engine::CollisionManager::GetInstance();
+        engine::PhysicsQueryFilter terrain;
         terrain.ignoredObject = &player;
-        terrain.mask = CollisionCategories::Get("ground");
+        terrain.mask = engine::collisionCategories::Get("ground");
         // 各区間全体を覆う箱で薄い壁も拾い、最後に通れた位置を出口候補にします。
         // 開けた場所は一回の問い合わせで完了します。遮蔽物のある区間だけ細分化します。
         auto blocked = [&](float from, float to) {
@@ -83,27 +88,33 @@ class CrownGateWarp {
             const Vec half = body.half + Vec{std::abs(dir.x) * span,0,std::abs(dir.z) * span};
             return !world->OverlapAabb({mid - half, mid + half}, terrain).empty();
         };
+        // 要求距離が最小回避距離より短ければ、出口を探さず失敗を返す。
         if (wanted < kMinTravel) return 0.0f;
         float distance = wanted;
+        // 全区間の箱に地形が重なった場合だけ、始点から0.20ずつ進めて通れる範囲を探す。
         if (blocked(0.0f, wanted)) {
             distance = 0.0f;
             while (distance < wanted) {
                 const float next = (std::min)(wanted, distance + 0.20f);
+                // 次の区間で地形が重なったら、それまで通れた距離を上限にする。
                 if (blocked(distance, next)) break;
                 distance = next;
             }
         }
         // 出口の重なりは敵も含めて確認する。接地を保つ回避では、出口の真下に立てる床も必要。
-        PhysicsQueryFilter solid = terrain;
-        solid.mask |= CollisionCategories::Get("enemy");
+        engine::PhysicsQueryFilter solid = terrain;
+        solid.mask |= engine::collisionCategories::Get("enemy");
         for (; distance >= kMinTravel; distance -= 0.20f) {
             const auto delta = dir * distance;
             const Vec mid = body.center + delta;
+            // 出口の身体全体が地形か敵に重なる候補は、距離を短くして再試行する。
             if (!world->OverlapAabb({mid - body.half, mid + body.half}, solid).empty())
                 continue;
+            // 接地を保つ必要がある場合は、出口の足元から下向きに床を探す。
             if (needsFloor) {
                 const auto floor = world->SphereCast(mid + Vec{0,body.radius - body.half.y + 0.08f,0},
                     body.radius, {0,-1,0}, 0.55f, terrain);
+                // 床が見つからないか傾きが大きい候補は、接地できないので採用しない。
                 if (!floor.isHit || floor.normal.y < 0.65f)
                     continue;
             }
@@ -114,34 +125,40 @@ class CrownGateWarp {
 
     // 接触する偽王の装甲を回避通過で開くための通知を行う。
     static void CrossArmor(Player& player, const Body& body, Vec dir, float distance) {
-        PhysicsQueryFilter enemies;
+        engine::PhysicsQueryFilter enemies;
         enemies.ignoredObject = &player;
-        enemies.mask = CollisionCategories::Get("enemy");
+        enemies.mask = engine::collisionCategories::Get("enemy");
         std::unordered_set<EnemyFalseKingSlime*> opened;
-        for (const auto& hit : CollisionManager::GetInstance()->OverlapCapsule(
+        for (const auto& hit : engine::CollisionManager::GetInstance()->OverlapCapsule(
                 body.center, body.center + dir * distance, body.radius, enemies)) {
-            auto* king = dynamic_cast<EnemyFalseKingSlime*>(CopyAbilityDetail::FindEnemyRoot(hit.object));
+            auto* king = dynamic_cast<EnemyFalseKingSlime*>(copyAbilityDetail::FindEnemyRoot(hit.object));
+            // 偽王以外と、別のコライダーですでに調べた同じ偽王を飛ばす。
             if (!king || !opened.insert(king).second)
                 continue;
             const auto bounds = king->GetAabb();
             const float along = engine::Math::Dot((bounds.min + bounds.max) * 0.5f - body.center, dir);
+            // 偽王の中心が始点と出口の間にあるときだけ、通過として装甲へ通知する。
             if (along > 0.0f && along < distance)
                 king->OpenCrownArmor();
         }
     }
 
+    // 0〜1に収めた進行率の両端を滑らかにし、ゲートの広がりと透明度に使う。
     static float Ease(float t) {
         t = std::clamp(t, 0.0f, 1.0f);
         return t * t * (3.0f - 2.0f * t);
     }
+    // 入口と出口の法線は進行方向に対して前後を反転し、両方とも下へ傾ける。
     Vec PortalNormal(bool exit) const {
         return engine::Math::Normalize(direction_ * (exit ? -1.0f : 1.0f) + Vec{0,-0.58f,0});
     }
+    // ゲートの開き具合と不透明度を、描画サイズと回避用材質に反映する。
     void PosePortal(engine::Object3D& gate, Vec center, float open, float opacity, float deltaTime) {
         gate.SetIsVisible(opacity > 0.005f);
         gate.SetTranslate(center);
         const float extent = gateExtent_;
         gate.SetScale({extent * (std::max)(0.01f, open), extent * (0.83f + 0.17f * open), extent});
+        // 作成済みの材質パラメーターがあれば、ゲート用の描画方式と進行度を書き込む。
         if (auto* material = gate.GetMeshRenderer()->GetWaterParamData()) {
             material->effectType = -1.0f; // 回避専用。中央を透かし、縁と渦に光を残します。
             material->effectIntensity = 0.16f + 1.65f * open;
@@ -177,14 +194,18 @@ class CrownGateWarp {
     }
 
 public:
+    // 二枚のうち入口を保持している間が、回避の実行区間。
     bool Active() const { return entrance_ != nullptr; }
+    // 回避が終わり、再使用までの残り秒数がゼロになった時点で開始できる。
     bool Ready() const { return !Active() && cooldown_ <= 0.0f; }
     // 安全に移動できる経路を確保できた場合だけ操作を停止し、回避無敵を開始する。
     template<class MakeGate>
     bool Begin(Player& player, const CrownLanceSettings& settings, MakeGate makeGate) {
+        // 回避中や再使用待ちは受け付けない。隔離プレビュー以外では、操作を許可されたときだけ始める。
         if (!Ready() || (!player.IsControlActive() && !player.IsEditorInternal()))
             return false;
         direction_ = player.GetMoveInputDirection();
+        // 移動入力がほぼゼロなら、プレイヤーが向いている方向を回避方向にする。
         if (engine::Math::Length(direction_) < 0.001f)
             direction_ = player.GetForwardDirection();
         const Body body = Measure(player);
@@ -193,11 +214,13 @@ public:
         needsFloor_ = player.IsGrounded() && !player.IsEditorInternal();
         const float wanted = BeyondCrownArmor(player, body, direction_, settings.warpDistance);
         const float distance = SafeDistance(player, body, direction_, wanted, needsFloor_);
+        // 地形や出口を検査した結果、最小距離を確保できなければ操作状態に触れず戻る。
         if (distance < kMinTravel)
             return false;
         // 入口と出口の両方を作れた段階で回避を確定し、片方しかない場合は操作を止めない。
         auto entry = makeGate(PortalNormal(false));
         auto end = makeGate(PortalNormal(true));
+        // 両方そろわなければ、作成済みの方も関数終了時に破棄して回避を見送る。
         if (!entry || !end)
             return false;
         entrance_ = std::move(entry);
@@ -220,18 +243,19 @@ public:
         player.SetMoveYaw(std::atan2(direction_.x, direction_.z));
         player.SetSlimeAnimationDirection(direction_);
         player.TriggerSlimeImpulse({0.82f,0.84f,1.40f},0.12f);
-        player.StartEvasionInvincibility(settings.warpInvincibility, Player::EvasionFeedback::PortalEdge);
+        player.StartEvasionInvincibility(settings.warpInvincibility, Player::EvasionFeedback::kPortalEdge);
         Pose(player,0.0f);
         const Vec cue = start_ + direction_ * entranceOffset_ + Vec{0,body.center.y-start_.y,0};
         CrownAbilityEffects::Emit("player/copy/crown/player_crown_portal_dust", cue, direction_, gateExtent_);
         effects_.Ring(cue, PortalNormal(false), gateExtent_ * 1.08f);
         return true;
     }
-    // dtは秒。通過時に出口へ切り替え、終了・死亡・演出ロックでは一時状態を戻す。
+    // 経過秒に応じて出口へ切り替える。死亡や演出ロック時は呼出元の Cancel() から End() が呼ばれる。
     void Update(Player& player, float deltaTime) {
         // 回避が終わった後も残光と再使用待ちは進め、移動本体は実行中にだけ更新する。
         effects_.Update(deltaTime);
         cooldown_ = (std::max)(0.0f, cooldown_ - deltaTime);
+        // 回避が実行中でなければ、残光と再使用待ちを進めるだけで終える。
         if (!Active())
             return;
         age_ += deltaTime;
@@ -269,13 +293,16 @@ public:
     }
     // 回避の残光を解放する。Playerの操作や通過位置はここでは変えない。
     void ClearEffects() { effects_.Clear(); }
-    void DrawEffects(ID3D12Resource* point, ID3D12Resource* spot, engine::Camera* camera, int index) {
+    // 入口・出口を描く Draw() とは別に、発生済みのリングなどを指定カメラへ描く。
+    void DrawEffects(ID3D12Resource* point, ID3D12Resource* spot, engine::Camera* camera, std::int32_t index) {
         effects_.Draw(point,spot,camera,index);
     }
-    void Draw(engine::Camera* camera, uint32_t depth, uint32_t grab, int index) {
+    void Draw(engine::Camera* camera, uint32_t depth, uint32_t grab, std::int32_t index) {
+        // 実行中だけ入口と出口のゲートを描く。回避後に残る演出は DrawEffects() が担当する。
         if (!Active()) return;
         // 見えているゲートだけ、深度と画面取得テクスチャを使う描画へ渡す。
         for (auto* gate : {entrance_.get(), exit_.get()}) {
+            // 開閉演出で現在非表示になっているゲートは、特殊材質パスに渡さない。
             if (!gate->GetIsVisible()) continue;
             gate->UpdateWorldMatrix(true);
             gate->DrawSpecialMaterialForCamera(camera,depth,grab,index);
@@ -283,9 +310,11 @@ public:
     }
     // 断面表示・能力モーション・ゲートを片付け、許される場合だけ操作を復元する。
     void End(Player& player) {
+        // ゲートを保持していなければ、回避の後片付けは済んでいる。
         if (!Active()) return;
         player.ClearPortalClip();
         player.StopSlimeAbilityMotion(0.03f);
+        // 開始前に操作が有効で、終了時も生存し演出に拘束されていなければ、操作を戻す。
         if (restoreControl_ && !player.IsDead() && !player.IsCinematicLocked())
             player.SetIsControlActive(true);
         entrance_.reset();

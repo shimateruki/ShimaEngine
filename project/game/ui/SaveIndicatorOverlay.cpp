@@ -59,7 +59,7 @@ void SaveIndicatorOverlay::Play(float holdDuration) {
 
 // 保存通知は表示保持とフェードを分け、連続保存では表示時間を更新します。
 void SaveIndicatorOverlay::Update(float deltaTime) {
-    // 登場・表示維持・退場の順に透明度を変え、保存完了の通知を急に消さないようにします。
+    // 通知が無効なときは、時計とスプライトの更新を省く。
     if (!IsActive()) {
         return;
     }
@@ -72,8 +72,10 @@ void SaveIndicatorOverlay::Update(float deltaTime) {
     if (!debugHold_) {
         const float totalDuration = kFadeInDuration + holdDuration_ + kFadeOutDuration;
 
+        // 出現区間内は、経過時間に比例して透明から表示状態へ近づける。
         if (timer_ < kFadeInDuration) {
             alpha = timer_ / kFadeInDuration;
+        // 保持区間を過ぎたときだけ透明へ戻し、その手前の保持区間は初期値の不透明を使う。
         } else if (timer_ > kFadeInDuration + holdDuration_) {
             alpha = 1.0f - (timer_ - kFadeInDuration - holdDuration_) / kFadeOutDuration;
         }
@@ -90,6 +92,7 @@ void SaveIndicatorOverlay::Update(float deltaTime) {
     ApplyVisibilityAnimation(std::clamp(alpha, 0.0f, 1.0f));
 
     for (auto& sprite : sprites_) {
+        // レイアウトから作成済みのスプライトにだけ、変更した姿勢の更新を依頼する。
         if (sprite) {
             sprite->Update();
         }
@@ -103,6 +106,7 @@ void SaveIndicatorOverlay::Draw() {
     }
 
     for (auto& sprite : sprites_) {
+        // 実体があるスプライトだけに描画を依頼する。
         if (sprite) {
             sprite->Draw();
         }
@@ -114,6 +118,7 @@ void SaveIndicatorOverlay::CollectReplaySprites(std::vector<engine::Sprite*>& re
     replaySprites.reserve(replaySprites.size() + sprites_.size());
 
     for (const auto& sprite : sprites_) {
+        // 取り込める実体だけをリプレイ用一覧に追加する。
         if (sprite) {
             replaySprites.push_back(sprite.get());
         }
@@ -147,12 +152,15 @@ void SaveIndicatorOverlay::DrawImGui() {
 
     bool hold = debugHold_;
 
+    // 固定チェックの値が変更されたときだけ、デバッグ用の表示状態を切り替える。
     if (ImGui::Checkbox("セーブ中表示を固定", &hold)) {
         debugHold_ = hold;
 
+        // 固定を有効にしたら、時計を0へ戻し、保存を実行せず表示する。
         if (debugHold_) {
             timer_ = 0.0f;
             SetAllVisible(true);
+        // 固定解除時に通常の通知が動いていなければ、表示も閉じる。
         } else if (!isActive_) {
             SetAllVisible(false);
         }
@@ -171,6 +179,7 @@ void SaveIndicatorOverlay::LoadLayout(const std::string& layoutPath) {
 
     std::ifstream file(layoutPath);
 
+    // レイアウトを開けなければ、スプライトを作らずに戻る。
     if (!file.is_open()) {
         return;
     }
@@ -178,23 +187,26 @@ void SaveIndicatorOverlay::LoadLayout(const std::string& layoutPath) {
     json root;
     try {
         file >> root;
+    // JSONを解析できなければ、読み切れていないレイアウトを使用しない。
     } catch (...) {
         return;
     }
 
+    // スプライトの配列を取得できない場合は、生成対象が無いため終了する。
     if (!root.contains("sprites") || !root["sprites"].is_array()) {
         return;
     }
 
     // 有効な要素だけを同じ解像度換算で生成し、後の名前結び付けに備えます。
-    const auto layoutScale = SpriteLayoutScaler::Make(root);
+    const auto layoutScale = spriteLayoutScaler::Make(root);
 
     for (const auto& spriteData : root["sprites"]) {
+        // 配列内のオブジェクトだけを個別のスプライト定義として扱う。
         if (!spriteData.is_object()) {
             continue;
         }
 
-        auto sprite = SpriteLayoutFactory::Create(spriteCommon_, spriteData, layoutScale, "save_indicator_sprite");
+        auto sprite = spriteLayoutFactory::Create(spriteCommon_, spriteData, layoutScale, "save_indicator_sprite");
         sprite->Update();
         sprites_.push_back(std::move(sprite));
     }
@@ -214,6 +226,7 @@ void SaveIndicatorOverlay::BindSprites() {
 engine::Sprite* SaveIndicatorOverlay::FindSprite(const std::string& name) const {
     // 未定義の要素はnullptrを返し、部分的なレイアウトでも描けるようにする。
     for (const auto& sprite : sprites_) {
+        // 実体があり名前が一致した最初のスプライトを返す。
         if (sprite && sprite->GetName() == name) {
             return sprite.get();
         }
@@ -225,6 +238,7 @@ engine::Sprite* SaveIndicatorOverlay::FindSprite(const std::string& name) const 
 void SaveIndicatorOverlay::SetAllVisible(bool visible) {
     // 個々の演出位置を変えず、通知全体の表示状態だけを切り替える。
     for (auto& sprite : sprites_) {
+        // 生成済みのスプライトだけに共通の表示状態を適用する。
         if (sprite) {
             sprite->SetVisible(visible);
         }

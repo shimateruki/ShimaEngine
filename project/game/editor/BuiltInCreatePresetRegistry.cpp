@@ -1,5 +1,6 @@
 ﻿#include "BuiltInCreatePresetRegistry.h"
 
+#include <cstdint>
 #include "EditorObjectFactoryRegistry.h"
 #include "Object3D.h"
 #include "Object3DCommon.h"
@@ -21,21 +22,26 @@ namespace {
 void PreservePresetCatalogFields(const json& current, json& replacement) {
     // プリセット一覧の表示順や分類を再生成で失わないよう、従来の preset 接頭辞を持つ項目を移します。
     for (auto it = current.begin(); it != current.end(); ++it) {
+        // キーの先頭が preset の場合だけ、旧設定のカタログ項目を優先してコピーする。
         if (it.key().rfind("preset", 0) == 0)
             replacement[it.key()] = it.value();
     }
 }
 
+// Factory で作った敵を組み込みテンプレートとして登録する。登録内容が変化したら true。
 bool RegisterOrRefreshEnemyPreset(const std::string& presetName, std::unique_ptr<engine::Object3D> object, const std::string& displayName) {
+    // 敵を生成できなければ、既存データを維持して登録を止める。
     if (!object) {
         return false;
     }
 
     PresetManager* manager = PresetManager::GetInstance();
 
+    // 同じ名前が登録済みなら、まず自動更新してよい組み込み定義か調べる。
     if (manager->HasPreset(presetName)) {
         const json& current = manager->GetPreset(presetName);
 
+        // 組み込みの印がないデータはユーザー側の内容として保護する。
         if (!current.value("builtinCreateTemplate", false)) {
             return false;
         }
@@ -53,6 +59,7 @@ bool RegisterOrRefreshEnemyPreset(const std::string& presetName, std::unique_ptr
     // 再生成しても表示用メタデータは保ち、内容が同じなら不要な保存を避けます。
     if (manager->HasPreset(presetName))
         PreservePresetCatalogFields(manager->GetPreset(presetName), data);
+    // 表示用の設定も含めて既存値と一致したら、保存対象にはしない。
     if (manager->HasPreset(presetName) && manager->GetPreset(presetName) == data) {
         return false;
     }
@@ -79,19 +86,23 @@ bool RegisterPresetOnce(const std::string& presetName, std::unique_ptr<engine::O
     return true;
 }
 
+// 用意済みの JSON を組み込みライブラリーへ登録する。ユーザー定義や同一内容の場合は false。
 bool RegisterOrRefreshPresetData(const std::string& presetName, json data) {
     // 内蔵テンプレートだけ更新し、カタログ側の表示情報は維持する。
     PresetManager* manager = PresetManager::GetInstance();
 
+    // 同名のデータがある場合は由来を確認し、更新前のカタログ設定を引き継ぐ。
     if (manager->HasPreset(presetName)) {
         const json& current = manager->GetPreset(presetName);
 
+        // 元が組み込みテンプレートでなければ、置き換えを中止する。
         if (!current.value("builtinCreateTemplate", false)) {
             return false;
         }
 
         PreservePresetCatalogFields(current, data);
 
+        // 引き継ぎ後の値まで一致すれば、再保存は不要。
         if (current == data) {
             return false;
         }
@@ -102,8 +113,8 @@ bool RegisterOrRefreshPresetData(const std::string& presetName, json data) {
 }
 
 enum class Stage1PresetVariant {
-    Direct,
-    FixedPlatform,
+    kDirect,
+    kFixedPlatform,
 };
 
 // ステージ配置から生成ライブラリーへ取り込む定義。経路・対象 ID を引き継ぐかも個別に指定する。
@@ -113,13 +124,14 @@ struct Stage1PresetDefinition {
     const char* displayName;
     const char* section;
     const char* description;
-    int sectionOrder;
-    int presetOrder;
+    std::int32_t sectionOrder;
+    std::int32_t presetOrder;
     bool preserveRecorder = false;
     bool preserveTargetId = false;
-    Stage1PresetVariant variant = Stage1PresetVariant::Direct;
+    Stage1PresetVariant variant = Stage1PresetVariant::kDirect;
 };
 
+// ステージ1の配置ファイルをオブジェクト名で索引化する。利用できない場合は空を返す。
 std::unordered_map<std::string, json> LoadStage1PresetSources() {
     std::unordered_map<std::string, json> sources;
     std::ifstream file("Resources/json/3Dobject/stage1_object.json", std::ios::binary);
@@ -133,18 +145,21 @@ std::unordered_map<std::string, json> LoadStage1PresetSources() {
         json root;
         file >> root;
 
+        // objects 配列を持たない配置形式は、取り込み元として扱わない。
         if (!root.contains("objects") || !root["objects"].is_array()) {
             return sources;
         }
 
         // 配置名をキーに、後続の Preset 定義が参照する元オブジェクトを探せるようにします。
         for (const json& object : root["objects"]) {
+            // オブジェクト以外の要素は名前を読めないため飛ばす。
             if (!object.is_object()) {
                 continue;
             }
 
             const std::string name = object.value("name", "");
 
+            // 名前がある配置だけを参照候補とし、同名なら最初の配置を残す。
             if (!name.empty()) {
                 sources.emplace(name, object);
             }
@@ -180,6 +195,7 @@ json BuildStage1PresetData(const json& source, const Stage1PresetDefinition& def
     // 収集物などで ID を持ち越す場合を除き、新規配置が既存 Event と接続しないよう解除します。
     if (!definition.preserveTargetId) {
         data["targetID"] = -1;
+        // 新形式の GameplayLink がすでにあれば、その接続先も未設定へ戻す。
         if (data.contains("components") && data["components"].is_object() &&
             data["components"].contains("GameplayLink") &&
             data["components"]["GameplayLink"].is_object()) {
@@ -197,7 +213,7 @@ json BuildStage1PresetData(const json& source, const Stage1PresetDefinition& def
     }
 
     // 元が移動床でも固定足場 Preset では振る舞いと Recorder を取り除きます。
-    if (definition.variant == Stage1PresetVariant::FixedPlatform) {
+    if (definition.variant == Stage1PresetVariant::kFixedPlatform) {
         data["type"] = "Model";
         data["gimmickType"] = "";
         data["enemyType"] = "";
@@ -226,6 +242,7 @@ json BuildStage1PresetData(const json& source, const Stage1PresetDefinition& def
 bool RegisterStage1LibraryPresets() {
     const std::unordered_map<std::string, json> sources = LoadStage1PresetSources();
 
+    // 取り込める配置がない場合は、新規登録も更新も行わない。
     if (sources.empty()) {
         return false;
     }
@@ -242,7 +259,7 @@ bool RegisterStage1LibraryPresets() {
             100,
             false,
             false,
-            Stage1PresetVariant::FixedPlatform
+            Stage1PresetVariant::kFixedPlatform
         },
         {
             "Stage1/Gimmick/MovingPlatformHorizontal",
@@ -413,6 +430,7 @@ bool RegisterStage1LibraryPresets() {
     for (const Stage1PresetDefinition& definition : definitions) {
         const auto source = sources.find(definition.sourceObjectName);
 
+        // 指定された元配置が欠けている定義は、代替を作らず飛ばす。
         if (source == sources.end()) {
             continue;
         }
@@ -434,7 +452,7 @@ std::unique_ptr<engine::Object3D> CreateSpriteCardPreset(engine::Object3DCommon*
     object->SetName("SpriteCard_2_5D");
     object->SetScale({ 1.8f, 1.8f, 1.0f });
     object->SetTexture("Resources/sprite/common/white.png");
-    object->SetBlendMode(BlendMode::Normal);
+    object->SetBlendMode(BlendMode::kNormal);
     object->SetMaterialType(0);
     object->SetColor({ 1.0f, 1.0f, 1.0f, 1.0f });
     object->SetEnableLighting(false);
@@ -445,13 +463,14 @@ std::unique_ptr<engine::Object3D> CreateSpriteCardPreset(engine::Object3DCommon*
 
     // 2.5D 板は描画専用なので、既定の Collider と衝突カテゴリを持たせません。
     engine::ColliderConfig colliderConfig = object->GetColliderConfig();
-    colliderConfig.type = ColliderType::None;
+    colliderConfig.type = engine::ColliderType::kNone;
     object->SetColliderConfig(colliderConfig);
 
     return object;
 }
 }
 
+// ゲームの Factory とステージ1配置を使ってエディターの作成候補を登録し、必要な場合だけ保存する。
 void BuiltInCreatePresetRegistry::EnsureRegistered(engine::Object3DCommon* common) {
     // モデルの初期化に必要な共通部が準備できるまでは登録を始めません。
     if (!common) {
@@ -477,15 +496,15 @@ void BuiltInCreatePresetRegistry::EnsureRegistered(engine::Object3DCommon* commo
 
     for (const auto& [type, label] : enemies) {
         changed |= RegisterOrRefreshEnemyPreset("Builtin/Enemy/" + type,
-            EditorObjectFactoryRegistry::Create(EditorObjectFactoryRegistry::Kind::Enemy, type, common), label);
+            EditorObjectFactoryRegistry::Create(EditorObjectFactoryRegistry::Kind::kEnemy, type, common), label);
     }
 
     // Gimmick は初回だけ登録し、Editor 上で編集した内容を以後の起動で保持します。
-    for (const auto& type : EditorObjectFactoryRegistry::GetTypes(EditorObjectFactoryRegistry::Kind::Gimmick)) {
+    for (const auto& type : EditorObjectFactoryRegistry::GetTypes(EditorObjectFactoryRegistry::Kind::kGimmick)) {
         // 既存Presetのために同じギミックや内部エフェクトを毎回生成しません。
         if (PresetManager::GetInstance()->HasPreset("Builtin/Gimmick/" + type.id)) continue;
         changed |= RegisterPresetOnce("Builtin/Gimmick/" + type.id,
-            EditorObjectFactoryRegistry::Create(EditorObjectFactoryRegistry::Kind::Gimmick, type.id, common), type.displayName);
+            EditorObjectFactoryRegistry::Create(EditorObjectFactoryRegistry::Kind::kGimmick, type.id, common), type.displayName);
     }
 
     // コピー台は一台ごとに配置・移動できるよう、通常の五能力を個別Presetにします。
@@ -497,9 +516,11 @@ void BuiltInCreatePresetRegistry::EnsureRegistered(engine::Object3DCommon* commo
         {"Bomber", "コピー台・ボム"},
     }};
     for (const auto& [copyType, label] : kCopyStations) {
+        // 設定済みの能力別プリセットを保持するため、同名があれば台を生成しない。
         if (PresetManager::GetInstance()->HasPreset("Builtin/Gimmick/CopyMemoryStation/" + std::string(copyType))) continue;
         auto station = EditorObjectFactoryRegistry::Create(
-            EditorObjectFactoryRegistry::Kind::Gimmick, "CopyMemoryStation", common);
+            EditorObjectFactoryRegistry::Kind::kGimmick, "CopyMemoryStation", common);
+        // 共通のコピー台を生成できなかった能力については、登録を省く。
         if (!station) {
             continue;
         }
@@ -520,6 +541,7 @@ void BuiltInCreatePresetRegistry::EnsureRegistered(engine::Object3DCommon* commo
     changed |= RegisterPresetOnce("Builtin/Utility/SpriteCard2_5D", CreateSpriteCardPreset(common), "2.5Dスプライト板");
     changed |= RegisterStage1LibraryPresets();
 
+    // 少なくとも1件の登録内容が変わった場合だけ全プリセットを書き出す。
     if (changed) {
         PresetManager::GetInstance()->SaveAll();
     }

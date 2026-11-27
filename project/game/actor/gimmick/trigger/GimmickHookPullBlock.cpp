@@ -14,11 +14,12 @@ void GimmickHookPullBlock::Initialize(engine::Object3DCommon* common, const std:
     SetClassName("Gimmick");
     SetGimmickType("HookPullBlock");
     SetName("Gimmick_HookPullBlock");
-    SetCollisionAttribute(CollisionCategories::Get("ground"));
-    SetCollisionMask(CollisionCategories::GetDefaultGameplayMask());
+    SetCollisionAttribute(engine::collisionCategories::Get("ground"));
+    SetCollisionMask(engine::collisionCategories::GetDefaultGameplayMask());
     SetStatic(false);
     SetColor({0.55f, 0.85f, 1.0f, 1.0f});
 
+    // 共通パラメーターが無ければ、引く速度と重力を保存する容器を作る。
     if (!GetParameters().has_value()) {
         ResetParameters();
     }
@@ -27,7 +28,7 @@ void GimmickHookPullBlock::Initialize(engine::Object3DCommon* common, const std:
     SetParameter(&engine::EntityParameter::gravity, 50.0f);
     SetParameter(&engine::EntityParameter::maxFallSpeed, 60.0f);
 
-    // 編集項目の宣言です。動作処理と旧paramの保存キーは変更しません。
+    // 引き寄せ速度、重力、最大落下速度をInspectorに登録する。
     using Self = GimmickHookPullBlock;
     engine::ObjectPropertyDefinition<Self> properties(*this, kTypeId, "フック可動ブロック",
         "フックを当てるとプレイヤー側へ引き寄せます。");
@@ -43,26 +44,31 @@ void GimmickHookPullBlock::Update(float deltaTime) {
         ResetParameters();
     }
 
+    // 引き寄せの残り秒数を先に減らし、このフレームで速度を与えるか判定する。
     pullTimer_ = std::max(0.0f, pullTimer_ - deltaTime);
 
-    // 引き寄せ中は固定済みの目標へ水平速度を近づけ、時間が切れたら水平速度を減衰させます。
+    // 引き寄せ時間が残っていれば、命中時に固定した目標へ水平速度を寄せる。
     if (pullTimer_ > 0.0f) {
         engine::Vector3 toTarget = pullTarget_ - GetWorldPosition();
         toTarget.y = 0.0f;
 
         float distance = engine::Math::Length(toTarget);
 
+        // 目的点から水平に0.05より離れている間だけ、目標への速度を更新する。
         if (distance > 0.05f) {
             engine::Vector3 dir = engine::Math::Normalize(toTarget);
             float pullSpeed = std::max(1.0f, GetParameters()->speed);
             velocity_.x = engine::Math::Lerp(velocity_.x, dir.x * pullSpeed, 0.18f);
             velocity_.z = engine::Math::Lerp(velocity_.z, dir.z * pullSpeed, 0.18f);
         }
+    // 引き寄せ時間を使い切った後は、新しい加速をせず今の滑りを弱める。
     } else {
         velocity_.x *= 0.86f;
         velocity_.z *= 0.86f;
+        // X方向の速度が微小なら0にそろえる。
         if (std::abs(velocity_.x) < 0.02f)
             velocity_.x = 0.0f;
+        // Z方向の速度が微小なら0にそろえる。
         if (std::abs(velocity_.z) < 0.02f)
             velocity_.z = 0.0f;
     }
@@ -70,15 +76,16 @@ void GimmickHookPullBlock::Update(float deltaTime) {
     // 引き寄せは水平方向に限るため、鉛直方向には常に重力と落下速度の上限を適用します。
     velocity_.y -= GetParameters()->gravity * deltaTime;
 
+    // 下向きの速度が設定した最大落下速度を超えたら、その上限に戻す。
     if (velocity_.y < -GetParameters()->maxFallSpeed) {
         velocity_.y = -GetParameters()->maxFallSpeed;
     }
 
     SetTranslate(GetTranslate() + velocity_ * deltaTime);
 
-    // 水平方向へ滑っている間だけ、移動方向に合わせて転がる見た目を加えます。
     float speedXZ = std::sqrt(velocity_.x * velocity_.x + velocity_.z * velocity_.z);
 
+    // 水平方向へ十分に滑っている場合だけ、速度と経過秒数に応じて回転を加える。
     if (speedXZ > 0.05f) {
         engine::Vector3 rot = GetRotation();
         rot.x += velocity_.z * deltaTime * 0.35f;
@@ -90,15 +97,18 @@ void GimmickHookPullBlock::Update(float deltaTime) {
 }
 
 bool GimmickHookPullBlock::OnCollision(engine::Object3D* other) {
-    // 地面属性以外との接触では引き寄せ中の位置補正を行わない。
+    // 相手が無いか自分自身なら接触処理を行えない。
     if (!other || other == this)
         return false;
-    if (!(other->GetCollisionAttribute() & CollisionCategories::Get("ground")))
+    // 地面属性を持たない相手からは押し戻さない。
+    if (!(other->GetCollisionAttribute() & engine::collisionCategories::Get("ground")))
         return true;
+    // 同型ブロック同士の接触でも位置補正は行わない。
     if (other->GetGimmickType() == "HookPullBlock")
         return true;
 
-    CollisionInfo info = CheckCollision(other);
+    engine::CollisionInfo info = CheckCollision(other);
+    // 判定形状が重なっていない場合は押し戻さない。
     if (!info.isColliding)
         return false;
 
@@ -107,10 +117,12 @@ bool GimmickHookPullBlock::OnCollision(engine::Object3D* other) {
 
     float dot = engine::Math::Dot(velocity_, info.normal);
 
+    // 地形の内側へ向く速度成分だけを消す。
     if (dot < 0.0f) {
         velocity_ = velocity_ - info.normal * dot;
     }
 
+    // 接触面が十分に上向きで、まだ下降中なら落下速度を止める。
     if (info.normal.y > 0.65f && velocity_.y < 0.0f) {
         velocity_.y = 0.0f;
     }
@@ -122,9 +134,11 @@ void GimmickHookPullBlock::StartHookPull(const engine::Vector3& hookOwnerPos) {
     // フックを掴んだ瞬間の使用者位置を固定し、移動中に目標が揺れないようにします。
     engine::Vector3 toOwner = hookOwnerPos - GetWorldPosition();
     toOwner.y = 0.0f;
+    // 使用者との水平距離が0.05未満なら、引く向きを定められないため開始しない。
     if (engine::Math::Length(toOwner) < 0.05f)
         return;
 
+    // 使用者の4単位手前を狙い、0.45秒間だけ引く。
     engine::Vector3 dir = engine::Math::Normalize(toOwner);
     pullTarget_ = hookOwnerPos - dir * 4.0f;
     pullTarget_.y = GetWorldPosition().y;
@@ -133,6 +147,7 @@ void GimmickHookPullBlock::StartHookPull(const engine::Vector3& hookOwnerPos) {
     float pullSpeed = GetParameters().has_value() ? std::max(1.0f, GetParameters()->speed) : 42.0f;
     velocity_.x = dir.x * pullSpeed;
     velocity_.z = dir.z * pullSpeed;
+    // 上方向の初速が3未満なら、引き始めに小さく跳ねるよう補う。
     if (velocity_.y < 3.0f)
         velocity_.y = 3.0f;
 

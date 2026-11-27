@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <vector>
 #include <memory>
 #include <string>
@@ -25,7 +26,6 @@ public:
     // シーン選択とEditorが保持する状態を終了させる。
     void Finalize();
 
-    // 毎フレームのロジック更新（選択判定・ギズモ操作）
         // マウス入力からSpriteの選択やドラッグ操作を更新します。
 void Update(const engine::Vector2& localMousePos, bool isHovered);
 
@@ -35,7 +35,6 @@ void Update(const engine::Vector2& localMousePos, bool isHovered);
     // GameView内でのデバッグ描画（選択枠やギズモ）
     void Draw();
 
-    // Inspectorに表示するUI描画処理
         // Sprite Hierarchy、Inspector、Projectパネルを描画します。
 void DrawImGui() override;
 
@@ -65,8 +64,8 @@ void DrawImGui() override;
     void SetSpriteFilename(const std::string& filepath) {
         std::string name = filepath;
 
-        // パスからファイル名だけを抜き出す
         size_t pos = name.find_last_of("/\\");
+        // 入力に区切りがある場合だけ、最後のフォルダーまでを取り除いて保存先の名前欄へ渡す。
         if (pos != std::string::npos)
             name = name.substr(pos + 1);
         strcpy_s(currentSpriteFilename_, sizeof(currentSpriteFilename_), name.c_str());
@@ -80,7 +79,7 @@ private:
     const SpriteList& GetEditingSprites(const BaseScene& scene) const;
     engine::Sprite* AddEditingSprite(BaseScene& scene, std::unique_ptr<engine::Sprite> sprite);
     bool DeleteEditingSprite(BaseScene& scene, engine::Sprite* sprite);
-    void MoveEditingSprite(BaseScene& scene, engine::Sprite* sprite, int offset);
+    void MoveEditingSprite(BaseScene& scene, engine::Sprite* sprite, std::int32_t offset);
 
     // 入力したパスから独立レイアウトを読み込み、保存時に元の拡張項目を保持します。
     void DrawLayoutFileControls(BaseScene& scene);
@@ -109,7 +108,7 @@ private:
     engine::Vector2 MakeNearestIntegerScaleSize(engine::Sprite* sprite, const engine::Vector2& textureSize) const;
 
     // 現行SceneのSpriteだけを走査し、文字PNG限定にも切り替えられるようにします。
-    int FixSpriteAspectInCurrentScene(bool textOnly, bool keepWidth);
+    std::int32_t FixSpriteAspectInCurrentScene(bool textOnly, bool keepWidth);
 
     SceneManager* sceneManager_ = nullptr; // 現在シーンの取得元。借用参照。
     engine::InputManager* inputManager_ = nullptr;

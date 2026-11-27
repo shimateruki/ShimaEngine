@@ -15,7 +15,6 @@ namespace engine { class Object3DCommon; }
 class PrimitiveDrawer;
 struct ID3D12GraphicsCommandList;
 
-/// <summary>ゲーム・自由・演出カメラの切替、設定保存、プレビューを管理する。</summary>
 class DebugEditor;
 
 // 担当：編集カメラの操作・設定保存と、Camera Objectのガイド・プレビューを管理する。
@@ -24,18 +23,18 @@ class DebugEditor;
 class CameraEditor : public IEditable {
 public:
     enum class Mode {
-        Game,  // ゲーム用カメラ。
-        Editor // WASD操作の自由カメラ。
+        kGame,  // ゲーム用カメラ。
+        kEditor // WASD操作の自由カメラ。
     };
 
     // 編集画面のカメラモード別設定。各モードの値を保持し、切替時に使用する設定を選ぶ。
     // 関連：CameraEditor（この型を使う機能の本体）
     struct Settings {
-        Mode currentMode = Mode::Game;
-        engine::Camera::FollowMode gameFollowMode = engine::Camera::FollowMode::Aimable;
+        Mode currentMode = Mode::kGame;
+        engine::Camera::FollowMode gameFollowMode = engine::Camera::FollowMode::kAimable;
 
-        engine::Camera::GameplayStyle gameplayStyle = engine::Camera::GameplayStyle::Free;
-        engine::Camera::ObstacleResponse obstacleResponse = engine::Camera::ObstacleResponse::PreserveComposition;
+        engine::Camera::GameplayStyle gameplayStyle = engine::Camera::GameplayStyle::kFree;
+        engine::Camera::ObstacleResponse obstacleResponse = engine::Camera::ObstacleResponse::kPreserveComposition;
         float guidedYawLimit = 10.0f;
         float guidedPitchLimit = 5.0f;
         float guidedReturnResponse = 5.0f;
@@ -56,7 +55,7 @@ public:
 
         // Orbitモード用パラメータ。
         float orbitRadius = 15.0f;
-        engine::Vector3 orbitCenterOffset = engine::Vector3::ZERO;
+        engine::Vector3 orbitCenterOffset = engine::Vector3::kZero;
         float orbitCenterHeight = 5.0f;
         float orbitHeight = 5.0f;
         float orbitSpeed = 0.005f;
@@ -66,13 +65,13 @@ public:
         bool orbitCenterGizmoVisible = true;
         float orbitGuideMarkerSize = 0.45f;
 
-        int cameraSensitivity = 0;
+        std::int32_t cameraSensitivity = 0;
 
         bool cameraGuideVisible = true;
         bool cameraBodyVisible = true;
 
         bool cameraPreviewVisible = false;
-        int cameraPreviewFps = 15;
+        std::int32_t cameraPreviewFps = 15;
         float cameraPreviewResolutionScale = 0.5f;
 
         float cameraGuideSize = 0.65f;
@@ -85,11 +84,11 @@ public:
         float boostSpeed = 2.0f;
         float mouseSensitivity = 0.003f;
         engine::Vector3 fixedPointPos = { 0.0f, 5.0f, -15.0f };
-        engine::Vector3 fixedPointAngle = engine::Vector3::ZERO;
+        engine::Vector3 fixedPointAngle = engine::Vector3::kZero;
 
         // Editorカメラの保存用状態。
         engine::Vector3 editorCameraPos = { 0.0f, 5.0f, -15.0f };
-        engine::Vector3 editorCameraAngle = engine::Vector3::ZERO;
+        engine::Vector3 editorCameraAngle = engine::Vector3::kZero;
     };
 
 public:
@@ -100,7 +99,7 @@ public:
     void Initialize();
 
     /// 現在のカメラモードに応じて追従または自由移動を更新する。
-    // bossはこの更新でのみ参照する。省略時は通常構図へ戻し、攻撃ロックオンを変更しない。
+    // boss はこの更新の構図調整に使う借用参照。省略時は通常の構図に戻す。isLockingOn は別の追従条件。
     void Update(engine::Object3D* player, bool isLockingOn, engine::Object3D* boss = nullptr);
     const engine::Camera::BossFramingSettings& GetBossFramingSettings() const { return settings_.bossFraming; }
 
@@ -115,7 +114,7 @@ public:
     /// 選択中のJSONからカメラ設定と演出用Overrideを復元する。
     void LoadSettings();
 
-    /// ファイル名を切り替え、未作成なら既定値で新規保存する。
+    /// 名前が入力バッファに収まれば編集対象を切り替える。未作成の設定は現在のモードを保った既定値で保存する。
     void LoadFile(const std::string& fileName);
 
     /// カメラ設定フォルダ内のJSON一覧を再収集する。
@@ -127,7 +126,7 @@ public:
     /// Editor専用ファイルから自由カメラの位置・角度を復元する。
     void LoadEditorState();
 
-    bool IsEditorMode() const { return settings_.currentMode == Mode::Editor; }
+    bool IsEditorMode() const { return settings_.currentMode == Mode::kEditor; }
 
     /// ゲーム視点と自由カメラを切り替える。
     void SetMode(Mode mode);
@@ -144,11 +143,13 @@ public:
     /// 選択中の Camera Object に Editor 視点を合わせられたか返す。
     bool FocusSelectedCameraObject();
 
+    // Game View にマウスがあるかを受け取り、自由カメラと周回ギズモの操作対象を判定する。
     void SetGameViewHovered(bool hovered) { isGameViewHovered_ = hovered; }
 
     // blocker のビットを有効・無効化し、編集中の自由カメラ状態の自動保存を抑制する。
     void SetEditorStateSaveBlocker(uint32_t blocker, bool enabled);
 
+    // どれかの保存抑止フラグが立っている間は、自由カメラの状態を自動保存しない。
     bool IsEditorStateSaveBlocked() const { return editorStateSaveBlockers_ != 0; }
 
     /// <summary>
@@ -160,18 +161,18 @@ public:
     /// Camera Object の保存済み視点を実カメラで再生する。
     bool PlaySceneObjectCamera(engine::Camera* camera, engine::Object3D* cameraObject);
 
-    /// ブレンド時間と補間方式を指定して Camera Object を再生する。
+    /// Camera Object の切替と復帰の時間を秒で指定し、ブレンド方式も選ぶ。
     bool PlaySceneObjectCamera(
         engine::Camera* camera,
         engine::Object3D* cameraObject,
         float blendInDuration,
         float blendOutDuration,
-        int easing);
+        std::int32_t easing);
 
     /// <summary>Camera Object内で参照するEye・注視対象も含めて再生可能か検証する。</summary>
     bool ValidateSceneObjectCamera(const engine::Object3D* cameraObject, std::string& issue) const;
 
-    /// Camera Object の再生を止め、元のカメラへ戻す。
+    /// Camera Object の上書きを解除する。次のカットへ移る場合は画角と開始前の控えを保持する。
     void StopSceneObjectCamera(engine::Camera* camera, bool switchingToNextShot = false);
 
     /// Inspector で選択中の Camera Object を設定する。所有権は移さない。
@@ -179,6 +180,7 @@ public:
 
     /// 現在選択中の Camera Object を返す。
     engine::Object3D* GetSelectedCameraObject() const;
+    // Camera Object の発火範囲をギズモで編集するか返す。
     bool IsEditingRegionGizmo() const { return editRegionGizmo_; }
     void SetEditingRegionGizmo(bool enabled) { editRegionGizmo_ = enabled; }
     // 領域ギズモを拡縮操作にするかを、UIから編集する参照で返す。
@@ -190,9 +192,11 @@ public:
     // Camera Objectの保存済み設定から、実際の視点と注視点を解決します。
     bool ResolveSceneCameraPose(const engine::Object3D* cameraObject, engine::Vector3& eye, engine::Vector3& target) const;
 
-    int GetCameraSensitivity() const { return settings_.cameraSensitivity; }
+    // 保存設定にあるゲーム用カメラの感度値を返す。
+    std::int32_t GetCameraSensitivity() const { return settings_.cameraSensitivity; }
 #ifdef USE_IMGUI
 
+    // この一連のポインターは ImGui から表示・ギズモ設定を編集するための借用参照。
     bool* GetCameraGuideVisiblePtr() { return &settings_.cameraGuideVisible; }
 
     bool* GetCameraPreviewVisiblePtr() { return &settings_.cameraPreviewVisible; }
@@ -204,17 +208,17 @@ public:
     bool* GetOrbitGizmoVisiblePtr() { return &settings_.orbitCenterGizmoVisible; }
 #endif
 
-    void SetCameraSensitivity(int val) {
+    void SetCameraSensitivity(std::int32_t val) {
         settings_.cameraSensitivity = val;
         // 感度は変更と同時に保存する。自由カメラの姿勢に使う保存予約とは別の経路。
         SaveSettings();
     }
 
     /// Orbit 視点の軌道ガイドを描画し、描画数を上限内で加算する。
-    void DrawOrbitGuide(PrimitiveDrawer& primitiveDrawer, ID3D12GraphicsCommandList* commandList, int& instanceCount, int maxDrawLimit);
+    void DrawOrbitGuide(PrimitiveDrawer& primitiveDrawer, ID3D12GraphicsCommandList* commandList, std::int32_t& instanceCount, std::int32_t maxDrawLimit);
 
     /// カメラ本体と視錐台のガイドを描画する。
-    void DrawCameraGuide(PrimitiveDrawer& primitiveDrawer, ID3D12GraphicsCommandList* commandList, int& instanceCount, int maxDrawLimit);
+    void DrawCameraGuide(PrimitiveDrawer& primitiveDrawer, ID3D12GraphicsCommandList* commandList, std::int32_t& instanceCount, std::int32_t maxDrawLimit);
 
     /// カメラ表示モデルの生成に使う共通描画情報を設定する。
     void SetObject3DCommon(engine::Object3DCommon* common);
@@ -363,7 +367,7 @@ private:
     bool regionGizmoScale_ = false;
     nlohmann::json regionGizmoBefore_;
     std::string regionGizmoObjectId_;
-    int orbitEditGizmoTarget_ = 1; // 周回ギズモの編集対象。
+    std::int32_t orbitEditGizmoTarget_ = 1; // 周回ギズモの編集対象。
 
     std::map<std::string, engine::Camera::CameraOverrideParams> overrideParamsMap_;
 

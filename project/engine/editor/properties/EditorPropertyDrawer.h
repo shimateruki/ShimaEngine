@@ -13,7 +13,7 @@ struct EditorPropertyDrawOptions {
     float width = 0.0f;
 };
 
-namespace EditorPropertyDrawer {
+namespace editorPropertyDrawer {
 
 /// Registryの型情報とUI Hintから、1つのImGui入力欄を描画します。
 /// 戻り値がtrueの場合、valueには編集後のJSON値が入ります。

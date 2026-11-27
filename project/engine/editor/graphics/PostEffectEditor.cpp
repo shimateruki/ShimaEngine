@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "PostEffectEditor.h"
 #include "imgui.h"
 #include "json.hpp" // JSONライブラリ
@@ -16,18 +17,21 @@ void PostEffectEditor::Initialize(PostEffect* postEffect) {
     LoadParams();
 }
 
+// PostEffect の描画定数とワークフローを現在の画面に反映し、フェードの試写と設定保存を受け付ける。
 void PostEffectEditor::DrawImGui() {
 #ifdef USE_IMGUI
+    // 描画先がセットされるまでは、描画定数の取得を避ける。
     if (!targetEffect_)
         return;
 
     auto* params = targetEffect_->GetParams();
 
     ImGui::Text("Color Workflow");
-    bool linearWorkflow = engine::ColorSpace::WorkflowSettings::GetInstance().IsLinearWorkflowEnabled();
+    bool linearWorkflow = engine::colorSpace::WorkflowSettings::GetInstance().IsLinearWorkflowEnabled();
 
+    // 色空間を切り替えたときは共有設定とシーンのクリア色を更新する。
     if (ImGui::Checkbox("リニアワークフローを使用", &linearWorkflow)) {
-        engine::ColorSpace::WorkflowSettings::GetInstance().SetLinearWorkflowEnabled(linearWorkflow);
+        engine::colorSpace::WorkflowSettings::GetInstance().SetLinearWorkflowEnabled(linearWorkflow);
         engine::LightManager::GetInstance()->ApplySceneClearColor();
 
         // リニアへ切り替えた直後にトーンマッピングが無効なら、HDR 合成値を表示へ変換するモードを選ぶ。
@@ -47,22 +51,27 @@ void PostEffectEditor::DrawImGui() {
     // ==========================================================
     ImGui::Text(ICON_FA_ADJUST " Tone Mapping Mode");
 
-    int mode = params->enableToneMapping;
+    std::int32_t mode = params->enableToneMapping;
 
+    // 無効ボタンでは、合成後のトーンマッピングを通さない。
     if (ImGui::RadioButton("OFF (No ToneMap)", mode == 0)) {
         mode = 0;
     }
+    // 実写向けボタンでは、明るい部分を白へ寄せる ACES を選ぶ。
     if (ImGui::RadioButton(ICON_FA_EYE " Real (ACES - White Out)", mode == 1)) {
         mode = 1;
     }
+    // アニメ向けボタンでは、鮮やかさを残す ACES を選ぶ。
     if (ImGui::RadioButton(ICON_FA_PALETTE " Anime (ACES - Vivid Color)", mode == 2)) {
         mode = 2;
     }
     params->enableToneMapping = mode;
 
+    // 実写向けを選んでいるときは、用途の補足を表示する。
     if (mode == 1) {
         ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "  Good for Realistic/Movie style.");
     }
+    // アニメ向けを選んでいるときは、鮮やかな演出に向くことを表示する。
     else if (mode == 2) {
         ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f), "  Good for Anime/Vivid Magic effects.");
     }
@@ -99,17 +108,19 @@ void PostEffectEditor::DrawImGui() {
 
 	bool bloomEnabled = targetEffect_->IsBloomEnabled();
 
+	// チェックが変化したときに Bloom パスの有効状態を切り替える。
 	if (ImGui::Checkbox("Bloomを使用", &bloomEnabled)) {
 		targetEffect_->SetBloomEnabled(bloomEnabled);
 	}
 
-	int bloomQuality = static_cast<int>(targetEffect_->GetBloomQuality());
+	std::int32_t bloomQuality = static_cast<std::int32_t>(targetEffect_->GetBloomQuality());
 	const char* bloomQualityItems[] = {
 		"低 (4 passes / 1 level)",
 		"中 (6 passes / 2 levels)",
 		"高 (10 passes / 4 levels)",
 	};
 
+	// 選択した品質を反映し、縮小レベル数を切り替える。
 	if (ImGui::Combo("Bloom品質", &bloomQuality, bloomQualityItems, IM_ARRAYSIZE(bloomQualityItems))) {
 		targetEffect_->SetBloomQuality(static_cast<PostEffect::BloomQuality>(bloomQuality));
 	}
@@ -117,6 +128,7 @@ void PostEffectEditor::DrawImGui() {
 	ImGui::Text(
 		"現在の後処理: %d passes",
 		targetEffect_->GetExpectedPostEffectPassCount());
+	// Bloom の処理条件を満たさない場合は、合成だけになることを表示する。
 	if (!targetEffect_->IsBloomActive()) {
 		ImGui::TextDisabled("Bloom無効またはIntensityが0のため、最終Composite 1回だけ実行します。");
 	}
@@ -203,6 +215,7 @@ void PostEffectEditor::DrawImGui() {
 
     ImGui::SameLine();
 
+    // 閉じる試写ボタンでは、1.5秒のフェードアウトを開始する。
     if (ImGui::Button("Start Fade Out")) {
         Fade::GetInstance()->StartFadeOut(1.5f);
     }
@@ -225,6 +238,7 @@ void PostEffectEditor::DrawImGui() {
 
     ImGui::SameLine();
 
+    // 閉じる試写ボタンでは、画面中央へ 1 秒でアイリスを閉じる。
     if (ImGui::Button("Start Iris Out")) {
         Fade::GetInstance()->StartIrisOut(1.0f);
     }
@@ -240,19 +254,23 @@ void PostEffectEditor::DrawImGui() {
 
     ImGui::SameLine();
 
+    // 読込操作では、保存ファイルにあるキーを現在の表示設定へ重ねる。
     if (ImGui::Button(ICON_FA_UPLOAD " Load JSON")) {
         LoadParams();
     }
 #endif
 }
 
+// 現在の後処理設定を指定の JSON に書き出す。
 void PostEffectEditor::SaveParams(const std::string& filename) {
+    // 対象が未設定なら書き出す値を取得できないため処理を止める。
     if (!targetEffect_)
         return;
 
-    // フォルダが存在しない場合は作成する
+    // 独立したファイル名を受け付けるため、親ディレクトリの指定は省略できる。
     std::filesystem::path dir = std::filesystem::path(filename).parent_path();
 
+    // 親ディレクトリが指定され、まだ存在しない場合だけ作成する。
     if (!dir.empty() && !std::filesystem::exists(dir)) {
         std::filesystem::create_directories(dir);
     }
@@ -261,12 +279,12 @@ void PostEffectEditor::SaveParams(const std::string& filename) {
     json j;
     // Editorで調整した描画パラメータと、全シーン共有の色空間設定を同じPresetへ保存する。
     j["bloomEnabled"] = targetEffect_->IsBloomEnabled();
-    j["bloomQuality"] = static_cast<int>(targetEffect_->GetBloomQuality());
+    j["bloomQuality"] = static_cast<std::int32_t>(targetEffect_->GetBloomQuality());
     j["threshold"] = params->threshold;
     j["bloomIntensity"] = params->bloomIntensity;
     j["spread"] = params->spread;
     j["enableToneMapping"] = params->enableToneMapping;
-    j["linearWorkflowEnabled"] = engine::ColorSpace::WorkflowSettings::GetInstance().IsLinearWorkflowEnabled();
+    j["linearWorkflowEnabled"] = engine::colorSpace::WorkflowSettings::GetInstance().IsLinearWorkflowEnabled();
     j["vignetteIntensity"] = params->vignetteIntensity;
     j["vignettePower"] = params->vignettePower;
     j["chromaticAberration"] = params->chromaticAberration;
@@ -309,11 +327,14 @@ void PostEffectEditor::SaveParams(const std::string& filename) {
     }
 }
 
+// 指定の JSON を読み、存在するキーだけを現在の後処理設定へ反映する。
 void PostEffectEditor::LoadParams(const std::string& filename) {
+    // 後処理の適用先がまだない場合は読み込まない。
     if (!targetEffect_)
         return;
 
     std::ifstream file(filename);
+    // 設定ファイルを開けない場合は、現在の設定で続行する。
     if (!file.is_open())
         return;
 
@@ -321,84 +342,111 @@ void PostEffectEditor::LoadParams(const std::string& filename) {
         json j;
         file >> j;
 
-        // 古いPresetに無いキーは現在の既定値を残し、追加項目だけを段階的に適用する。
+        // 旧形式にないキーは読込前の値を保つ。以下の各存在チェックは、この互換性のために行う。
         auto* params = targetEffect_->GetParams();
+		// 有効フラグが記録されていれば GPU 処理の有無を変更する。
 		if (j.contains("bloomEnabled")) {
 			targetEffect_->SetBloomEnabled(j["bloomEnabled"].get<bool>());
 		}
 
+		// 品質の番号が記録されていれば有効フラグとは独立に復元する。
 		if (j.contains("bloomQuality")) {
 			targetEffect_->SetBloomQuality(
-				static_cast<PostEffect::BloomQuality>(j["bloomQuality"].get<int>()));
+				static_cast<PostEffect::BloomQuality>(j["bloomQuality"].get<std::int32_t>()));
 		}
 
         if (j.contains("linearWorkflowEnabled")) {
             // 色空間の変更は背景クリア色にも影響するため、LightManager側へ再反映する。
-            engine::ColorSpace::WorkflowSettings::GetInstance().SetLinearWorkflowEnabled(
+            engine::colorSpace::WorkflowSettings::GetInstance().SetLinearWorkflowEnabled(
                 j["linearWorkflowEnabled"].get<bool>());
             engine::LightManager::GetInstance()->ApplySceneClearColor();
         }
 
+        // Bloom の発光閾値・強度・ぼかし幅は、定義された項目だけ戻す。
         if (j.contains("threshold"))
             params->threshold = j["threshold"];
+        // 強度が保存されている場合は、合成する Bloom の量を更新する。
         if (j.contains("bloomIntensity"))
             params->bloomIntensity = j["bloomIntensity"];
         if (j.contains("spread"))
             params->spread = j["spread"];
+        // 後処理の切り替えと周辺減光・収差・ノイズの値を、含まれる項目ごとに復元する。
         if (j.contains("enableToneMapping"))
             params->enableToneMapping = j["enableToneMapping"];
+        // 周辺減光の強さがあれば復元する。
         if (j.contains("vignetteIntensity"))
             params->vignetteIntensity = j["vignetteIntensity"];
+        // 減光の丸みは独立項目のため、指定されている場合だけ更新する。
         if (j.contains("vignettePower"))
             params->vignettePower = j["vignettePower"];
+        // 色のずれ幅が保存されている場合だけ、色収差の設定を更新する。
         if (j.contains("chromaticAberration"))
             params->chromaticAberration = j["chromaticAberration"];
         if (j.contains("filmGrainIntensity"))
             params->filmGrainIntensity = j["filmGrainIntensity"];
+        // 集中線のサンプル数と画面上の中心を、保存された成分ごとに反映する。
         if (j.contains("radialIntensity"))
             params->radialIntensity = j["radialIntensity"];
+        // サンプル数が指定されている場合は、集中線の描画に使う回数を復元する。
         if (j.contains("radialBlurSamples"))
             params->radialBlurSamples = j["radialBlurSamples"];
+        // 中心の X があればその成分だけを復元する。Y が省略されている設定にも対応する。
         if (j.contains("radialCenterX"))
             params->radialCenterX = j["radialCenterX"];
         if (j.contains("radialCenterY"))
             params->radialCenterY = j["radialCenterY"];
+        // 色調補正は LUT の適用量と色の調整値を個別に反映する。
         if (j.contains("lutIntensity"))
             params->lutIntensity = j["lutIntensity"];
+        // 露出設定があれば、全体の明るさ補正を復元する。
         if (j.contains("colorExposure"))
             params->colorExposure = j["colorExposure"];
+        // コントラスト設定があれば、明暗差の補正を復元する。
         if (j.contains("colorContrast"))
             params->colorContrast = j["colorContrast"];
+        // 彩度設定があれば、色の鮮やかさの補正を復元する。
         if (j.contains("colorSaturation"))
             params->colorSaturation = j["colorSaturation"];
+        // 色温度があれば、暖色・寒色への補正を復元する。
         if (j.contains("colorTemperature"))
             params->colorTemperature = j["colorTemperature"];
         if (j.contains("colorTint"))
             params->colorTint = j["colorTint"];
+        // 被弾・黒帯・波打ちに続いて、走査線、モザイク、減色系の値を個別に反映する。
         if (j.contains("damageFlash"))
             params->damageFlash = j["damageFlash"];
+        // 黒帯の高さが指定されている場合にだけ、帯の設定値を戻す。
         if (j.contains("cinemaBarHeight"))
             params->cinemaBarHeight = j["cinemaBarHeight"];
+        // 波打ち量が保存されている場合だけ、画像の歪み設定を戻す。
         if (j.contains("wobbleIntensity"))
             params->wobbleIntensity = j["wobbleIntensity"];
+        // 走査線の強度が保存されている場合だけ、その濃さを戻す。
         if (j.contains("scanlineIntensity"))
             params->scanlineIntensity = j["scanlineIntensity"];
+        // モザイクの大きさが指定されている場合だけ、画素化の設定を戻す。
         if (j.contains("mosaicSize"))
             params->mosaicSize = j["mosaicSize"];
+        // グレースケールの混合量が保存されている場合だけ復元する。
         if (j.contains("grayscaleIntensity"))
             params->grayscaleIntensity = j["grayscaleIntensity"];
         if (j.contains("sepiaIntensity"))
             params->sepiaIntensity = j["sepiaIntensity"];
+        // ぼかしの半径・広がり、輝度と深度の輪郭強度を独立に反映する。
         if (j.contains("boxFilterSize"))
             params->boxFilterSize = j["boxFilterSize"];
+        // ガウシアンぼかしの半径の指定があれば、ボックスぼかしとは独立に復元する。
         if (j.contains("gaussianFilterSize"))
             params->gaussianFilterSize = j["gaussianFilterSize"];
+        // 分布の幅が指定されている場合にだけガウシアンの係数を差し替える。
         if (j.contains("gaussianSigma"))
             params->gaussianSigma = j["gaussianSigma"];
+        // 輝度による輪郭の強さがあれば、深度の輪郭設定と独立に復元する。
         if (j.contains("luminanceOutlineIntensity"))
             params->luminanceOutlineIntensity = j["luminanceOutlineIntensity"];
         if (j.contains("depthOutlineIntensity"))
             params->depthOutlineIntensity = j["depthOutlineIntensity"];
+        // 消失の進行と縁幅は、縁色の RGB 配列とは別の値として反映する。
         if (j.contains("dissolveThreshold"))
             params->dissolveThreshold = j["dissolveThreshold"];
         if (j.contains("dissolveEdgeWidth"))
@@ -410,20 +458,25 @@ void PostEffectEditor::LoadParams(const std::string& filename) {
             params->dissolveEdgeColor.z = j["dissolveEdgeColor"][2];
         }
 
+        // ノイズとスライムフェードの各強度・密度は独立して復元できる。
         if (j.contains("randomIntensity"))
             params->randomIntensity = j["randomIntensity"];
+        // スライムフェードの強さが保存されている場合にだけ、密度と独立に復元する。
         if (j.contains("slimeFadeIntensity"))
             params->slimeFadeIntensity = j["slimeFadeIntensity"];
         if (j.contains("slimeDensity"))
             params->slimeDensity = j["slimeDensity"];
+        // スライム色があれば、保存順の RGB 三成分を復元する。
         if (j.contains("slimeColor")) {
             params->slimeColor.x = j["slimeColor"][0];
             params->slimeColor.y = j["slimeColor"][1];
             params->slimeColor.z = j["slimeColor"][2];
         }
 
+        // アイリスの強度と画面上の中心は独立した項目として復元する。
         if (j.contains("irisFadeIntensity"))
             params->irisFadeIntensity = j["irisFadeIntensity"];
+        // 中心があれば保存順に X と Y を取り出す。
         if (j.contains("irisCenter")) {
             params->irisCenterX = j["irisCenter"][0];
             params->irisCenterY = j["irisCenter"][1];

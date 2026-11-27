@@ -2,13 +2,15 @@
 
 #include <string>
 
+namespace engine { struct Vector2; }
+
 // ユーザー設定ファイルから音量と操作設定を読み書きするクラス。
 // 関連：SettingsMenuOverlayが変更し、音量はAudioPlayer、カメラ操作は利用側へ渡す。
 // 主な入口：Initialize / Load / Save / ApplyAudioSettings
 class GameSettingsManager {
   public:
     // ステージセレクトの天候を自動、晴れ、雨に切り替える設定。
-    enum class StageSelectWeatherMode { Auto = 0, Clear = 1, Rain = 2 };
+    enum class StageSelectWeatherMode { kAuto = 0, kClear = 1, kRain = 2 };
 
     static GameSettingsManager* GetInstance();
 
@@ -30,6 +32,9 @@ class GameSettingsManager {
     bool GetCameraInvertX() const { return cameraInvertX_; }
 
     bool GetCameraInvertY() const { return cameraInvertY_; }
+
+    // 視点入力のうち、反転設定が有効な軸だけ符号を反転して返す。
+    engine::Vector2 ApplyCameraLookInversion(engine::Vector2 lookDelta) const;
 
     void SetCameraInversion(bool x, bool y) {
         cameraInvertX_ = x;
@@ -64,5 +69,5 @@ class GameSettingsManager {
     float cameraSensitivity_ = 1.0f;
     bool cameraInvertX_ = false;
     bool cameraInvertY_ = false;
-    StageSelectWeatherMode stageSelectWeatherMode_ = StageSelectWeatherMode::Auto;
+    StageSelectWeatherMode stageSelectWeatherMode_ = StageSelectWeatherMode::kAuto;
 };

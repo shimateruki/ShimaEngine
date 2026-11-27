@@ -1,16 +1,17 @@
+#include <cstdint>
 #include "engine/editor/graphics/camera/CameraEditor.Internal.h"
 #include <numbers>
 
-using namespace CameraEditorImplementation;
+using namespace cameraEditorImplementation;
 
 CameraEditor* CameraEditor::GetInstance() {
     // エディターのカメラ設定とプレビュー状態を一箇所で共有する。
-    static CameraEditor instance;
-    return &instance;
+    static CameraEditor sInstance;
+    return &sInstance;
 }
 
 void CameraEditor::Initialize() {
-    // 起動時にフォルダ内のファイル一覧を取得
+    // 設定ファイルの選択一覧を作ってから、ゲームカメラと自由カメラの設定を別々に復元します。
     RefreshFileList();
 
     // デフォルトファイル（camera_settings.json）を読み込む
@@ -22,6 +23,7 @@ void CameraEditor::Initialize() {
     // 自由カメラの位置を復元
     engine::Camera* camera = CameraManager::GetInstance()->GetMainCamera();
 
+    // メインカメラを取得できた場合に、保存済みの自由カメラの姿勢を初期表示へ反映します。
     if (camera) {
         camera->SetEye(settings_.editorCameraPos);
         camera->SetRotation(settings_.editorCameraAngle);
@@ -41,10 +43,12 @@ void CameraEditor::SetObject3DCommon(engine::Object3DCommon* common) {
 
 void CameraEditor::EnsureCameraModelGizmo(std::unique_ptr<engine::Object3D>& gizmo, const std::string& name) {
     // ガイド用模型は必要になったときだけ生成し、同じインスタンスを使い回す。
+    // 描画基盤が未接続なら、ガイド模型を初期化できません。
     if (!object3dCommon_) {
         return;
     }
 
+    // 模型がすでにあれば、新しく作らず現在の実体を使います。
     if (gizmo) {
         return;
     }
@@ -55,11 +59,12 @@ void CameraEditor::EnsureCameraModelGizmo(std::unique_ptr<engine::Object3D>& giz
     gizmo->SetName(name);
     gizmo->SetClassName("Model");
     gizmo->SetMaterialType(0);
-    gizmo->SetBlendMode(BlendMode::Normal);
+    gizmo->SetBlendMode(BlendMode::kNormal);
     gizmo->SetIsVisible(true);
 }
 
 void CameraEditor::ApplyCameraModelGizmo(engine::Object3D* gizmo, const engine::Vector3& eye, const engine::Vector3& forward, float sizeScale, const engine::Vector4& color) {
+    // 模型を取得できなければ、姿勢や色を更新しません。
     if (!gizmo) {
         return;
     }
@@ -81,18 +86,22 @@ void CameraEditor::ApplyCameraModelGizmo(engine::Object3D* gizmo, const engine::
 }
 
 void CameraEditor::DrawCameraModelGizmos(ID3D12Resource* pointLightResource, ID3D12Resource* spotLightResource) {
-    // カメラ編集対象がないときは模型を隠し、ゲーム画面にガイドを残さない。
+    // ガイド表示と選択状態を確認し、ゲームカメラの目印が必要な場合だけ描画します。
 #ifdef USE_IMGUI
+    // エディター全体でカメラ本体の表示を無効にしているときは描きません。
     if (!EditorToolSettings::Get().IsVisible("cameraBody"))
         return;
 #endif
+    // カメラガイドと本体が両方表示され、描画基盤がある場合にだけ進みます。
     if (!settings_.cameraGuideVisible || !settings_.cameraBodyVisible || !object3dCommon_) {
         return;
     }
 
     const bool isCameraEditorSelected =
         EditorManager::GetInstance()->GetSelectedObject() == this;
+    // カメラ編集ツールもCamera Objectも選択していなければ、ガイドは不要です。
     if (!isCameraEditorSelected && GetSelectedCameraObject() == nullptr) {
+        // 表示用モデルがある場合は、以降の描画に残らないよう非表示にします。
         if (gameCameraModelGizmo_) {
             gameCameraModelGizmo_->SetIsVisible(false);
         }
@@ -100,15 +109,18 @@ void CameraEditor::DrawCameraModelGizmos(ID3D12Resource* pointLightResource, ID3
         return;
     }
 
+    // ゲーム再生による非表示の条件に当たらなければ、保存されたゲームカメラの姿勢に模型を置きます。
     if (!ShouldHideGameCameraGuideDuringPlay()) {
         const engine::Vector3 gameEye = GetConfiguredCameraEye();
         const engine::Vector3 gameForward = GetConfiguredCameraForward();
         EnsureCameraModelGizmo(gameCameraModelGizmo_, "CameraEditor_GameCameraGizmo");
         ApplyCameraModelGizmo(gameCameraModelGizmo_.get(), gameEye, gameForward, 0.85f, { 1.0f, 0.82f, 0.18f, 1.0f });
 
+        // 模型を用意できた場合だけ、シーンの共有ライトで描きます。
         if (gameCameraModelGizmo_) {
             gameCameraModelGizmo_->Draw(pointLightResource, spotLightResource);
         }
+    // 再生中の表示条件を満たさなくなり模型が残っていれば、非表示にします。
     } else if (gameCameraModelGizmo_) {
         gameCameraModelGizmo_->SetIsVisible(false);
     }
@@ -119,13 +131,14 @@ void CameraEditor::Update(engine::Object3D* player, bool isLockingOn, engine::Ob
     // 通常・ボス戦の設定を選び、攻撃ロックオンの対象はゲーム側に任せる。
     targetPlayer_ = player;
     engine::Camera* camera = CameraManager::GetInstance()->GetMainCamera();
+    // メインカメラが無いフレームは、プレイヤーの参照だけを控えて終了します。
     if (!camera)
         return;
 
     const bool wasBossFraming = camera->IsBossFramingActive();
     // プレイヤーとボスの両方を参照できるゲーム中の誘導操作だけ、専用の構図を使う。
     const bool bossFraming = player && boss && settings_.bossFraming.enabled &&
-        settings_.currentMode == Mode::Game && settings_.gameplayStyle == engine::Camera::GameplayStyle::Guided;
+        settings_.currentMode == Mode::kGame && settings_.gameplayStyle == engine::Camera::GameplayStyle::kGuided;
     // 追従対象の変更は構図の内部状態を破棄するため、対象設定より先に行う。
     if (bossFraming) camera->SetFollowTarget(player);
     settings_.bossFraming.Validate();
@@ -135,9 +148,9 @@ void CameraEditor::Update(engine::Object3D* player, bool isLockingOn, engine::Ob
         camera->BlendFovY(bossFraming ? settings_.bossFraming.fov : settings_.guidedFov, .6f);
     camera->SetJumpHeightStabilization(settings_.stabilizeJumpHeight, settings_.jumpHeightAllowance);
     camera->SetVisibilitySettings(settings_.visibility);
-    camera->ConfigureGameplayStyle(settings_.currentMode == Mode::Game ? settings_.gameplayStyle : engine::Camera::GameplayStyle::Free,
+    camera->ConfigureGameplayStyle(settings_.currentMode == Mode::kGame ? settings_.gameplayStyle : engine::Camera::GameplayStyle::kFree,
         // 旋回するボス戦は壁の外へ出さず、既存の衝突回避で手前に寄せる。
-        bossFraming ? engine::Camera::ObstacleResponse::ShortenDistance : settings_.obstacleResponse,
+        bossFraming ? engine::Camera::ObstacleResponse::kShortenDistance : settings_.obstacleResponse,
         settings_.guidedYawLimit, settings_.guidedPitchLimit,
         settings_.guidedReturnResponse, bossFraming ? settings_.bossFraming.fov : settings_.guidedFov);
     camera->ConfigureGuidedFraming(settings_.guidedLookAhead, settings_.guidedDeadZoneWidth,
@@ -150,30 +163,32 @@ void CameraEditor::Update(engine::Object3D* player, bool isLockingOn, engine::Ob
             bossFraming ? engine::Vector3{battle.pitch, settings_.angle.y, 0} : settings_.angle);
     }
 
-    if (settings_.currentMode == Mode::Game && isLockingOn) {
+    // ゲームモードでロックオン中は、オフセットを更新した時点で終了して通常の追従設定が競合するのを避けます。
+    if (settings_.currentMode == Mode::kGame && isLockingOn) {
         // ロックオン中もエディターで調整した視点オフセットだけは即時反映する。
         camera->SetLockOnOffset(settings_.lockOnOffset);
         return;
     }
 
-    if (settings_.currentMode == Mode::Game) {
-        camera->SetFollowMode(camera->IsGuidedGameplay() ? engine::Camera::FollowMode::Aimable : settings_.gameFollowMode);
+    // ゲームモードでは誘導操作なら照準可能な追従にし、それ以外は選択中の追従方式を適用します。
+    if (settings_.currentMode == Mode::kGame) {
+        camera->SetFollowMode(camera->IsGuidedGameplay() ? engine::Camera::FollowMode::kAimable : settings_.gameFollowMode);
         camera->SetLockOnOffset(settings_.lockOnOffset);
         camera->ConfigFixedPoint(settings_.fixedPointPos, settings_.fixedPointAngle);
 
-        if (settings_.gameFollowMode == engine::Camera::FollowMode::Orbit) {
+        // 選択した方式が周回の場合は、半径、高さ、周回速度と中心の補正を適用します。
+        if (settings_.gameFollowMode == engine::Camera::FollowMode::kOrbit) {
             camera->SetOrbitParams(settings_.orbitRadius, settings_.orbitHeight, settings_.orbitSpeed);
             camera->SetOrbitCenterOffset(settings_.orbitCenterOffset);
             camera->SetOrbitCenterHeight(settings_.orbitCenterHeight);
         }
 
+        // 追従するプレイヤーがいる場合は、入力状態に応じてゲームカメラとの設定同期を判断します。
         if (player) {
             camera->SetFollowTarget(player);
             engine::InputManager* input = engine::InputManager::GetInstance();
 
-            // =========================================================
-            // 入力状態のチェック
-            // =========================================================
+            // マウス移動とジャイロの状態を取り出し、手動入力があるか確認します。
             // マウスの移動量チェック
             engine::Vector2 mouseDelta = input->GetMouseMoveDelta();
             bool isMouseMoving = (std::abs(mouseDelta.x) > 0.0f || std::abs(mouseDelta.y) > 0.0f);
@@ -182,24 +197,21 @@ void CameraEditor::Update(engine::Object3D* player, bool isLockingOn, engine::Ob
             engine::Vector3 gyro = input->GetGyroscope();
             bool isGyroActive = (std::abs(gyro.x) > 0.05f || std::abs(gyro.y) > 0.05f || std::abs(gyro.z) > 0.05f);
 
-            // =========================================================
-            // 操作中判定（環境による分岐）
-            // =========================================================
+            // 右ボタン・マウス移動・右スティック・ジャイロのどれかでカメラ操作中とみなします。
             bool isControllingCamera = input->IsMouseButtonPressed(1) || isMouseMoving ||
                 (std::abs(input->GetRightStick().x) > 0.1f) ||
                 (std::abs(input->GetRightStick().y) > 0.1f) ||
                 isGyroActive;
 
-            // =========================================================
-            // カメラの値の反映処理
-            // =========================================================
+            // 誘導操作でなければ、入力中かどうかと追従方式に応じて設定と実カメラの情報を同期します。
             if (camera->IsGuidedGameplay()) {
                 // 自動構図の基準値は上で反映済み。入力はCamera内の補助角度だけに蓄積する。
             }
             else if (isControllingCamera) {
                 // 操作中はカメラの値をEditorへ逆反映し、設定値の上書きは行わない。
-                if (settings_.gameFollowMode == engine::Camera::FollowMode::Aimable ||
-                    settings_.gameFollowMode == engine::Camera::FollowMode::FirstPerson) {
+                // 操作中に照準または一人称モードなら、実カメラのラジアンの角度を度へ直して設定に控えます。
+                if (settings_.gameFollowMode == engine::Camera::FollowMode::kAimable ||
+                    settings_.gameFollowMode == engine::Camera::FollowMode::kFirstPerson) {
 
                     engine::Vector3 currentRot = camera->GetRotation();
                     float toDeg = 180.0f / std::numbers::pi_v<float>;
@@ -211,22 +223,26 @@ void CameraEditor::Update(engine::Object3D* player, bool isLockingOn, engine::Ob
             }
             else {
                 // 操作していない時だけ、モードに必要な設定値をカメラに流し込む
-                if (settings_.gameFollowMode == engine::Camera::FollowMode::Aimable ||
-                    settings_.gameFollowMode == engine::Camera::FollowMode::Fixed ||
-                    settings_.gameFollowMode == engine::Camera::FollowMode::FirstPerson) {
+                // 入力のない間は、照準・固定追従・一人称のいずれかに保存済み設定を適用します。
+                if (settings_.gameFollowMode == engine::Camera::FollowMode::kAimable ||
+                    settings_.gameFollowMode == engine::Camera::FollowMode::kFixed ||
+                    settings_.gameFollowMode == engine::Camera::FollowMode::kFirstPerson) {
                     camera->ConfigAimable(settings_.distance, settings_.height, settings_.angle);
                 }
             }
         }
+        // プレイヤーがいなければ、以前の追従先を残さないよう解除します。
         else {
             camera->SetFollowTarget(nullptr);
         }
 
     }
+    // 編集モードではプレイヤーへの追従を外し、エディターの自由カメラへ切り替えます。
     else {
         camera->SetFollowTarget(nullptr);
-        camera->SetFollowMode(engine::Camera::FollowMode::Aimable);
+        camera->SetFollowMode(engine::Camera::FollowMode::kAimable);
 
+        // 演出などがカメラをオーバーライドしていない場合にだけ、自由操作で姿勢を更新します。
         if (!camera->IsOverridden()) {
             UpdateFreeCamera(camera);
         }
@@ -240,9 +256,7 @@ void CameraEditor::UpdateFreeCamera(engine::Camera* camera) {
     engine::Vector3 eye = camera->GetEye();
     engine::Vector3 rotation = camera->GetRotation();
 
-    // ----------------------------------------------------------
-    // 1. 回転処理 (右クリック中のみ)
-    // ----------------------------------------------------------
+    // マウスの右ボタンを押している間だけ、移動量でピッチとヨーを変えます。
     if (input->IsMouseButtonPressed(1)) { // 1 = Right Click
         engine::Vector2 mouseDelta = input->GetMouseMoveDelta();
 
@@ -250,20 +264,19 @@ void CameraEditor::UpdateFreeCamera(engine::Camera* camera) {
         rotation.y += mouseDelta.x * settings_.mouseSensitivity;
         rotation.x += mouseDelta.y * settings_.mouseSensitivity;
 
-        // ピッチ制限 (真上・真下に行き過ぎないように)
         // マウスで加算する回転はラジアン。上下を制限し、真上や真下をまたいで操作方向が反転するのを避ける。
         const float pitchLimit = 1.5f; // 約85度
+        // ピッチが正方向の上限を超えた場合は上限へ戻します。
         if (rotation.x > pitchLimit)
             rotation.x = pitchLimit;
+        // ピッチが負方向の限界を超えた場合も、限界内に保ちます。
         if (rotation.x < -pitchLimit)
             rotation.x = -pitchLimit;
 
         camera->SetRotation(rotation);
     }
 
-    // ----------------------------------------------------------
-    // 2. カメラの向き(ローカル軸)の計算
-    // ----------------------------------------------------------
+    // 回転後の前・右・上の軸を求め、カメラから見た方向に移動できるようにします。
     engine::Vector3 forward, right, up;
 
     // 前方ベクトル (カメラが向いている方向)
@@ -281,10 +294,8 @@ void CameraEditor::UpdateFreeCamera(engine::Camera* camera) {
     up.y = forward.z * right.x - forward.x * right.z;
     up.z = forward.x * right.y - forward.y * right.x;
 
-    // ----------------------------------------------------------
-    // 3. 移動・ズーム処理
-    // ----------------------------------------------------------
-    engine::Vector3 moveVelocity = engine::Vector3::ZERO;
+    // キーとホイールの入力を、この更新で加える移動量へまとめます。
+    engine::Vector3 moveVelocity = engine::Vector3::kZero;
 
     // GameViewをホバーしているか、右クリック中のみ移動・ズームを許可
     if (isGameViewHovered_ || input->IsMouseButtonPressed(1)) {
@@ -301,6 +312,7 @@ void CameraEditor::UpdateFreeCamera(engine::Camera* camera) {
             moveVelocity.z += forward.z * speed;
         }
 
+        // Sキーを押している間は、視線の逆方向へ移動します。
         if (input->IsKeyPressed(DIK_S)) {
             moveVelocity.x -= forward.x * speed;
             moveVelocity.y -= forward.y * speed;
@@ -314,6 +326,7 @@ void CameraEditor::UpdateFreeCamera(engine::Camera* camera) {
             moveVelocity.z += right.z * speed;
         }
 
+        // Aキーを押している間は、右軸とは逆方向へ平行移動します。
         if (input->IsKeyPressed(DIK_A)) {
             moveVelocity.x -= right.x * speed;
             moveVelocity.y -= right.y * speed;
@@ -325,6 +338,7 @@ void CameraEditor::UpdateFreeCamera(engine::Camera* camera) {
             moveVelocity.y += speed; // Eで上昇
         }
 
+        // Qキーを押している間は、ワールドYの負方向へ下がります。
         if (input->IsKeyPressed(DIK_Q)) {
             moveVelocity.y -= speed; // Qで下降
         }
@@ -332,6 +346,7 @@ void CameraEditor::UpdateFreeCamera(engine::Camera* camera) {
         // ホイール回転: ズーム移動
         float wheelDelta = input->GetMouseWheelDelta();
 
+        // ホイールに入力があれば、符号に応じて視線方向へ近づくか離れます。
         if (wheelDelta != 0.0f) {
             float wheelDir = (wheelDelta > 0.0f) ? 1.0f : -1.0f;
             float zoomSpeed = speed * 3.0f;
@@ -345,6 +360,7 @@ void CameraEditor::UpdateFreeCamera(engine::Camera* camera) {
     // 中クリック (ホイール押し込み) : パン(平行)移動
     // GameViewホバー中、または中クリック押下中のみ許可
     if (isGameViewHovered_ || input->IsMouseButtonPressed(2)) {
+        // 実際に中ボタンを押している場合だけ、マウスの動きを平行移動に変えます。
         if (input->IsMouseButtonPressed(2)) { // 2 = Middle Click
             engine::Vector2 mouseDelta = input->GetMouseMoveDelta();
             float panSpeed = settings_.moveSpeed * 0.1f;
@@ -361,7 +377,6 @@ void CameraEditor::UpdateFreeCamera(engine::Camera* camera) {
         }
     }
 
-    // 座標更新
     // キー・ホイール・パンから合算したこの更新の移動量を直接加える。秒単位の速度として時間差は掛けない。
     eye.x += moveVelocity.x;
     eye.y += moveVelocity.y;
@@ -369,6 +384,7 @@ void CameraEditor::UpdateFreeCamera(engine::Camera* camera) {
 
     camera->SetEye(eye);
 
+    // 保存が抑止されていない場合にだけ、自由カメラの姿勢を保存用設定へコピーします。
     if (!IsEditorStateSaveBlocked()) {
         const bool stateChanged =
             eye.x != settings_.editorCameraPos.x ||
@@ -386,14 +402,13 @@ void CameraEditor::UpdateFreeCamera(engine::Camera* camera) {
             editorStateSaveReadyAt_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
         }
 
+        // 未保存の姿勢があり、変更が止まってから保存期限を迎えたときに書き出します。
         if (editorStateDirty_ && std::chrono::steady_clock::now() >= editorStateSaveReadyAt_) {
             SaveEditorState();
         }
     }
 
-    // ----------------------------------------------------------
-    // 4. ターゲットの更新
-    // ----------------------------------------------------------
+    // 移動後の視点から前方10ワールド単位を、新しい注視点にします。
     engine::Vector3 newTarget;
     newTarget.x = eye.x + forward.x * 10.0f;
     newTarget.y = eye.y + forward.y * 10.0f;
@@ -423,6 +438,7 @@ bool CameraEditor::HasSceneCameraPreviewTarget() const {
 bool CameraEditor::ShouldRenderCameraPreview() const {
     // 表示中でも設定 FPS に達していなければオフスクリーン描画を省く。
 #ifdef USE_IMGUI
+    // ツール設定で通常プレビューが非表示なら、描画テクスチャを更新しません。
     if (!EditorToolSettings::Get().IsVisible("cameraPreview"))
         return false;
 #endif
@@ -434,6 +450,7 @@ bool CameraEditor::ShouldRenderCameraPreview() const {
 bool CameraEditor::ShouldRenderSceneCameraPreview() const {
     // 専用ウィンドウ、対象オブジェクト、更新間隔の三条件を満たした場合だけ描く。
 #ifdef USE_IMGUI
+    // ツール設定でシーンカメラのプレビューが非表示なら、対象を描画しません。
     if (!EditorToolSettings::Get().IsVisible("sceneCameraPreview"))
         return false;
 #endif
@@ -446,10 +463,12 @@ void CameraEditor::NotifyCameraPreviewRendered(bool sceneCameraPreview) {
     // 通常プレビューとシーンカメラプレビューの時刻を別々に記録する。
     const auto now = std::chrono::steady_clock::now();
 
+    // シーンカメラ側が描画された場合、その専用プレビューの最終更新を記録します。
     if (sceneCameraPreview) {
         hasRenderedSceneCameraPreview_ = true;
         lastSceneCameraPreviewRenderTime_ = now;
     }
+    // 通常プレビューの完了時刻はシーンカメラ側とは別に保存します。
     else {
         hasRenderedCameraPreview_ = true;
         lastCameraPreviewRenderTime_ = now;
@@ -464,7 +483,7 @@ bool CameraEditor::IsPreviewUpdateDue(
         return true;
     }
 
-    const int previewFps = std::clamp(settings_.cameraPreviewFps, 1, 60);
+    const std::int32_t previewFps = std::clamp(settings_.cameraPreviewFps, 1, 60);
     const float updateInterval = 1.0f / static_cast<float>(previewFps);
     const std::chrono::duration<float> elapsed = std::chrono::steady_clock::now() - lastRenderTime;
     return elapsed.count() >= updateInterval;
@@ -484,6 +503,7 @@ engine::Camera* CameraEditor::PreparePreviewCamera(float aspectRatio) {
     float nearClip = 0.1f;
     float farClip = 1000.0f;
 
+    // メインカメラがある場合は、その縦画角と前後のクリップ距離で初期値を上書きします。
     if (engine::Camera* mainCamera = CameraManager::GetInstance()->GetMainCamera()) {
         fovY = mainCamera->GetFovY();
         nearClip = mainCamera->GetNearClip();
@@ -498,6 +518,7 @@ engine::Camera* CameraEditor::PrepareCinematicPreviewCamera(float aspectRatio) {
     engine::Vector3 eye{};
     engine::Vector3 target{};
 
+    // 選択中のカメラの姿勢を解決できない場合は、描画用カメラを返しません。
     if (!ResolveCinematicPreviewPose(eye, target)) {
         return nullptr;
     }
@@ -506,12 +527,14 @@ engine::Camera* CameraEditor::PrepareCinematicPreviewCamera(float aspectRatio) {
     float nearClip = 0.1f;
     float farClip = 1000.0f;
 
+    // 選択中のカメラがある場合は、そのシーン設定から投影条件を読みます。
     if (engine::Object3D* selectedCamera = GetSelectedCameraObject()) {
         const SceneCameraSettings& settings = selectedCamera->GetSceneCameraSettings();
         fovY = settings.fovY;
         nearClip = settings.nearClip;
         farClip = settings.farClip;
     }
+    // 選択設定を取得できずメインカメラがあれば、そちらの投影条件を代わりに使います。
     else if (engine::Camera* mainCamera = CameraManager::GetInstance()->GetMainCamera()) {
         fovY = mainCamera->GetFovY();
         nearClip = mainCamera->GetNearClip();
@@ -528,7 +551,8 @@ engine::Camera* CameraEditor::ConfigurePreviewCamera(
     float fovY,
     float nearClip,
     float farClip) {
-    // 本番カメラへの入力と追従を切り、プレビュー用の視点と投影だけを更新する。
+    // 操作と追従を持たないプレビュー専用カメラへ、カットの視点と投影を設定します。
+    // このインスタンスで最初にプレビューを準備する場合だけ、専用カメラを初期化します。
     if (!previewCameraInitialized_) {
         previewCamera_.Initialize();
         previewCameraInitialized_ = true;
@@ -538,7 +562,7 @@ engine::Camera* CameraEditor::ConfigurePreviewCamera(
     const engine::Vector3 rotation = MakeRotationFromForward(forward);
     previewCamera_.SetInputEnabled(false);
     previewCamera_.SetFollowTarget(nullptr);
-    previewCamera_.SetFollowMode(engine::Camera::FollowMode::FixedPoint);
+    previewCamera_.SetFollowMode(engine::Camera::FollowMode::kFixedPoint);
     previewCamera_.ConfigFixedPoint(eye, rotation);
     previewCamera_.SetEye(eye);
     previewCamera_.SetTarget(target);
@@ -551,6 +575,7 @@ engine::Camera* CameraEditor::ConfigurePreviewCamera(
 
 void CameraEditor::ApplyConfiguredCameraPreview(engine::Camera* camera) const {
     // 設定値を渡されたカメラへ反映する際は追従を解除し、固定視点にする。
+    // 反映先のカメラを渡されていなければ操作を変更しません。
     if (!camera) {
         return;
     }
@@ -560,7 +585,7 @@ void CameraEditor::ApplyConfiguredCameraPreview(engine::Camera* camera) const {
     const engine::Vector3 rotation = MakeRotationFromForward(forward);
 
     camera->SetFollowTarget(nullptr);
-    camera->SetFollowMode(engine::Camera::FollowMode::FixedPoint);
+    camera->SetFollowMode(engine::Camera::FollowMode::kFixedPoint);
     camera->ConfigFixedPoint(eye, rotation);
     camera->SetEye(eye);
     camera->SetTarget(eye + forward * 10.0f);
@@ -574,9 +599,11 @@ void CameraEditor::SetMode(Mode mode) {
 
 void CameraEditor::SetEditorStateSaveBlocker(uint32_t blocker, bool enabled) {
     // ブックマーク復元など保存すべきでない操作をビット単位で重ねて抑止する。
+    // 抑止要求を有効にした場合、その理由に対応するビットを加えます。
     if (enabled) {
         editorStateSaveBlockers_ |= blocker;
     }
+    // 抑止解除は指定ビットだけを消し、別の理由による抑止を保持します。
     else {
         editorStateSaveBlockers_ &= ~blocker;
     }
@@ -593,6 +620,7 @@ void CameraEditor::SetEditorCameraTransform(const engine::Vector3& position, con
     settings_.editorCameraPos = position;
     settings_.editorCameraAngle = rotation;
 
+    // 前の姿勢と異なり、状態保存が許可されている場合だけ500ミリ秒後の保存を予約します。
     if (stateChanged && !IsEditorStateSaveBlocked()) {
         editorStateDirty_ = true;
         editorStateSaveReadyAt_ =
@@ -603,6 +631,7 @@ void CameraEditor::SetEditorCameraTransform(const engine::Vector3& position, con
 
     engine::Camera* camera = CameraManager::GetInstance()->GetMainCamera();
 
+    // メインカメラがあれば、保存用の姿勢と同じ位置・回転へ動かします。
     if (camera) {
         camera->SetEye(position);
         camera->SetRotation(rotation);
@@ -612,26 +641,28 @@ void CameraEditor::SetEditorCameraTransform(const engine::Vector3& position, con
         forward.z = std::cos(rotation.y) * std::cos(rotation.x);
         camera->SetTarget(position + forward * 10.0f);
 
-        // ターゲット追従を切らないと動かない場合があるので念のため
+        // 設定した視点を追従で動かされないよう、追従対象を外します。
         camera->SetFollowTarget(nullptr);
     }
 }
 
 bool CameraEditor::FocusSceneObject(engine::Object3D* object) {
     // モデルの外接範囲を基準に画角を決め、表示モデルのない物体は判定範囲を使う。
+    // 配置物が無いか現在のシーンに属さない場合は、フォーカスできません。
     if (!object || !IsObjectInCurrentScene(object)) {
         return false;
     }
 
     object->UpdateWorldMatrix();
 
-    Aabb focusBounds = object->GetModelWorldAabb();
-    const Aabb collisionBounds = object->GetAabb();
+    engine::Aabb focusBounds = object->GetModelWorldAabb();
+    const engine::Aabb collisionBounds = object->GetAabb();
 	if (object->GetModelName().empty() && object->GetCollider() && IsValidFocusBounds(collisionBounds)) {
         // 見た目を持たない当たり判定Objectは、実際の判定範囲を画角の基準にします。
         focusBounds = collisionBounds;
     }
 
+    // モデルまたは当たり判定から有効な範囲を得られなければ、中心と距離を求められません。
     if (!IsValidFocusBounds(focusBounds)) {
         return false;
     }
@@ -663,11 +694,12 @@ bool CameraEditor::FocusSceneObject(engine::Object3D* object) {
 
     settings_.editorCameraPos = focusEye;
     settings_.editorCameraAngle = rotation;
-    SetMode(Mode::Editor);
+    SetMode(Mode::kEditor);
     SetEditorCameraTransform(focusEye, rotation);
 
     engine::Camera* camera = CameraManager::GetInstance()->GetMainCamera();
 
+    // メインカメラを取得できたら、設定した編集姿勢の注視点を境界の中心へ合わせます。
     if (camera) {
         camera->SetTarget(focusTarget);
         camera->Update();
@@ -682,6 +714,7 @@ bool CameraEditor::FocusSelectedCameraObject() {
     engine::Vector3 eye{};
     engine::Vector3 target{};
 
+    // 選択が無いかカメラの視点・注視点を解決できなければ、フォーカスを開始しません。
     if (!cameraObject || !ResolveSceneCameraPose(cameraObject, eye, target)) {
         return false;
     }
@@ -698,11 +731,12 @@ bool CameraEditor::FocusSelectedCameraObject() {
     // Camera Object本体を確認できるように、実カメラ位置より少し後ろ上へ寄せる。
     settings_.editorCameraPos = focusEye;
     settings_.editorCameraAngle = rotation;
-    SetMode(Mode::Editor);
+    SetMode(Mode::kEditor);
     SetEditorCameraTransform(focusEye, rotation);
 
     engine::Camera* camera = CameraManager::GetInstance()->GetMainCamera();
 
+    // メインカメラが有効なら、模型を捉える注視点へ合わせて行列を更新します。
     if (camera) {
         camera->SetTarget(focusTarget);
         camera->Update();
@@ -723,6 +757,7 @@ void CameraEditor::ApplyOrbitStartAngle(engine::Camera* camera, bool resetSmooth
     camera->SetOrbitParams(settings_.orbitRadius, settings_.orbitHeight, settings_.orbitSpeed);
     camera->SetOrbitAngle(angle);
 
+    // 開始角へ旧姿勢の補間を持ち越したくない場合は、追従補間をリセットします。
     if (resetSmoothing) {
         camera->ResetFollowSmoothing();
     }
@@ -737,10 +772,12 @@ void CameraEditor::CaptureOrbitStartFromCurrentCamera(engine::Camera* camera) {
     const engine::Vector3 diff = camera->GetEye() - center;
     const float horizontalDistance = std::sqrt(diff.x * diff.x + diff.z * diff.z);
 
+    // 中心から十分な水平差がある場合だけ、水平距離と開始角を求めます。
     if (horizontalDistance > 0.001f) {
         settings_.orbitRadius = (horizontalDistance < 1.0f) ? 1.0f : horizontalDistance;
         settings_.orbitStartAngleDeg = RadToDeg(std::atan2(diff.z, diff.x));
     }
+    // 中心とほぼ重なる場合は開始角を維持し、周回半径だけを1単位にします。
     else {
         settings_.orbitRadius = 1.0f;
     }
@@ -769,6 +806,7 @@ void CameraEditor::SetOrbitStartFromWorld(const engine::Vector3& startEye) {
     const engine::Vector3 diff = startEye - center;
     const float horizontalDistance = std::sqrt(diff.x * diff.x + diff.z * diff.z);
 
+    // 開始視点が周回中心から水平方向に離れている場合にだけ、半径と角度を上書きします。
     if (horizontalDistance > 0.001f) {
         settings_.orbitRadius = (horizontalDistance < 1.0f) ? 1.0f : horizontalDistance;
         settings_.orbitStartAngleDeg = RadToDeg(std::atan2(diff.z, diff.x));
@@ -778,7 +816,7 @@ void CameraEditor::SetOrbitStartFromWorld(const engine::Vector3& startEye) {
 }
 
 engine::Vector3 CameraEditor::GetOrbitCenter() const {
-    // プレイヤーがある場合だけ追従中心を使い、編集画面では固定点に戻す。
+    // プレイヤーがいる場合は、その座標に高さとオフセットを加えた点を周回中心にします。
     if (targetPlayer_) {
         engine::Vector3 center = targetPlayer_->GetWorldPosition();
         center.x += settings_.orbitCenterOffset.x;
@@ -803,17 +841,20 @@ engine::Vector3 CameraEditor::GetOrbitStartEye() const {
 
 engine::Vector3 CameraEditor::GetConfiguredCameraEye() const {
     // 固定・周回・追従で視点の算出方法が異なり、対象不在時は現在視点を維持する。
-    if (settings_.gameFollowMode == engine::Camera::FollowMode::FixedPoint) {
+    // 固定点方式では、設定したワールド位置をそのまま視点にします。
+    if (settings_.gameFollowMode == engine::Camera::FollowMode::kFixedPoint) {
         return settings_.fixedPointPos;
     }
 
-    if (settings_.gameFollowMode == engine::Camera::FollowMode::Orbit) {
+    // 周回方式では、設定した開始角から復元した周回の始点を視点にします。
+    if (settings_.gameFollowMode == engine::Camera::FollowMode::kOrbit) {
         return GetOrbitStartEye();
     }
 
     engine::Camera* camera = CameraManager::GetInstance()->GetMainCamera();
     const engine::Vector3 fallback = camera ? camera->GetEye() : settings_.fixedPointPos;
 
+    // プレイヤーが見つからない追従方式では、メインカメラの現在視点か固定点を返します。
     if (!targetPlayer_) {
         return fallback;
     }
@@ -826,11 +867,13 @@ engine::Vector3 CameraEditor::GetConfiguredCameraEye() const {
 
 engine::Vector3 CameraEditor::GetConfiguredCameraForward() const {
     // 固定・周回・通常追従の各設定からプレビュー用の前方を揃えて返す。
-    if (settings_.gameFollowMode == engine::Camera::FollowMode::FixedPoint) {
+    // 固定点方式は、保存した固定角の前方を使います。
+    if (settings_.gameFollowMode == engine::Camera::FollowMode::kFixedPoint) {
         return NormalizeSafe(CalculateEditorForward(settings_.fixedPointAngle), { 0.0f, 0.0f, 1.0f });
     }
 
-    if (settings_.gameFollowMode == engine::Camera::FollowMode::Orbit) {
+    // 周回方式は、周回開始点から中心への向きを使います。
+    if (settings_.gameFollowMode == engine::Camera::FollowMode::kOrbit) {
         return NormalizeSafe(GetOrbitCenter() - GetOrbitStartEye(), { 0.0f, 0.0f, 1.0f });
     }
 
@@ -845,7 +888,7 @@ engine::Vector3 CameraEditor::GetConfiguredCameraForward() const {
 
 engine::Vector3 CameraEditor::GetPreviewCameraEye() const {
     // ゲーム実行中はエディター自由カメラを映し、編集時はゲームカメラ設定を映す。
-    if (settings_.currentMode == Mode::Game) {
+    if (settings_.currentMode == Mode::kGame) {
         return settings_.editorCameraPos;
     }
 
@@ -854,7 +897,7 @@ engine::Vector3 CameraEditor::GetPreviewCameraEye() const {
 
 engine::Vector3 CameraEditor::GetPreviewCameraForward() const {
     // 視点と同じモード切り替えで向きを選び、混在したプレビューを防ぐ。
-    if (settings_.currentMode == Mode::Game) {
+    if (settings_.currentMode == Mode::kGame) {
         return NormalizeSafe(CalculateEditorForward(settings_.editorCameraAngle), { 0.0f, 0.0f, 1.0f });
     }
 
@@ -863,22 +906,25 @@ engine::Vector3 CameraEditor::GetPreviewCameraForward() const {
 
 const char* CameraEditor::GetPreviewCameraLabel() const {
     // 現在の操作モードとプレビュー側の視点名を対応させる。
-    return settings_.currentMode == Mode::Game ? "自由カメラ" : "ゲームカメラ";
+    return settings_.currentMode == Mode::kGame ? "自由カメラ" : "ゲームカメラ";
 }
 
 engine::Object3D* CameraEditor::FindSceneObjectByName(const std::string& name) const {
     // 保存済みの名前から現シーンの実体を探し、シーン切り替え後の古いポインタを使わない。
+    // 名前が空欄なら、同名の対象を探しません。
     if (name.empty()) {
         return nullptr;
     }
 
     BaseScene* scene = GetCurrentScene();
 
+    // 現シーンが取得できなければ、探索する配置一覧がありません。
     if (!scene) {
         return nullptr;
     }
 
     for (const auto& object : scene->GetObjects()) {
+        // 有効な配置物の名前が一致した時点で、その実体を返します。
         if (object && object->GetName() == name) {
             return object.get();
         }
@@ -894,6 +940,7 @@ void CameraEditor::SetSelectedCameraObject(engine::Object3D* cameraObject) {
         IsObjectInCurrentScene(cameraObject)
         ? cameraObject
         : nullptr;
+    // 選択先が実際に変わった場合にだけ、別のカメラ用描画をやり直します。
     if (selectedCameraObject_ != newSelection) {
         selectedCameraObject_ = newSelection;
         hasRenderedSceneCameraPreview_ = false;
@@ -918,6 +965,7 @@ engine::Camera::CameraOverrideParams CameraEditor::MakeRuntimeOverrideParams(con
     // 編集用設定を Camera の実行用形式へ変換し、追従対象の名前を現シーンで解決する。
     engine::Camera::CameraOverrideParams runtime;
 
+    // カメラオブジェクトを指定されなければ、既定のオーバーライド値を返します。
     if (!cameraObject) {
         return runtime;
     }
@@ -926,14 +974,16 @@ engine::Camera::CameraOverrideParams CameraEditor::MakeRuntimeOverrideParams(con
     runtime.duration = settings.blendInDuration;
     runtime.exitDuration = settings.blendOutDuration;
     runtime.easing = static_cast<engine::Camera::OverrideEasing>(settings.easing);
-    runtime.eyeSource = engine::Camera::OverrideEyeSource::SceneObject;
+    runtime.eyeSource = engine::Camera::OverrideEyeSource::kSceneObject;
 
-    if (settings.eyeSource != SceneCameraEyeSource::CameraObject) {
+    // カメラ自身以外が視点なら、シーン内の実体を後で解決できるように名前を控えます。
+    if (settings.eyeSource != SceneCameraEyeSource::kCameraObject) {
         runtime.eyeObjectName = settings.eyeObjectName;
     }
 
-    if (settings.eyeSource == SceneCameraEyeSource::SceneObjectRelativeToReference) {
-        runtime.eyeSource = engine::Camera::OverrideEyeSource::SceneObjectRelativeToReference;
+    // 別のオブジェクトとの相対位置を使う方式には、方向基準の参照名も渡します。
+    if (settings.eyeSource == SceneCameraEyeSource::kSceneObjectRelativeToReference) {
+        runtime.eyeSource = engine::Camera::OverrideEyeSource::kSceneObjectRelativeToReference;
         runtime.eyeReferenceObjectName = settings.eyeReferenceObjectName;
     }
 
@@ -942,23 +992,26 @@ engine::Camera::CameraOverrideParams CameraEditor::MakeRuntimeOverrideParams(con
     runtime.eyeFollowResponse = settings.eyeFollowResponse;
 
     switch (settings.targetMode) {
-    case SceneCameraTargetMode::FixedPoint:
-        runtime.targetSource = engine::Camera::OverrideTargetSource::Fixed;
+    case SceneCameraTargetMode::kFixedPoint:
+        // 固定点を見続ける方式では、ワールド座標を使い各軸の追従を解除します。
+        runtime.targetSource = engine::Camera::OverrideTargetSource::kFixed;
         runtime.fixedTargetPos = settings.fixedTarget;
         runtime.trackTargetX = false;
         runtime.trackTargetY = false;
         runtime.trackTargetZ = false;
         break;
 
-    case SceneCameraTargetMode::SceneObject:
-        runtime.targetSource = engine::Camera::OverrideTargetSource::SceneObject;
+    case SceneCameraTargetMode::kSceneObject:
+        // 対象を追う方式では、名前で調べるオブジェクトと位置の差を渡します。
+        runtime.targetSource = engine::Camera::OverrideTargetSource::kSceneObject;
         runtime.targetObjectName = settings.targetObjectName;
         runtime.targetObjectOffset = settings.targetOffset;
         break;
 
-    case SceneCameraTargetMode::CameraForward:
+    case SceneCameraTargetMode::kCameraForward:
     default:
-        runtime.targetSource = engine::Camera::OverrideTargetSource::EyeObjectForward;
+        // カメラの前方を見る方式では、視点から進む距離と加算する位置の差を渡します。
+        runtime.targetSource = engine::Camera::OverrideTargetSource::kEyeObjectForward;
         runtime.eyeForwardDistance = settings.forwardDistance;
         runtime.targetObjectOffset = settings.targetOffset;
         break;
@@ -969,7 +1022,8 @@ engine::Camera::CameraOverrideParams CameraEditor::MakeRuntimeOverrideParams(con
     // 名前指定の視点・基準・注視先は保存済みOverrideと同じ手順で解決する。
     // Camera自身が視点なら空名を渡し、同名Objectに差し替わらないようにする。
     runtime = MakeRuntimeOverrideParams(runtime, const_cast<engine::Object3D*>(cameraObject));
-    if (settings.eyeSource == SceneCameraEyeSource::CameraObject) {
+    // カメラ自身が視点の場合は実体を確定した後で、設定の表示に使う名前を補います。
+    if (settings.eyeSource == SceneCameraEyeSource::kCameraObject) {
         runtime.eyeObjectName = cameraObject->GetName();
     }
     return runtime;
@@ -984,20 +1038,24 @@ engine::Camera::CameraOverrideParams CameraEditor::MakeRuntimeOverrideParams(
     runtime.eyeReferenceObject = nullptr;
     runtime.targetFollowObject = nullptr;
 
-    if (runtime.eyeSource == engine::Camera::OverrideEyeSource::SceneObject ||
-        runtime.eyeSource == engine::Camera::OverrideEyeSource::SceneObjectRelativeToReference) {
+    // シーンのオブジェクトを視点にする設定では、古い参照の代わりに現在のシーンから探します。
+    if (runtime.eyeSource == engine::Camera::OverrideEyeSource::kSceneObject ||
+        runtime.eyeSource == engine::Camera::OverrideEyeSource::kSceneObjectRelativeToReference) {
         runtime.eyeObject = FindSceneObjectByName(runtime.eyeObjectName);
 
+        // 視点用の名前を解決できなければ、呼び出し側が用意した実体を使います。
         if (!runtime.eyeObject) {
             runtime.eyeObject = fallbackEyeObject;
         }
     }
 
-    if (runtime.eyeSource == engine::Camera::OverrideEyeSource::SceneObjectRelativeToReference) {
+    // 相対視点では、視点の実体に加えて方向基準の実体も名前で解決します。
+    if (runtime.eyeSource == engine::Camera::OverrideEyeSource::kSceneObjectRelativeToReference) {
         runtime.eyeReferenceObject = FindSceneObjectByName(runtime.eyeReferenceObjectName);
     }
 
-    if (runtime.targetSource == engine::Camera::OverrideTargetSource::SceneObject) {
+    // 注視先がオブジェクト方式であれば、現在のシーンで参照し直します。
+    if (runtime.targetSource == engine::Camera::OverrideTargetSource::kSceneObject) {
         runtime.targetFollowObject = FindSceneObjectByName(runtime.targetObjectName);
     }
 
@@ -1008,11 +1066,13 @@ engine::Vector3 CameraEditor::ResolveOverrideEye(const engine::Camera::CameraOve
     // 動的な視点対象が見つからなければ保存された固定座標を使う。
     const engine::Camera::CameraOverrideParams runtime = MakeRuntimeOverrideParams(params);
 
-    if (runtime.eyeSource == engine::Camera::OverrideEyeSource::SceneObjectRelativeToReference &&
+    // 相対方式で視点と方向基準がそろっている場合に、実行時と同じ相対視点を求めます。
+    if (runtime.eyeSource == engine::Camera::OverrideEyeSource::kSceneObjectRelativeToReference &&
         runtime.eyeObject && runtime.eyeReferenceObject) {
         return engine::Camera::ResolveRelativeEye(*runtime.eyeObject, *runtime.eyeReferenceObject, runtime.eyeObjectOffset);
     }
-    if (runtime.eyeSource == engine::Camera::OverrideEyeSource::SceneObject && runtime.eyeObject) {
+    // 直接追従の視点方式で実体があれば、そのワールド位置へオフセットを加えます。
+    if (runtime.eyeSource == engine::Camera::OverrideEyeSource::kSceneObject && runtime.eyeObject) {
         return runtime.eyeObject->GetWorldPosition() + runtime.eyeObjectOffset;
     }
 
@@ -1023,11 +1083,13 @@ engine::Vector3 CameraEditor::ResolveOverrideTarget(const engine::Camera::Camera
     // ターゲットの種類に応じて追従対象・視点前方・固定点を選ぶ。
     const engine::Camera::CameraOverrideParams runtime = MakeRuntimeOverrideParams(params);
 
-    if (runtime.targetSource == engine::Camera::OverrideTargetSource::SceneObject && runtime.targetFollowObject) {
+    // 注視対象がシーンの実体として見つかった場合は、ワールド位置にオフセットを加えます。
+    if (runtime.targetSource == engine::Camera::OverrideTargetSource::kSceneObject && runtime.targetFollowObject) {
         return runtime.targetFollowObject->GetWorldPosition() + runtime.targetObjectOffset;
     }
 
-    if (runtime.targetSource == engine::Camera::OverrideTargetSource::EyeObjectForward && runtime.eyeObject) {
+    // 視点オブジェクトの前方を使う方式で視点が見つかれば、その前方に注視点を作ります。
+    if (runtime.targetSource == engine::Camera::OverrideTargetSource::kEyeObjectForward && runtime.eyeObject) {
         const engine::Vector3 eye = runtime.eyeObject->GetWorldPosition() + runtime.eyeObjectOffset;
         return eye
             + GetObjectWorldForward(runtime.eyeObject) * (std::max)(runtime.eyeForwardDistance, 0.01f)
@@ -1048,6 +1110,7 @@ engine::Vector3 CameraEditor::GetConfiguredCameraRight(const engine::Vector3& fo
     const engine::Vector3 worldUp = { 0.0f, 1.0f, 0.0f };
     engine::Vector3 right = Cross(worldUp, forward);
 
+    // 前方がワールドの上方向とほぼ平行で右の外積がゼロに近い場合、X軸を右方向の代替にします。
     if (Length(right) < 0.0001f) {
         right = { 1.0f, 0.0f, 0.0f };
     }
@@ -1066,6 +1129,7 @@ engine::Matrix4x4 CameraEditor::MakeLineBoxMatrix(const engine::Vector3& start, 
     engine::Vector3 diff = end - start;
     float length = Length(diff);
 
+    // 始点と終点がほぼ同じでも描画箱がつぶれないよう、長さを最小値にします。
     if (length < 0.001f) {
         length = 0.001f;
     }
@@ -1082,12 +1146,14 @@ engine::Matrix4x4 CameraEditor::MakeLineBoxMatrix(const engine::Vector3& start, 
 }
 
 bool CameraEditor::PlayOverrideCamera(engine::Camera* camera, const std::string& cameraName) {
+    // 再生先のカメラが無ければ、オーバーライドを開始しません。
     if (!camera)
         return false;
 
     // 登録されているカメラ名を探す
     auto it = overrideParamsMap_.find(cameraName);
 
+    // 指定名が登録されている場合に、現在のシーンで参照を解決して再生します。
     if (it != overrideParamsMap_.end()) {
         // Object参照はシーン切替で無効になるため、再生開始時に名前から解決します。
         camera->StartOverride(MakeRuntimeOverrideParams(it->second));
@@ -1102,23 +1168,27 @@ bool CameraEditor::PlayOverrideCamera(engine::Camera* camera, const std::string&
 bool CameraEditor::ValidateSceneObjectCamera(const engine::Object3D* cameraObject, std::string& issue) const {
     // 検証は配置や視点を変えない。現在の取得方式で必要な参照だけを照合し、最初の問題を issue に返す。
     issue.clear();
+    // 参照が無い、カメラ型でない、または設定が無効なら、必要な視点を検証できません。
     if (!cameraObject || !cameraObject->IsCameraObject() || !cameraObject->GetSceneCameraSettings().enabled) {
         issue = "有効なCamera Objectがありません。";
         return false;
     }
 
     const SceneCameraSettings& settings = cameraObject->GetSceneCameraSettings();
-    if (settings.eyeSource != SceneCameraEyeSource::CameraObject &&
+    // 外部オブジェクトを視点にする方式でその実体が無ければ、まず視点の不足を返します。
+    if (settings.eyeSource != SceneCameraEyeSource::kCameraObject &&
         !FindSceneObjectByName(settings.eyeObjectName)) {
         issue = "Eyeの参照Objectが見つかりません: " + settings.eyeObjectName;
         return false;
     }
-    if (settings.eyeSource == SceneCameraEyeSource::SceneObjectRelativeToReference &&
+    // 相対視点方式で方向基準が見つからなければ、その参照名をエラーに示します。
+    if (settings.eyeSource == SceneCameraEyeSource::kSceneObjectRelativeToReference &&
         !FindSceneObjectByName(settings.eyeReferenceObjectName)) {
         issue = "Eye方向の参照Objectが見つかりません: " + settings.eyeReferenceObjectName;
         return false;
     }
-    if (settings.targetMode == SceneCameraTargetMode::SceneObject &&
+    // オブジェクトに注視を設定した方式では、対象を解決できる場合だけ有効です。
+    if (settings.targetMode == SceneCameraTargetMode::kSceneObject &&
         !FindSceneObjectByName(settings.targetObjectName)) {
         issue = "注視対象Objectが見つかりません: " + settings.targetObjectName;
         return false;
@@ -1138,7 +1208,7 @@ bool CameraEditor::PlaySceneObjectCamera(engine::Camera* camera, engine::Object3
         cameraObject,
         settings.blendInDuration,
         settings.blendOutDuration,
-        static_cast<int>(settings.easing));
+        static_cast<std::int32_t>(settings.easing));
 }
 
 bool CameraEditor::PlaySceneObjectCamera(
@@ -1146,15 +1216,17 @@ bool CameraEditor::PlaySceneObjectCamera(
     engine::Object3D* cameraObject,
     float blendInDuration,
     float blendOutDuration,
-    int easing) {
+    std::int32_t easing) {
     // 投影行列はオーバーライド外のため、切り替え前に退避して終了時に戻す。
     std::string issue;
+    // 反映するカメラが無いかScene Cameraの必須参照が欠けていれば、開始を拒否します。
     if (!camera || !ValidateSceneObjectCamera(cameraObject, issue)) {
         return false;
     }
 
     const SceneCameraSettings& settings = cameraObject->GetSceneCameraSettings();
 
+    // 設定が無効の場合は、そのカットの投影と視点を適用しません。
     if (!settings.enabled) {
         return false;
     }
@@ -1176,8 +1248,10 @@ bool CameraEditor::PlaySceneObjectCamera(
         hasSceneCameraProjectionBackup_ = true;
     }
 
+    // 画角補間が指定されている場合に、ブレンドインと同じ秒数と曲線で画角を変えます。
     if (settings.blendFov) {
         camera->BlendFovY(settings.fovY, runtime.duration, runtime.easing);
+    // 画角補間を指定していない場合は、カットの画角を即時に反映します。
     } else {
         camera->SetFovY(settings.fovY);
     }
@@ -1201,9 +1275,12 @@ void CameraEditor::StopSceneObjectCamera(engine::Camera* camera, bool switchingT
         return;
     }
 
+    // 演出開始前の投影を保存済みの場合だけ、画角とクリップ範囲を復元します。
     if (hasSceneCameraProjectionBackup_) {
+        // カットの画角を補間していた場合は、終了までの時間で元の画角へ戻します。
         if (activeSceneCameraBlendFov_) {
             camera->BlendFovY(sceneCameraBackupFovY_, activeSceneCameraExitDuration_);
+        // 補間を使わなかった場合は、保存した画角を即時に戻します。
         } else {
             camera->SetFovY(sceneCameraBackupFovY_);
         }

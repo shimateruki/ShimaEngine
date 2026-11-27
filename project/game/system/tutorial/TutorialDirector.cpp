@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include <cstdint>
 #include "game/system/tutorial/TutorialDirector.h"
 
 #include "BaseScene.h"
@@ -35,7 +36,6 @@ constexpr float kPromptFadeResponse = 9.0f;
 constexpr float kObjectiveFadeResponse = 10.0f;
 constexpr float kObjectiveScreenMargin = 54.0f;
 
-// チュートリアルの移動距離は段差を無視したXZ平面で測ります。
 float HorizontalDistance(const engine::Vector3& a, const engine::Vector3& b) {
     // 移動課題の進捗には段差の高さを含めず、地面上の距離を使う。
     const float dx = a.x - b.x;
@@ -44,20 +44,21 @@ float HorizontalDistance(const engine::Vector3& a, const engine::Vector3& b) {
 }
 
 void SetFullTextureRect(engine::Sprite* sprite, const std::string& texturePath, const engine::Vector2& maxSize) {
-    // 案内画像を差し替える際に前のUVを残さず、枠内へ縦横比を保って収める。
+    // Spriteと画像パスが揃う場合、画像全体を使い枠内に縦横比を保って収める。maxSizeは画面ピクセル。
     if (!sprite || texturePath.empty()) {
         return;
     }
 
     const uint32_t handle = engine::Sprite::LoadTexture(texturePath);
 
+    // 画像を取得できない場合は手元のUVとサイズを維持する。
     if (handle == 0) {
         return;
     }
 
     sprite->SetTextureHandle(handle);
     sprite->SetTextureName(texturePath);
-    const auto& metadata = TextureManager::GetInstance()->GetMetadata(handle);
+    const auto& metadata = engine::TextureManager::GetInstance()->GetMetadata(handle);
     sprite->SetTextureRect({0.0f, 0.0f}, {static_cast<float>(metadata.width), static_cast<float>(metadata.height)});
 
     const float textureWidth = static_cast<float>((std::max)(metadata.width, size_t{1}));
@@ -69,6 +70,7 @@ void SetFullTextureRect(engine::Sprite* sprite, const std::string& texturePath, 
 
 // チュートリアルのJSON手順を実行します。表示、課題判定、敵の有効化をステップ遷移に合わせて同期します。
 
+// シーン・Player・入力を借用し、手順と表示を準備できた場合にtrueを返す。過去の実行状態は先に終了する。
 bool TutorialDirector::Initialize(BaseScene* scene, Player* player, engine::InputManager* inputManager,
                                   const std::string& flowPath) {
     Finalize();
@@ -77,6 +79,7 @@ bool TutorialDirector::Initialize(BaseScene* scene, Player* player, engine::Inpu
     inputManager_ = inputManager;
     flowPath_ = flowPath;
 
+    // 依存する参照が欠けているか、手順を読み込めない場合は準備を中止する。
     if (!scene_ || !player_ || !inputManager_ || !LoadFlow(flowPath_)) {
         DebugConsole::GetInstance()->AddLog(std::string("[Tutorial] Flowの初期化に失敗しました: ") + flowPath_);
         return false;
@@ -91,6 +94,7 @@ bool TutorialDirector::Initialize(BaseScene* scene, Player* player, engine::Inpu
     for (const std::string& objectName : spawnEnemyObjectNames_) {
         auto* enemy = dynamic_cast<BaseEnemy*>(FindObjectByName(objectName));
 
+        // 名前で見つからないか敵型ではない対象は登録せず、名前をログに残す。
         if (!enemy) {
             DebugConsole::GetInstance()->AddLog("[Tutorial] Spawn enemy not found: " + objectName);
             continue;
@@ -102,19 +106,21 @@ bool TutorialDirector::Initialize(BaseScene* scene, Player* player, engine::Inpu
         slot.initialCustomState = enemy->CaptureReplayState().custom;
         slot.initialPosition = enemy->GetTranslate();
 
-        // 非表示中に保存された敵は衝突設定が0になるため、出現時の通常設定を保持します。
-        slot.collisionAttribute = enemy->GetCollisionAttribute() != 0 ? enemy->GetCollisionAttribute() : CollisionCategories::Get("enemy");
+        // 衝突属性とマスクは配置値を利用する。値が0なら、出現時に使う既定の敵カテゴリと対象を補う。
+        slot.collisionAttribute = enemy->GetCollisionAttribute() != 0 ? enemy->GetCollisionAttribute() : engine::collisionCategories::Get("enemy");
         slot.collisionMask = enemy->GetCollisionMask() != 0
                                  ? enemy->GetCollisionMask()
-                                 : (CollisionCategories::Get("player") | CollisionCategories::Get("ground") | CollisionCategories::Get("player_bullet") | CollisionCategories::Get("player_attack"));
+                                 : (engine::collisionCategories::Get("player") | engine::collisionCategories::Get("ground") | engine::collisionCategories::Get("player_bullet") | engine::collisionCategories::Get("player_attack"));
         const auto hpOverride = spawnEnemyMaxHpOverrides_.find(objectName);
 
+        // 名前に対応するHPの上書きがあれば、再出現後にも適用できるよう控える。
         if (hpOverride != spawnEnemyMaxHpOverrides_.end()) {
             slot.maxHpOverride = hpOverride->second;
         }
 
         const auto detectionOverride = spawnEnemyDetectionRangeOverrides_.find(objectName);
 
+        // 同じ名前に検知距離の指定があれば、配置値と別に控える。
         if (detectionOverride != spawnEnemyDetectionRangeOverrides_.end()) {
             slot.detectionRangeOverride = detectionOverride->second;
         }
@@ -138,6 +144,7 @@ void TutorialDirector::Finalize() {
         EndStepCinematic(true);
     }
 
+    // Playerへの参照が残る場合は、練習用に制限した投擲・吸収を通常の許可状態へ戻す。
     if (player_) {
         player_->SetTutorialCarryActionPermissions(true, true);
     }
@@ -186,7 +193,7 @@ void TutorialDirector::Finalize() {
 
 // Play中の手順、案内表示と演出を進め、条件達成後も最短表示時間と待機時間を満たしてから次へ進みます。
 void TutorialDirector::Update(float deltaTime) {
-    // 開始や継続に必要な条件が揃わない間は、進行を止めて案内表示だけを更新する。
+    // 読込前、完了後、またはPlayer不在なら、手順を進めず残った画面表示だけを更新する。
     if (!loaded_ || completed_ || !player_) {
         UpdatePrompt(deltaTime);
         UpdateObjectiveMarker(deltaTime);
@@ -203,7 +210,8 @@ void TutorialDirector::Update(float deltaTime) {
     // Play開始まで敵を出さず、最初の有効な更新でステップ0へ入ります。
     BeginFlowIfNeeded();
 
-    if (currentStepIndex_ < 0 || currentStepIndex_ >= static_cast<int>(steps_.size())) {
+    // 現在の番号が手順配列の外なら、そのフレームでは条件を評価しない。
+    if (currentStepIndex_ < 0 || currentStepIndex_ >= static_cast<std::int32_t>(steps_.size())) {
         return;
     }
 
@@ -227,6 +235,7 @@ void TutorialDirector::Update(float deltaTime) {
     // 運搬対象の取り違えを先に回復し、そのフレームは達成判定へ進めません。
     const Step& step = steps_[static_cast<size_t>(currentStepIndex_)];
 
+    // 時間が進んでいる間は練習敵の消失から復旧する。運搬の誤操作から復旧したフレームも進行判定を見送る。
     if ((deltaTime > 0.0f && RecoverMissingPracticeEnemy(step)) || RecoverFromWrongCarriedAction(step)) {
         return;
     }
@@ -243,6 +252,7 @@ void TutorialDirector::Update(float deltaTime) {
         conditionSatisfiedTimer_ += (std::max)(0.0f, deltaTime);
     }
 
+    // 達成済みで、手順の最低表示時間と達成後の待ち時間の両方を経過したら次へ進む。
     if (stepConditionSatisfied_ && stepTimer_ >= step.minimumDisplayTime &&
         conditionSatisfiedTimer_ >= step.completionDelay) {
         AdvanceStep();
@@ -263,13 +273,14 @@ const std::string& TutorialDirector::GetCurrentStepId() const {
     // 開始前・完了後にも参照可能な固定IDを返す。
     static const std::string kNone = "none";
 
-    if (currentStepIndex_ < 0 || currentStepIndex_ >= static_cast<int>(steps_.size())) {
+    if (currentStepIndex_ < 0 || currentStepIndex_ >= static_cast<std::int32_t>(steps_.size())) {
         return kNone;
     }
 
     return steps_[static_cast<size_t>(currentStepIndex_)].id;
 }
 
+// 出口へ向かう課題の進行中だけ、解放済みで入場演出のないゲートを方向表示の対象として借用する。
 engine::Object3D* TutorialDirector::GetDirectionGuideTarget() const {
     if (!loaded_ || completed_ || cinematicActive_ || stepConditionSatisfied_ ||
         GetCurrentStepId() != "reach_exit_gate")
@@ -287,6 +298,7 @@ void TutorialDirector::CaptureReplayState(json& state) const {
         return std::string{};
     };
 
+    // 出現状態が有効の練習敵だけ、名前を記録する。
     json activeEnemies = json::array();
     for (const auto& slot : spawnEnemies_) if (slot.active) activeEnemies.push_back(slot.objectName);
     state = {{"currentStepIndex", currentStepIndex_},
@@ -312,7 +324,9 @@ void TutorialDirector::CaptureReplayState(json& state) const {
              {"objectiveRequestedVisible", objectiveRequestedVisible_}};
 }
 
+// 手順の状態を復元し、有効な手順と記録が揃う場合だけ編集前後の参照と表示を組み直す。
 void TutorialDirector::RestoreReplayState(const json& state) {
+    // 復元先の手順設定が未読込か記録がオブジェクトでなければ、現在値を保持する。
     if (!loaded_ || !state.is_object()) {
         return;
     }
@@ -321,16 +335,18 @@ void TutorialDirector::RestoreReplayState(const json& state) {
     cinematicPlayer_.Stop(false);
     cinematicActive_ = false;
 
+    // Playerがまだ演出で拘束されている場合は、以前の再生の操作ロックも解除する。
     if (player_ && player_->IsCinematicLocked()) {
         player_->EndCinematicLock(true);
     }
 
     // 手順番号を有効範囲へ収め、開始前と完了後も区別したまま経過時間を読み戻します。
-    const int maxStepIndex = static_cast<int>(steps_.size());
+    const std::int32_t maxStepIndex = static_cast<std::int32_t>(steps_.size());
     currentStepIndex_ = (std::clamp)(state.value("currentStepIndex", -1), -1, maxStepIndex);
     stepTimer_ = (std::max)(0.0f, state.value("stepTimer", 0.0f));
     conditionSatisfiedTimer_ = (std::max)(0.0f, state.value("conditionSatisfiedTimer", 0.0f));
 
+    // 開始位置を記録した項目がある場合だけ、座標を復元する。
     if (const auto found = state.find("stepStartPosition"); found != state.end()) {
         ReadVector3(*found, stepStartPosition_);
     }
@@ -361,6 +377,7 @@ void TutorialDirector::RestoreReplayState(const json& state) {
     objectiveAnimationTime_ = (std::max)(0.0f, state.value("objectiveAnimationTime", 0.0f));
     objectiveRequestedVisible_ = state.value("objectiveRequestedVisible", false);
 
+    // 目標名の配列は既存の表示枠の数まで読み、文字列の要素だけを上書きする。
     if (const auto found = state.find("objectiveTargetNames"); found != state.end() && found->is_array()) {
         for (size_t index = 0; index < objectiveTargetNames_.size() && index < found->size(); ++index) {
             if ((*found)[index].is_string()) {
@@ -369,29 +386,34 @@ void TutorialDirector::RestoreReplayState(const json& state) {
         }
     }
 
+    // 透明度の配列があれば記録できた枠まで読み、0～1に収める。
     if (const auto found = state.find("objectiveAlphas"); found != state.end() && found->is_array()) {
         for (size_t index = 0; index < objectiveAlphas_.size() && index < found->size(); ++index) {
             objectiveAlphas_[index] = (std::clamp)((*found)[index].get<float>(), 0.0f, 1.0f);
         }
     }
 
+    // Playerの参照が有効な場合は、記録した手順と運搬対象に合わせて操作許可を復元する。
     if (player_) {
         if (!started_) {
             // Play In Editor停止時に、投擲・吸収の参照も編集開始前へ戻します。
             player_->ResetTutorialCarryActionState();
             player_->SetTutorialCarryActionPermissions(true, true);
+        // 開始済みの有効な手順では、その手順の許可操作を戻してから運搬相手を名前で解決する。
         } else if (currentStep) {
             player_->SetTutorialCarryActionPermissions(currentStep->allowCarriedThrow, currentStep->allowCarriedAbsorb);
 
             const std::string carriedEnemyName = state.value("playerCarriedEnemy", std::string{});
             engine::Object3D* savedCarriedEnemy = FindObjectByName(carriedEnemyName);
 
+            // 対象の実体が残る場合は再接続する。記録の相手がいなくなった場合は既存の運搬を解除する。
             if (savedCarriedEnemy) {
                 player_->SetCarriedEnemy(savedCarriedEnemy);
             } else if (player_->GetCarriedEnemy()) {
                 player_->ReleaseCarriedEnemy(true);
             }
         } else {
+            // 開始済みでも有効な手順がないときは、手順専用の操作制限を解除する。
             player_->SetTutorialCarryActionPermissions(true, true);
         }
     }
@@ -407,14 +429,16 @@ void TutorialDirector::RestoreReplayState(const json& state) {
         cinematicPlayer_.SetTime((std::max)(0.0f, state.value("cinematicTime", 0.0f)), false);
         cinematicActive_ = cinematicPlayer_.IsPlaying();
 
+        // 復元した演出が実際に再生中で、Playerがまだ拘束されていなければ操作を止める。
         if (cinematicActive_ && player_ && !player_->IsCinematicLocked()) {
-            player_->BeginCinematicLock(true); // 獲得したコピーは登場演出や巻き戻しでも維持する。
+            player_->BeginCinematicLock(true);
         }
     }
 }
 
 void TutorialDirector::Restart() {
     // 再挑戦では敵の出現、ゲート、運搬状態を手順開始前へ戻す。
+    // 手順を未読込なら再挑戦できないため、現在の状態に触れない。
     if (!loaded_) {
         return;
     }
@@ -452,8 +476,8 @@ bool TutorialDirector::JumpToStep(const std::string& stepId) {
         LeaveCurrentStep();
         started_ = true;
         completed_ = false;
-        RestoreSpawnEnemyStateBeforeStep(static_cast<int>(index));
-        EnterStep(static_cast<int>(index));
+        RestoreSpawnEnemyStateBeforeStep(static_cast<std::int32_t>(index));
+        EnterStep(static_cast<std::int32_t>(index));
         return true;
     }
 
@@ -464,6 +488,7 @@ bool TutorialDirector::LoadFlow(const std::string& flowPath) {
     // 手順本体は一時配列で読み、空や不正な手順を実行リストへ入れない。
     std::ifstream file(flowPath);
 
+    // フローのファイルを開けなければ設定の読み込みを行わない。
     if (!file.is_open()) {
         return false;
     }
@@ -472,6 +497,7 @@ bool TutorialDirector::LoadFlow(const std::string& flowPath) {
     try {
         file >> root;
     } catch (...) {
+        // ファイルをJSONとして解析できなければ、進行を開始できない。
         return false;
     }
 
@@ -488,12 +514,14 @@ bool TutorialDirector::LoadFlow(const std::string& flowPath) {
     // 複数指定がない旧フローでも単体指定の敵を使用できるようにする。
     if (root.contains("spawnEnemyObjects") && root["spawnEnemyObjects"].is_array()) {
         for (const auto& value : root["spawnEnemyObjects"]) {
+            // 配列中の文字列だけを練習敵の名前として採用する。
             if (value.is_string()) {
                 spawnEnemyObjectNames_.push_back(value.get<std::string>());
             }
         }
     }
 
+    // 有効な複数指定がなければ、従来の単体指定を使う。
     if (spawnEnemyObjectNames_.empty()) {
         spawnEnemyObjectNames_.push_back(spawnEnemyObjectName_);
     }
@@ -501,6 +529,7 @@ bool TutorialDirector::LoadFlow(const std::string& flowPath) {
     // 敵のHP上書きはオブジェクト名で保持し、練習敵が生存して開始できる下限を設ける。
     spawnEnemyMaxHpOverrides_.clear();
 
+    // HPの指定がオブジェクトなら、数値の項目だけを下限1で保存する。
     if (root.contains("spawnEnemyMaxHp") && root["spawnEnemyMaxHp"].is_object()) {
         for (const auto& [objectName, value] : root["spawnEnemyMaxHp"].items()) {
             if (value.is_number()) {
@@ -512,6 +541,7 @@ bool TutorialDirector::LoadFlow(const std::string& flowPath) {
     // 敵の検知距離もオブジェクトごとに読み、負値は0へ補正する。
     spawnEnemyDetectionRangeOverrides_.clear();
 
+    // 検知距離がオブジェクトなら、数値の項目だけを下限0で保存する。
     if (root.contains("spawnEnemyDetectionRange") && root["spawnEnemyDetectionRange"].is_object()) {
         for (const auto& [objectName, value] : root["spawnEnemyDetectionRange"].items()) {
             if (value.is_number()) {
@@ -524,6 +554,7 @@ bool TutorialDirector::LoadFlow(const std::string& flowPath) {
     try {
         // 個別ステップでは省略可能な項目に従来値を補い、最後にまとめて公開する。
         for (const auto& item : root["steps"]) {
+            // オブジェクト以外の配列要素はステップに変換しない。
             if (!item.is_object()) {
                 continue;
             }
@@ -559,7 +590,7 @@ bool TutorialDirector::LoadFlow(const std::string& flowPath) {
             step.hasTargetPosition = ReadVector3(item.value("targetPosition", json::array()), step.targetPosition);
             step.hasCheckpoint = ReadVector3(item.value("checkpoint", json::array()), step.checkpointPosition);
 
-            // キーボード用とパッド用の画像を別々に読み、案内の切り替え時に使う。
+            // キーボード用とパッド用のアイコンを別々に読み、文字列のパスだけを保存する。
             for (const auto& icon : item.value("promptIcons", json::array())) {
                 if (icon.is_string()) {
                     step.promptIcons.push_back(icon.get<std::string>());
@@ -572,7 +603,7 @@ bool TutorialDirector::LoadFlow(const std::string& flowPath) {
                 }
             }
 
-            // 目標の表示、撃破判定、開始時の生成と終了時の撤去に使う名前をそれぞれ保持する。
+            // 目標表示、撃破判定、生成と退場の各リストは、有効な文字列だけをオブジェクト名として保存する。
             for (const auto& objectName : item.value("objectiveTargets", json::array())) {
                 if (objectName.is_string()) {
                     step.objectiveTargets.push_back(objectName.get<std::string>());
@@ -600,9 +631,11 @@ bool TutorialDirector::LoadFlow(const std::string& flowPath) {
             loadedSteps.push_back(std::move(step));
         }
     } catch (...) {
+        // 型違いなどで手順の途中までしか読めない場合に、実行リストへ反映しない。
         return false;
     }
 
+    // 有効な手順が一つもないフローは開始できない。
     if (loadedSteps.empty()) {
         return false;
     }
@@ -615,30 +648,31 @@ bool TutorialDirector::LoadFlow(const std::string& flowPath) {
 TutorialDirector::CompletionCondition TutorialDirector::ParseCondition(const std::string& conditionName) {
     // 未知の条件は時間待ちへフォールバックし、読込時に無効な列挙値を作らない。
     if (conditionName == "cinematic_finished")
-        return CompletionCondition::CinematicFinished;
+        return CompletionCondition::kCinematicFinished;
     if (conditionName == "move_distance")
-        return CompletionCondition::MoveDistance;
+        return CompletionCondition::kMoveDistance;
     if (conditionName == "action_triggered")
-        return CompletionCondition::ActionTriggered;
+        return CompletionCondition::kActionTriggered;
     if (conditionName == "target_locked")
-        return CompletionCondition::TargetLocked;
+        return CompletionCondition::kTargetLocked;
     if (conditionName == "reach_position")
-        return CompletionCondition::ReachPosition;
+        return CompletionCondition::kReachPosition;
     if (conditionName == "carry_enemy")
-        return CompletionCondition::CarryEnemy;
+        return CompletionCondition::kCarryEnemy;
     if (conditionName == "enemy_thrown")
-        return CompletionCondition::EnemyThrown;
+        return CompletionCondition::kEnemyThrown;
+    // 単数形と複数形の旧キーを同じ撃破条件として受け付ける。
     if (conditionName == "enemy_defeated" || conditionName == "enemies_defeated") {
-        return CompletionCondition::EnemiesDefeated;
+        return CompletionCondition::kEnemiesDefeated;
     }
 
     if (conditionName == "morph_active")
-        return CompletionCondition::MorphActive;
+        return CompletionCondition::kMorphActive;
     if (conditionName == "morph_released")
-        return CompletionCondition::MorphReleased;
+        return CompletionCondition::kMorphReleased;
     if (conditionName == "controls_guide_opened")
-        return CompletionCondition::ControlsGuideOpened;
-    return CompletionCondition::Timer;
+        return CompletionCondition::kControlsGuideOpened;
+    return CompletionCondition::kTimer;
 }
 
 bool TutorialDirector::ReadVector3(const json& value, engine::Vector3& destination) {
@@ -653,6 +687,7 @@ bool TutorialDirector::ReadVector3(const json& value, engine::Vector3& destinati
 
 void TutorialDirector::BeginFlowIfNeeded() {
     // 最初の更新までは敵を隠し、Play開始時だけ手順0へ入る。
+    // 開始済みかステップが空なら、最初の手順を二重に開かない。
     if (started_ || steps_.empty()) {
         return;
     }
@@ -663,10 +698,9 @@ void TutorialDirector::BeginFlowIfNeeded() {
 }
 
 // 手順開始時の状態を記録し、敵・ゲート・案内・カメラ演出をこの手順の設定へ切り替えます。
-// 無効な番号やPlayer不在の場合はFlowを完了扱いにします。
-void TutorialDirector::EnterStep(int stepIndex) {
+void TutorialDirector::EnterStep(std::int32_t stepIndex) {
     // 有効な次のステップや操作対象がなければ、案内を続けず終了処理へ進みます。
-    if (stepIndex < 0 || stepIndex >= static_cast<int>(steps_.size()) || !player_) {
+    if (stepIndex < 0 || stepIndex >= static_cast<std::int32_t>(steps_.size()) || !player_) {
         CompleteFlow();
         return;
     }
@@ -684,20 +718,22 @@ void TutorialDirector::EnterStep(int stepIndex) {
 
     Step& step = steps_[static_cast<size_t>(currentStepIndex_)];
 
-    if (step.condition == CompletionCondition::ControlsGuideOpened) {
+    // ガイドを開く課題へ入った場合は、手順前の開閉通知を達成に数えない。
+    if (step.condition == CompletionCondition::kControlsGuideOpened) {
         controlsGuideOpened_ = false;
     }
 
     // 課題に合わせて投げと吸収の許可を切り替え、必要なら失敗後の復帰地点も変更します。
     player_->SetTutorialCarryActionPermissions(step.allowCarriedThrow, step.allowCarriedAbsorb);
 
+    // 新しい復活座標が指定された場合だけ、今後の落下復帰地点を上書きする。
     if (step.hasCheckpoint) {
         player_->SetRespawnPosition(step.checkpointPosition);
     }
 
     UpdateGateStateForStep(step);
 
-    // 前ステップの敵を片付けてから今回の敵を有効化し、同時に複数課題が成立しないようにします。
+    // 退場指定があれば先に対象を隠し、今回の練習敵を有効にした後で行動可否を設定する。
     if (!step.despawnEnemyObject.empty()) {
         SetSpawnEnemyActive(step.despawnEnemyObject, false);
     }
@@ -706,6 +742,7 @@ void TutorialDirector::EnterStep(int stepIndex) {
         SetSpawnEnemyActive(objectName, false);
     }
 
+    // 個別の出現名を優先し、未指定で単体出現が有効な場合はフローの既定名を使う。
     if (!step.spawnEnemyObject.empty()) {
         SetSpawnEnemyActive(step.spawnEnemyObject, true);
     } else if (step.spawnEnemy) {
@@ -734,6 +771,7 @@ void TutorialDirector::EnterStep(int stepIndex) {
 
 void TutorialDirector::LeaveCurrentStep() {
     // ステップ固有のシネマティックと案内表示を次へ持ち越さない。
+    // 演出が再生中なら強制終了してカメラと操作権を戻す。
     if (cinematicActive_) {
         EndStepCinematic(true);
     }
@@ -744,21 +782,23 @@ void TutorialDirector::LeaveCurrentStep() {
 
 void TutorialDirector::AdvanceStep() {
     // 達成時のゲート解放を先に反映し、最後の手順ならFlowを完了する。
-    if (currentStepIndex_ < 0 || currentStepIndex_ >= static_cast<int>(steps_.size())) {
+    if (currentStepIndex_ < 0 || currentStepIndex_ >= static_cast<std::int32_t>(steps_.size())) {
         return;
     }
 
     const Step completedStep = steps_[static_cast<size_t>(currentStepIndex_)];
 
+    // 完了で出口を解放する指定がある場合だけ、その場でゲートを切り替える。
     if (completedStep.unlockGateOnComplete) {
         SetGateTransitionEnabled(true);
     }
 
     LeaveCurrentStep();
 
-    const int nextStep = currentStepIndex_ + 1;
+    const std::int32_t nextStep = currentStepIndex_ + 1;
 
-    if (nextStep >= static_cast<int>(steps_.size())) {
+    // 次の番号が末尾を超えたら新しい課題を開始せず、完了処理を行う。
+    if (nextStep >= static_cast<std::int32_t>(steps_.size())) {
         CompleteFlow();
         return;
     }
@@ -766,10 +806,9 @@ void TutorialDirector::AdvanceStep() {
     EnterStep(nextStep);
 }
 
-// コピー形態の共通条件を確認した後、手順固有の行動・距離・対象条件を評価します。
 bool TutorialDirector::EvaluateCurrentStep() const {
     // 開始前や終了後は対象ステップを参照できないため、達成扱いにしない。
-    if (!player_ || currentStepIndex_ < 0 || currentStepIndex_ >= static_cast<int>(steps_.size())) {
+    if (!player_ || currentStepIndex_ < 0 || currentStepIndex_ >= static_cast<std::int32_t>(steps_.size())) {
         return false;
     }
 
@@ -782,22 +821,22 @@ bool TutorialDirector::EvaluateCurrentStep() const {
 
     switch (step.condition) {
     // 演出の更新側が再生中フラグを落とした時点で、操作手順へ進める。
-    case CompletionCondition::CinematicFinished:
+    case CompletionCondition::kCinematicFinished:
         return !cinematicActive_;
 
     // ステップ開始位置からの水平距離を測る。ジャンプによる高さは移動距離に含めない。
-    case CompletionCondition::MoveDistance:
+    case CompletionCondition::kMoveDistance:
         return HorizontalDistance(player_->GetWorldPosition(), stepStartPosition_) >= step.threshold;
 
     // ステップで指定されたアクションの押下を、このフレームの入力から確認する。
-    case CompletionCondition::ActionTriggered:
+    case CompletionCondition::kActionTriggered:
         return IsActionTriggered(step.action);
 
     // ロックオン通知で記録した名前が、課題で指定された対象と一致するか確認する。
-    case CompletionCondition::TargetLocked:
+    case CompletionCondition::kTargetLocked:
         return !step.objectiveTarget.empty() && lockedTargetName_ == step.objectiveTarget;
 
-    case CompletionCondition::ReachPosition: {
+    case CompletionCondition::kReachPosition: {
         // 目標Objectがある課題ではEditorで移動した実体を追う。固定座標だけの課題は従来どおり。
         const auto* target = FindObjectByName(step.objectiveTarget);
         if (target)
@@ -807,33 +846,33 @@ bool TutorialDirector::EvaluateCurrentStep() const {
     }
 
     // 対象の指定がある課題では、運搬中の敵が指定された実体かを確認する。
-    case CompletionCondition::CarryEnemy:
+    case CompletionCondition::kCarryEnemy:
         return player_->GetCarriedEnemy() != nullptr &&
                (step.objectiveTarget.empty() || player_->GetCarriedEnemy() == FindObjectByName(step.objectiveTarget));
 
-    case CompletionCondition::EnemyThrown: {
+    case CompletionCondition::kEnemyThrown: {
         // 開始時に運んでいた敵を優先して追い、手元を離れた後に投擲状態へ入ったことを確認する。
         auto* enemy = dynamic_cast<BaseEnemy*>(FindObjectByName(carriedEnemyOnStepEntryName_.empty() ? step.objectiveTarget : carriedEnemyOnStepEntryName_));
         return enemy && player_->GetCarriedEnemy() == nullptr && !player_->IsEnemyMorphed() && enemy->IsThrownPhysics();
     }
 
     // 複数の練習敵を対象にできるため、登録した全対象の撃破確認を共通関数へ渡す。
-    case CompletionCondition::EnemiesDefeated:
+    case CompletionCondition::kEnemiesDefeated:
         return AreTargetEnemiesDefeated(step);
 
     // コピーの入力だけで進めず、実際にコピー形態へ入ったことを確認する。
-    case CompletionCondition::MorphActive:
+    case CompletionCondition::kMorphActive:
         return player_->IsEnemyMorphed();
 
     // 解除の入力だけで進めず、解除演出が終わって通常形態に戻るまで待つ。
-    case CompletionCondition::MorphReleased:
+    case CompletionCondition::kMorphReleased:
         return !player_->IsEnemyMorphed() && !player_->IsEnemyMorphReleasing();
 
     // ガイドを開いた通知を記録しておき、判定の時点で表示されているかには依存しない。
-    case CompletionCondition::ControlsGuideOpened:
+    case CompletionCondition::kControlsGuideOpened:
         return controlsGuideOpened_;
 
-    case CompletionCondition::Timer:
+    case CompletionCondition::kTimer:
     // 時間条件では、このステップに入ってからの経過時間を基準にする。
     default:
         return stepTimer_ >= step.threshold;
@@ -842,6 +881,7 @@ bool TutorialDirector::EvaluateCurrentStep() const {
 
 bool TutorialDirector::AreTargetEnemiesDefeated(const Step& step) const {
     // 出現済みの対象について、HP切れ・吸収・消去を倒し方によらず達成へ数える。
+    // 対象名の指定がなければ、撃破の条件は成立しない。
     if (step.targetEnemyObjects.empty()) {
         return false;
     }
@@ -853,12 +893,14 @@ bool TutorialDirector::AreTargetEnemiesDefeated(const Step& step) const {
         if (slot == spawnEnemies_.end() || !slot->active) return false;
         engine::Object3D* object = FindObjectByName(objectName);
 
+        // すでに出現済みと分かっている対象がシーンから消えていれば、残りの対象を確認する。
         if (!object) {
             continue;
         }
 
         const auto* enemy = dynamic_cast<const BaseEnemy*>(object);
 
+        // 同名の対象が敵型でないか、生存した実体なら全体の達成を待つ。
         if (!enemy || (!enemy->IsDead() && !enemy->IsReplayRemoved() &&
                        (!enemy->GetParameters() || enemy->GetParameters()->hp > 0.0f))) {
             return false;
@@ -868,23 +910,27 @@ bool TutorialDirector::AreTargetEnemiesDefeated(const Step& step) const {
     return true;
 }
 
+// 練習対象を失った課題を再開し、再試行ステップへ移れた場合にtrueを返す。
 bool TutorialDirector::RecoverMissingPracticeEnemy(const Step& step) {
+    // 達成済み、演出中、名前指定なしの場合は敵の不足を再評価しない。
     if (stepConditionSatisfied_ || cinematicActive_ || step.objectiveTarget.empty()) return false;
     // 自由移動などのステップでは敵を作り直さず、指定の敵による操作が必要な課題だけを対象にします。
-    const bool practice = step.condition == CompletionCondition::TargetLocked ||
-                          step.condition == CompletionCondition::CarryEnemy ||
-                          step.condition == CompletionCondition::EnemyThrown ||
-                          step.condition == CompletionCondition::MorphActive;
-    if (!practice || (step.condition == CompletionCondition::MorphActive && player_->IsEnemyMorphed())) return false;
+    const bool practice = step.condition == CompletionCondition::kTargetLocked ||
+                          step.condition == CompletionCondition::kCarryEnemy ||
+                          step.condition == CompletionCondition::kEnemyThrown ||
+                          step.condition == CompletionCondition::kMorphActive;
+    // 対象必須の練習でない場合と、コピーが既に成立した場合は再作成しない。
+    if (!practice || (step.condition == CompletionCondition::kMorphActive && player_->IsEnemyMorphed())) return false;
     auto* enemy = dynamic_cast<BaseEnemy*>(FindObjectByName(step.objectiveTarget));
     // 正しく投げた直後に手元から離れていても、対象の消失と扱わず達成判定へ進みます。
-    if (step.condition == CompletionCondition::EnemyThrown && enemy && enemy->IsThrownPhysics() &&
+    if (step.condition == CompletionCondition::kEnemyThrown && enemy && enemy->IsThrownPhysics() &&
         !player_->GetCarriedEnemy() && !player_->IsEnemyMorphed()) return false;
     // 削除や撃破だけでなく、投げる前の運搬状態が失われた場合もやり直しの対象です。
     const bool lost = !enemy || enemy->IsReplayRemoved() || enemy->IsDead() ||
                       (enemy->GetParameters() && enemy->GetParameters()->hp <= 0.0f);
-    const bool lostCarry = step.condition == CompletionCondition::EnemyThrown &&
+    const bool lostCarry = step.condition == CompletionCondition::kEnemyThrown &&
                            player_->GetCarriedEnemy() != enemy;
+    // 実体も必要な運搬状態も残っていれば、ステップをやり直さない。
     if (!lost && !lostCarry) return false;
     // 参照先がなくなった運搬・吸収演出も解放してから、必要な操作だけをやり直す。
     player_->ResetTutorialCarryActionState();
@@ -892,9 +938,8 @@ bool TutorialDirector::RecoverMissingPracticeEnemy(const Step& step) {
     return JumpToStep(step.wrongActionRetryStep.empty() ? step.id : step.wrongActionRetryStep);
 }
 
-// 吸収と投擲の練習を取り違えると対象が失われるため、保持状態を戻して指定ステップから再試行します。
 bool TutorialDirector::RecoverFromWrongCarriedAction(const Step& step) {
-    // 運搬中に誤った操作をした場合は、定義された再試行ステップへ戻して状態を復元する。
+    // 投擲と吸収を取り違えた場合に、保持状態を戻して再試行へ移れるか確認する。
     if (!player_ || step.wrongActionRetryStep.empty()) {
         return false;
     }
@@ -903,12 +948,14 @@ bool TutorialDirector::RecoverFromWrongCarriedAction(const Step& step) {
 
     bool thrownDuringAbsorbPractice = false;
 
+    // 投擲を許可していない手順では、開始時の相手が手を離れて実際に投擲状態になったかも調べる。
     if (!step.allowCarriedThrow) {
         auto* enemy = dynamic_cast<BaseEnemy*>(FindObjectByName(carriedEnemyOnStepEntryName_.empty() ? step.objectiveTarget : carriedEnemyOnStepEntryName_));
         thrownDuringAbsorbPractice =
             enemy && player_->GetCarriedEnemy() == nullptr && !player_->IsEnemyMorphed() && enemy->IsThrownPhysics();
     }
 
+    // 禁止した吸収も投擲も成立していなければ、再試行せず通常の判定へ戻る。
     if (!absorbedDuringThrowPractice && !thrownDuringAbsorbPractice) {
         return false;
     }
@@ -924,10 +971,12 @@ bool TutorialDirector::IsActionTriggered(const std::string& action) const {
         return false;
     }
 
+    // 旧フローのマウス左右の名前は、割り当て可能な通常攻撃と副操作の押下として扱う。
     if (action == "MouseLeft")
         return inputManager_->IsActionTriggered("PrimaryAttack");
     if (action == "MouseRight")
         return inputManager_->IsActionTriggered("SecondaryAction");
+    // 視点移動の課題は、マウスか右スティックのどちらかが閾値を超えたら達成とする。
     if (action == "MouseMove") {
         const engine::Vector2 delta = inputManager_->GetMouseMoveDelta();
         const engine::Vector2 stick = inputManager_->GetRightStick();
@@ -944,8 +993,9 @@ void TutorialDirector::CompleteFlow() {
     }
 
     completed_ = true;
-    currentStepIndex_ = static_cast<int>(steps_.size());
+    currentStepIndex_ = static_cast<std::int32_t>(steps_.size());
 
+    // Playerがいて練習用の許可状態を持つ場合は、投げと吸収を通常どおり許可する。
     if (player_) {
         player_->SetTutorialCarryActionPermissions(true, true);
     }
@@ -953,6 +1003,7 @@ void TutorialDirector::CompleteFlow() {
     SetPromptVisible(false);
     SetGateTransitionEnabled(true);
 
+    // シーンが完了コールバックを登録している場合に、ゲート解放後の完了を知らせる。
     if (completionCallback_) {
         completionCallback_();
     }
@@ -964,6 +1015,7 @@ void TutorialDirector::BeginStepCinematic(const Step& step) {
     // 手順ごとの演出を読み、再生中はプレイヤーの操作を拘束する。
     cinematicSequence_.Clear();
 
+    // 指定された演出素材を読めなければ、操作を拘束せず戻る。
     if (!cinematicSequence_.Load(step.cinematicPath)) {
         DebugConsole::GetInstance()->AddLog("[Tutorial] Cinematicの読み込みに失敗しました: " + step.cinematicPath);
         cinematicActive_ = false;
@@ -974,8 +1026,9 @@ void TutorialDirector::BeginStepCinematic(const Step& step) {
     cinematicPlayer_.Play(false);
     cinematicActive_ = cinematicPlayer_.IsPlaying();
 
+    // 再生が開始しPlayerが存在するときは、獲得済みのコピーを保持して演出専用の操作ロックを掛ける。
     if (cinematicActive_ && player_) {
-        player_->BeginCinematicLock(true); // 獲得したコピーは登場演出や巻き戻しでも維持する。
+        player_->BeginCinematicLock(true);
     }
 
     SetPromptVisible(false);
@@ -987,11 +1040,13 @@ void TutorialDirector::EndStepCinematic(bool skipped) {
     cinematicPlayer_.Stop(false);
     cinematicActive_ = false;
 
+    // 演出で操作を拘束したPlayerが残っていれば解除する。
     if (player_ && player_->IsCinematicLocked()) {
         player_->EndCinematicLock(true);
     }
 
-    if (currentStepIndex_ >= 0 && currentStepIndex_ < static_cast<int>(steps_.size())) {
+    // まだ有効なステップがあり休眠指定があれば、登場していた練習敵のAIを戻す。
+    if (currentStepIndex_ >= 0 && currentStepIndex_ < static_cast<std::int32_t>(steps_.size())) {
         const Step& step = steps_[static_cast<size_t>(currentStepIndex_)];
 
         if (step.spawnEnemiesDormant) {
@@ -1000,6 +1055,7 @@ void TutorialDirector::EndStepCinematic(bool skipped) {
         }
     }
 
+    // 入力スキップや強制終了として呼ばれた場合だけログを残す。
     if (skipped) {
         DebugConsole::GetInstance()->AddLog("[Tutorial] Cinematic skipped.");
     }
@@ -1007,6 +1063,7 @@ void TutorialDirector::EndStepCinematic(bool skipped) {
 
 void TutorialDirector::UpdateCinematic(float deltaTime) {
     // 開始直後の決定入力で飛ばさないよう、短い猶予の後だけスキップを受け付ける。
+    // 演出を実行していないときは、再生器もスキップ入力も更新しない。
     if (!cinematicActive_) {
         return;
     }
@@ -1014,6 +1071,7 @@ void TutorialDirector::UpdateCinematic(float deltaTime) {
     cinematicPlayer_.Update((std::max)(0.0f, deltaTime));
     const bool canSkip = stepTimer_ >= 0.18f;
 
+    // 手順開始から0.18秒以上たちJumpが押された場合に、通常の終了処理でスキップする。
     if (canSkip && inputManager_ && inputManager_->IsActionTriggered("Jump")) {
         EndStepCinematic(true);
         return;
@@ -1038,6 +1096,7 @@ void TutorialDirector::UpdateGateStateForStep(const Step& step) {
 
 void TutorialDirector::SetGateTransitionEnabled(bool enabled) {
     // 遷移可否と門の見た目を同時に更新し、解放時は反応演出を起動する。
+    // 出口ゲートを借用できない場合は表示や遷移の状態を変更しない。
     if (!exitGate_) {
         return;
     }
@@ -1046,6 +1105,7 @@ void TutorialDirector::SetGateTransitionEnabled(bool enabled) {
     exitGate_->SetGateState(false, enabled, false, false);
     exitGate_->SetGateActivation(enabled ? 1.0f : 0.0f);
 
+    // ゲートを解放したときだけ、入場できることを反応演出で知らせる。
     if (enabled) {
         exitGate_->TriggerEntryReaction();
     }
@@ -1055,6 +1115,7 @@ void TutorialDirector::SetGateTransitionEnabled(bool enabled) {
 void TutorialDirector::SetSpawnEnemyActive(const std::string& objectName, bool active) {
     const auto it = std::find_if(spawnEnemies_.begin(), spawnEnemies_.end(),
                                  [&objectName](const SpawnEnemySlot& slot) { return slot.objectName == objectName; });
+    // 指定名が練習敵の登録に含まれない場合は、通常配置の敵を変更しない。
     if (it == spawnEnemies_.end()) {
         return;
     }
@@ -1064,13 +1125,14 @@ void TutorialDirector::SetSpawnEnemyActive(const std::string& objectName, bool a
     if (!enemy && active) {
         // 通常の撃破処理で実体が削除されても、配置時の定義から同じ練習対象を作り直す。
         auto created = EnemyFactory::GetInstance()->CreateEnemy(slot.initialDefinition.value("enemyType", "Slime"), scene_->GetObject3DCommon());
+        // ファクトリーが敵を作れたら保存済みの定義を戻し、現シーンに所有権を渡す。
         if (created) {
             created->ImportFromJson(slot.initialDefinition);
             created->SetName(slot.objectName);
             enemy = dynamic_cast<BaseEnemy*>(scene_->AddObjectImmediate(std::move(created)));
         }
     }
-    // 記録用の出現状態を先に更新し、実体があれば運搬参照を外してから復元します。
+    // 出現フラグを先に記録する。実体がなく更新できない場合は終了し、Playerが同じ敵を保持中なら先に手放す。
     slot.active = active;
     if (!enemy) return;
     if (player_ && player_->GetCarriedEnemy() == enemy) player_->ReleaseCarriedEnemy(true);
@@ -1088,7 +1150,7 @@ void TutorialDirector::SetSpawnEnemyActive(const std::string& objectName, bool a
     enemy->SetCarried(false);
     enemy->SetTranslate(slot.initialPosition);
     enemy->SetVelocity({0.0f, 0.0f, 0.0f});
-    // 復元した敵に練習専用のHPや検知距離を重ね、通常戦闘用の既定値を上書きします。
+    // 出現先にパラメーターがある場合だけ練習用の値を重ねる。HPは正の指定、索敵距離は0以上を使う。
     if (active && enemy->GetParameters()) {
         if (slot.maxHpOverride > 0.0f) enemy->SetParameter(&engine::EntityParameter::hp, enemy->SetParameter(&engine::EntityParameter::maxHp, slot.maxHpOverride));
         if (slot.detectionRangeOverride >= 0.0f) {
@@ -1102,8 +1164,9 @@ void TutorialDirector::SetSpawnEnemyActive(const std::string& objectName, bool a
     enemy->SetCollisionAttribute(active ? slot.collisionAttribute : 0);
     enemy->SetCollisionMask(active ? slot.collisionMask : 0);
     enemy->UpdateWorldMatrix(true);
+    // 有効化した場合だけ衝突管理へ登録し、表示と判定を再開する。
     if (active) {
-        CollisionManager::GetInstance()->AddObject(enemy);
+        engine::CollisionManager::GetInstance()->AddObject(enemy);
         DebugConsole::GetInstance()->AddLog("[Tutorial] Enemy spawned: " + slot.objectName);
     }
 }
@@ -1112,19 +1175,21 @@ void TutorialDirector::SetSpawnEnemyDormant(const std::string& objectName, bool 
     // 登場演出中のみ敵AIを止め、位置や表示状態は変えない。
     const auto it = std::find_if(spawnEnemies_.begin(), spawnEnemies_.end(),
                                  [&objectName](const SpawnEnemySlot& slot) { return slot.objectName == objectName; });
+    // 登録外の名前に休眠設定を適用しない。
     if (it == spawnEnemies_.end()) {
         return;
     }
 
     BaseEnemy* enemy = dynamic_cast<BaseEnemy*>(FindObjectByName(objectName));
 
+    // 同名の敵型オブジェクトを取得できた場合だけ、AIの休眠を切り替える。
     if (enemy) {
         enemy->SetDormant(dormant);
     }
 }
 
 void TutorialDirector::SetStepSpawnEnemiesDormant(const Step& step, bool dormant) {
-    // 手順に紐づく単体・複数の敵へ同じ休眠状態を適用する。
+    // 単体の明示名を優先し、未指定なら有効な旧単体設定の名前を使う。複数指定にも同じ休眠状態を渡す。
     if (!step.spawnEnemyObject.empty()) {
         SetSpawnEnemyDormant(step.spawnEnemyObject, dormant);
     } else if (step.spawnEnemy) {
@@ -1143,15 +1208,15 @@ void TutorialDirector::SetAllSpawnEnemiesActive(bool active) {
     }
 }
 
-// ステップを飛ばして再開するとき、先行ステップの出現・退場を順に再適用して敵の状態を再構成します。
-void TutorialDirector::RestoreSpawnEnemyStateBeforeStep(int stepIndex) {
+void TutorialDirector::RestoreSpawnEnemyStateBeforeStep(std::int32_t stepIndex) {
     // 指定ステップまでの出現・消去履歴を再適用し、途中再開でも敵の状態を一致させる。
     SetAllSpawnEnemiesActive(false);
-    const int endIndex = (std::clamp)(stepIndex, 0, static_cast<int>(steps_.size()));
+    const std::int32_t endIndex = (std::clamp)(stepIndex, 0, static_cast<std::int32_t>(steps_.size()));
 
-    for (int index = 0; index < endIndex; ++index) {
+    for (std::int32_t index = 0; index < endIndex; ++index) {
         const Step& step = steps_[static_cast<size_t>(index)];
 
+        // 通過済みの手順にある退場指定を先に適用し、続けて出現指定を戻す。
         if (!step.despawnEnemyObject.empty()) {
             SetSpawnEnemyActive(step.despawnEnemyObject, false);
         }
@@ -1160,6 +1225,7 @@ void TutorialDirector::RestoreSpawnEnemyStateBeforeStep(int stepIndex) {
             SetSpawnEnemyActive(objectName, false);
         }
 
+        // 単体は明示名を優先し、未指定で出現が有効ならフローの既定名を使う。
         if (!step.spawnEnemyObject.empty()) {
             SetSpawnEnemyActive(step.spawnEnemyObject, true);
         } else if (step.spawnEnemy) {
@@ -1178,7 +1244,7 @@ void TutorialDirector::RestoreSpawnEnemyStateBeforeStep(int stepIndex) {
 }
 
 engine::Object3D* TutorialDirector::FindObjectByName(const std::string& name) const {
-    // 名前から現在のシーン内で解決し、前回シーンのポインタを使わない。
+    // シーンと検索名が揃う場合に、実在する最初の同名Objectを借用して返す。
     if (!scene_ || name.empty()) {
         return nullptr;
     }
@@ -1194,6 +1260,7 @@ engine::Object3D* TutorialDirector::FindObjectByName(const std::string& name) co
 
 void TutorialDirector::BindPromptSprites() {
     // Sceneが所有するSpriteの初期位置・色・大きさを退避して、手順ごとに再利用する。
+    // シーンがなければ、配置された表示部品を探せないので終了する。
     if (!scene_) {
         return;
     }
@@ -1202,6 +1269,7 @@ void TutorialDirector::BindPromptSprites() {
         PromptVisual visual;
         visual.sprite = scene_->GetSpriteByName(name);
 
+        // 指定の画像が配置されていれば、基準値を控えてから手順開始まで隠す。
         if (visual.sprite) {
             visual.basePosition = visual.sprite->GetPosition();
             visual.baseSize = visual.sprite->GetSize();
@@ -1235,11 +1303,13 @@ void TutorialDirector::ApplyStepPrompt(const Step* step) {
 
     // 共通画像を現在の入力方式へ変換します。対応表にない画像だけ、パッド専用の個別指定を使います。
     if (step && !step->promptIcons.empty()) {
+        // 移動のWASD画像はパッドのときだけ左スティック画像に置き換える。
         if (step->promptIcons[0] == "ui/input/combo/combo_wasd.png") {
             if (promptGamepadMode_)
                 glyphs.push_back({"ui/input/controller/pad_l_stick.png"});
             else glyphs.push_back({"ui/input/combo/combo_wasd.png"});
         } else {
+            // その他の画像は現在の割り当てを引き、パッド用に変換できない場合は手順の個別画像を使う。
             for (size_t i = 0; i < step->promptIcons.size(); ++i) {
                 InputGlyphSpec glyph = ResolveInputGlyph(step->promptIcons[i], promptGamepadMode_);
                 if (promptGamepadMode_ && glyph.path == step->promptIcons[i] &&
@@ -1251,13 +1321,17 @@ void TutorialDirector::ApplyStepPrompt(const Step* step) {
             }
         }
     } else if (step && promptGamepadMode_) {
+        // 共通の画像指定がなくパッドの場合は、手順のパッド用画像をそのまま使う。
         for (const std::string& path : step->promptIconsGamepad)
             glyphs.push_back({path});
     }
 
     // アイコンと説明を同じ入力モードで選びます。共通説明だけの手順は従来の画像を使います。
-    const std::string labelPath = step ?
-        (promptGamepadMode_ && !step->promptLabelGamepad.empty() ? step->promptLabelGamepad : step->promptLabel) : "";
+    std::string labelPath;
+    if (step) {
+        labelPath = promptGamepadMode_ && !step->promptLabelGamepad.empty()
+            ? step->promptLabelGamepad : step->promptLabel;
+    }
     const bool show = step && step->showPrompt && (!glyphs.empty() || !labelPath.empty());
     SetPromptVisible(show);
     promptLabel_.requestedVisible = false;
@@ -1266,11 +1340,12 @@ void TutorialDirector::ApplyStepPrompt(const Step* step) {
         visual.requestedVisible = false;
     }
 
+    // 表示設定が無効か案内の素材がない場合は、全要素の要求を解除した状態で戻る。
     if (!show) {
         return;
     }
 
-    // 説明画像とアイコンの有無に応じて、案内が一まとまりに見える横位置を選びます。
+    // 説明のパスと表示部品が両方ある場合だけ、アイコン数に合わせて説明の大きさと横位置を決める。
     const bool hasLabel = !labelPath.empty() && promptLabel_.sprite;
 
     if (hasLabel) {
@@ -1291,6 +1366,7 @@ void TutorialDirector::ApplyStepPrompt(const Step* step) {
     for (size_t index = 0; index < promptIcons_.size(); ++index) {
         PromptVisual& visual = promptIcons_[index];
 
+        // アイコンの配置部品がない枠は描画の更新を行わない。
         if (!visual.sprite) {
             continue;
         }
@@ -1299,6 +1375,7 @@ void TutorialDirector::ApplyStepPrompt(const Step* step) {
         visual.requestedVisible = hasIcon;
         visual.sprite->SetVisible(hasIcon);
 
+        // 使用画像がある枠だけ、新しい画像範囲と基準位置を計算する。
         if (hasIcon) {
             const InputGlyphSpec& glyph = glyphs[index];
             SetFullTextureRect(visual.sprite, glyph.path, {iconCount >= 4 ? 90.0f : 190.0f, 118.0f});
@@ -1324,6 +1401,7 @@ void TutorialDirector::UpdatePrompt(float deltaTime) {
     const float response = 1.0f - std::exp(-kPromptFadeResponse * (std::max)(0.0f, deltaTime));
     promptAlpha_ += (targetAlpha - promptAlpha_) * response;
 
+    // 目標との透明度差が0.002未満なら、その値にそろえて補間を終える。
     if (std::abs(targetAlpha - promptAlpha_) < 0.002f) {
         promptAlpha_ = targetAlpha;
     }
@@ -1331,6 +1409,7 @@ void TutorialDirector::UpdatePrompt(float deltaTime) {
     // 十分に透明になってから非表示にする。表示中は透明度と一緒に最大18ピクセルのずれを戻す。
     const bool visible = promptAlpha_ > 0.002f;
     auto updateVisual = [this, visible](PromptVisual& visual) {
+        // 配置されなかった案内部品はフェードや位置の更新を省く。
         if (!visual.sprite) {
             return;
         }
@@ -1356,10 +1435,12 @@ void TutorialDirector::SetPromptVisible(bool visible) {
     // フェードアウト中は即座に非表示にせず、透明になってからSpriteを隠す。
     promptRequestedVisible_ = visible;
 
+    // 案内の表示を要求され背景があれば、次のフェード更新を待たず表示可能にする。
     if (visible && promptPanel_.sprite) {
         promptPanel_.sprite->SetVisible(true);
     }
 
+    // 消す指定で透明度が閾値以下なら、生成済みの背景・説明・アイコンをまとめて隠す。
     if (!visible && promptAlpha_ <= 0.002f) {
         if (promptPanel_.sprite)
             promptPanel_.sprite->SetVisible(false);
@@ -1379,9 +1460,11 @@ void TutorialDirector::ApplyStepObjective(const Step* step) {
     objectiveOffsetY_ = 0.75f;
     objectiveAnimationTime_ = 0.0f;
 
+    // 現手順がある場合は目標の高さと名前を読み直す。
     if (step) {
         objectiveOffsetY_ = step->objectiveOffsetY;
 
+        // 複数指定がある場合に優先して枠を割り当て、単一指定しかなければ先頭枠へ入れる。
         if (!step->objectiveTargets.empty()) {
             const size_t targetCount = (std::min)(step->objectiveTargets.size(), objectiveTargetNames_.size());
 
@@ -1412,6 +1495,7 @@ void TutorialDirector::UpdateObjectiveMarker(float deltaTime) {
     for (size_t index = 0; index < objectiveMarkers_.size(); ++index) {
         PromptVisual& marker = objectiveMarkers_[index];
 
+        // 配置のないマーカーは投影と描画を省く。
         if (!marker.sprite) {
             continue;
         }
@@ -1421,14 +1505,16 @@ void TutorialDirector::UpdateObjectiveMarker(float deltaTime) {
             objectiveTargetNames_[index].empty() ? nullptr : FindObjectByName(objectiveTargetNames_[index]);
         bool canShow = camera && target && target->GetIsVisible();
 
+        // 対象が死亡した敵なら、配置が残っていても表示しない。
         if (const auto* enemy = dynamic_cast<const BaseEnemy*>(target); enemy && enemy->IsDead()) {
             canShow = false;
         }
 
         engine::Vector2 screenPosition = marker.basePosition;
 
+        // カメラと可視の対象が揃った場合だけ、対象の境界上端を投影する。
         if (canShow) {
-            const Aabb bounds = target->GetModelWorldAabb();
+            const engine::Aabb bounds = target->GetModelWorldAabb();
             const engine::Vector3 markerWorld = {(bounds.min.x + bounds.max.x) * 0.5f, bounds.max.y + objectiveOffsetY_,
                                          (bounds.min.z + bounds.max.z) * 0.5f};
             // 投影の分母が正のときだけ画面位置を計算し、カメラ背面にある点は棄却します。
@@ -1437,6 +1523,7 @@ void TutorialDirector::UpdateObjectiveMarker(float deltaTime) {
 
             if (!std::isfinite(w) || w <= 0.001f) {
                 canShow = false;
+            // 分母が有効な場合に正規化座標を求め、画面周辺の許容範囲に入るか確認する。
             } else {
                 const float ndcX = (markerWorld.x * viewProjection.m[0][0] + markerWorld.y * viewProjection.m[1][0] +
                                     markerWorld.z * viewProjection.m[2][0] + viewProjection.m[3][0]) /
@@ -1467,6 +1554,7 @@ void TutorialDirector::UpdateObjectiveMarker(float deltaTime) {
         float& alpha = objectiveAlphas_[index];
         alpha += (targetAlpha - alpha) * response;
 
+        // 透明度が目標へ十分近づいたら、目標値へそろえる。
         if (std::abs(targetAlpha - alpha) < 0.002f) {
             alpha = targetAlpha;
         }
@@ -1474,6 +1562,7 @@ void TutorialDirector::UpdateObjectiveMarker(float deltaTime) {
         const bool visible = alpha > 0.002f && canShow;
         marker.sprite->SetVisible(visible);
 
+        // 薄すぎるか投影条件を満たさない場合は表示と姿勢の更新を止める。
         if (!visible) {
             continue;
         }
@@ -1491,7 +1580,7 @@ void TutorialDirector::UpdateObjectiveMarker(float deltaTime) {
 }
 
 void TutorialDirector::SetObjectiveMarkerVisible(bool visible) {
-    // 表示要求とフェード中の透明度を両方満たすマーカーだけ描く。
+    // 配置済みのマーカーに対して、表示要求があり透明度が閾値を超える場合だけ表示を許可する。
     objectiveRequestedVisible_ = visible;
 
     for (size_t index = 0; index < objectiveMarkers_.size(); ++index) {
@@ -1515,18 +1604,20 @@ void TutorialDirector::DrawImGui() {
     }
 
     ImGui::Text("Flow: %s", loaded_ ? "Ready" : "Load Failed");
-    ImGui::Text("Step: %d / %d", currentStepIndex_ + 1, static_cast<int>(steps_.size()));
+    ImGui::Text("Step: %d / %d", currentStepIndex_ + 1, static_cast<std::int32_t>(steps_.size()));
     ImGui::Text("ID: %s", GetCurrentStepId().c_str());
     ImGui::Text("Time: %.2f sec", stepTimer_);
     ImGui::Text("Cinematic: %s", cinematicActive_ ? "Playing" : "Stopped");
     ImGui::Text("Gate: %s", completed_ ? "Unlocked" : "Locked");
 
+    // 先頭からの操作が押された場合、練習対象とゲートを開始前へ戻す。
     if (ImGui::Button("Flowを最初から")) {
         Restart();
     }
 
     ImGui::SameLine();
 
+    // 前後ボタンを押し手順一覧がある場合は、端を超えない範囲で移動先を選ぶ。
     if (ImGui::Button("前のStep") && !steps_.empty()) {
         JumpToStep(steps_[static_cast<size_t>((std::max)(0, currentStepIndex_ - 1))].id);
     }
@@ -1534,7 +1625,7 @@ void TutorialDirector::DrawImGui() {
     ImGui::SameLine();
 
     if (ImGui::Button("次のStep") && !steps_.empty()) {
-        const int next = (std::min)(static_cast<int>(steps_.size()) - 1, currentStepIndex_ + 1);
+        const std::int32_t next = (std::min)(static_cast<std::int32_t>(steps_.size()) - 1, currentStepIndex_ + 1);
         JumpToStep(steps_[static_cast<size_t>(next)].id);
     }
 
@@ -1549,6 +1640,7 @@ void TutorialDirector::DrawImGui() {
         completionCallback_ = callback;
     }
 
+    // 直接移動の一覧を開いた場合だけIDを列挙し、選択された手順へ移る。
     if (ImGui::BeginCombo("Stepへ移動", GetCurrentStepId().c_str())) {
         for (const Step& step : steps_) {
             if (ImGui::Selectable(step.id.c_str(), step.id == GetCurrentStepId())) {

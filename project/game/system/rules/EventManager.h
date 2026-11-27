@@ -89,5 +89,5 @@ class EventManager {
     ListenerList<PlayerDeathEvent> playerDeathListeners_;
     ListenerList<PlayerJumpEvent> playerJumpListeners_;
     SubscriptionId nextSubscriptionId_ = 1;
-    int dispatchDepth_ = 0;
+    std::int32_t dispatchDepth_ = 0;
 };

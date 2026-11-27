@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "BaseScene.h"
 #include "game/system/scene/SceneGameplayAccess.h"
 #include "game/system/scene/ObjectManager.h"
@@ -40,9 +41,9 @@ class TitleScene : public BaseScene, public ISceneGameplayAccess {
     /// <summary>配布版は起動時に必要な範囲だけ準備し、Editorでは全材質を使えるようにする。</summary>
     engine::RenderPreparation GetRenderPreparation() const override {
 #ifdef USE_IMGUI
-        return engine::RenderPreparation::Full;
+        return engine::RenderPreparation::kFull;
 #else
-        return engine::RenderPreparation::Minimal;
+        return engine::RenderPreparation::kMinimal;
 #endif
     }
 
@@ -92,15 +93,16 @@ class TitleScene : public BaseScene, public ISceneGameplayAccess {
     /// <summary>タイトルで参照するプレイヤーを取得・設定する。所有権は移さない。</summary>
     Player* GetPlayer() const override { return player_; }
 
+    // タイトル内のシステムが参照するプレイヤーを差し替える。寿命は呼出側が管理する。
     void SetPlayer(Player* player) override { player_ = player; }
 
   private:
     /// <summary>タイトルのSprite所有リストを編集処理へ渡す。</summary>
     std::vector<std::unique_ptr<engine::Sprite>>* GetMutableSprites() override { return &sprites_; }
 
-    enum class TitleMode { MainMenu, SaveSelect };
+    enum class TitleMode { kMainMenu, kSaveSelect };
 
-    enum class SaveSelectMode { Browse, DeleteConfirm, Launching };
+    enum class SaveSelectMode { kBrowse, kDeleteConfirm, kLaunching };
 
     /// <summary>セーブスロットのカードと詳細表示を生成する。</summary>
     void InitializeSaveSlotUi();
@@ -135,6 +137,7 @@ class TitleScene : public BaseScene, public ISceneGameplayAccess {
     void DrawSaveSlotUi();
 
     /// <summary>選択中のセーブデータを開いてゲーム開始へ進む。</summary>
+    // 確定した枠のチュートリアル完了状況に応じて、SELECT または TUTORIAL へ遷移を要求する。
     void StartSelectedSaveSlot();
 
     /// <summary>選択中のセーブデータを削除する。</summary>
@@ -142,24 +145,26 @@ class TitleScene : public BaseScene, public ISceneGameplayAccess {
 
     /// <summary>指定した画像、位置、サイズ、色のUI Spriteを生成・保持する。</summary>
     /// <returns>タイトルが所有するSpriteへの非所有ポインター。</returns>
+    // 不足している部品を中央アンカー・非表示で作り、titleUiSprites_ に保管する。
     engine::Sprite* CreateUiSprite(const std::string& texturePath, const engine::Vector2& position, const engine::Vector2& size,
                            const engine::Vector4& color);
 
     /// <summary>2桁の数字Spriteへ値、色、表示状態を反映する。</summary>
-    void SetNumberSprites(std::array<engine::Sprite*, 2>& digits, int value, const engine::Vector4& color, bool visible);
+    // 値は 0〜99 に収め、一桁のときは十の位を隠す。
+    void SetNumberSprites(std::array<engine::Sprite*, 2>& digits, std::int32_t value, const engine::Vector4& color, bool visible);
 
     // 入力基盤への非所有参照。描画基盤はBaseSceneの共通窓口を利用する。
     engine::InputManager* inputManager_ = nullptr;
 
     // タイトル上の配置Object、読込処理、ゲームルールをシーンが所有する。
-    std::unique_ptr<ObjectManager> objectManager_ = nullptr;
-    std::unique_ptr<LevelLoader> levelLoader_ = nullptr;
-    std::unique_ptr<GameRule> gameRule_ = nullptr;
+    std::unique_ptr<ObjectManager> objectManager_;
+    std::unique_ptr<LevelLoader> levelLoader_;
+    std::unique_ptr<GameRule> gameRule_;
 
     // 配置JSONから生成したSpriteと、タイトル用の粒子・空を所有する。
     std::vector<std::unique_ptr<engine::Sprite>> sprites_;
-    std::unique_ptr<engine::ParticleSystem> particleSystem_ = nullptr;
-    std::unique_ptr<Skybox> skybox_ = nullptr;
+    std::unique_ptr<engine::ParticleSystem> particleSystem_;
+    std::unique_ptr<Skybox> skybox_;
 
     // タイトル用プレイヤーObjectへの非所有参照。
     Player* player_ = nullptr;
@@ -171,22 +176,22 @@ class TitleScene : public BaseScene, public ISceneGameplayAccess {
 
     // メニューの選択肢
     enum class MenuIndex {
-        GameStart,
-        Setting,
-        Max // 項目数を取るためのダミー
+        kGameStart,
+        kSetting,
+        kMax // 項目数を取るためのダミー
     };
 
     // メインメニューの選択位置。GameStartを初期項目にする。
-    int currentMenuIndex_ = (int)MenuIndex::GameStart;
+    std::int32_t currentMenuIndex_ = (std::int32_t)MenuIndex::kGameStart;
 
     // メインメニュー・セーブ選択画面の表示段階。
-    TitleMode titleMode_ = TitleMode::MainMenu;
-    SaveSelectMode saveSelectMode_ = SaveSelectMode::Browse;
+    TitleMode titleMode_ = TitleMode::kMainMenu;
+    SaveSelectMode saveSelectMode_ = SaveSelectMode::kBrowse;
 
     // 操作対象のスロット、スロット内のフォーカス、削除確認の選択肢。
-    int currentSaveSlotIndex_ = 0; // 選択中のセーブ枠。0始まり。
-    int saveSelectFocusIndex_ = 0;
-    int deleteConfirmIndex_ = 1; // 削除確認の選択番号。初期値1で取消側から始める。
+    std::int32_t currentSaveSlotIndex_ = 0; // 選択中のセーブ枠。0始まり。
+    std::int32_t saveSelectFocusIndex_ = 0;
+    std::int32_t deleteConfirmIndex_ = 1; // 削除確認の選択番号。初期値1で取消側から始める。
 
     // タイトル表示、保存画面の開閉、ゲーム開始フェードの経過秒数。
     float titleUiTime_ = 0.0f;
@@ -210,27 +215,27 @@ class TitleScene : public BaseScene, public ISceneGameplayAccess {
     engine::Sprite* mainMenuPromptSprite_ = nullptr;
 
     // 演出でサイズ・位置を変えても戻せるように保存した初期配置。
-    engine::Vector2 startTextBaseSize_ = engine::Vector2::ZERO;
-    engine::Vector2 settingTextBaseSize_ = engine::Vector2::ZERO;
-    engine::Vector2 startTextBasePosition_ = engine::Vector2::ZERO;
-    engine::Vector2 settingTextBasePosition_ = engine::Vector2::ZERO;
-    engine::Vector2 mainMenuArrowBaseSize_ = engine::Vector2::ZERO;
-    engine::Vector2 mainMenuCursorBaseSize_ = engine::Vector2::ZERO;
-    engine::Vector2 mainMenuPromptBaseSize_ = engine::Vector2::ZERO;
+    engine::Vector2 startTextBaseSize_ = engine::Vector2::kZero;
+    engine::Vector2 settingTextBaseSize_ = engine::Vector2::kZero;
+    engine::Vector2 startTextBasePosition_ = engine::Vector2::kZero;
+    engine::Vector2 settingTextBasePosition_ = engine::Vector2::kZero;
+    engine::Vector2 mainMenuArrowBaseSize_ = engine::Vector2::kZero;
+    engine::Vector2 mainMenuCursorBaseSize_ = engine::Vector2::kZero;
+    engine::Vector2 mainMenuPromptBaseSize_ = engine::Vector2::kZero;
 
     // メニュー選択に応じて基準配置へ加える矢印・カーソルの差分。
-    engine::Vector2 mainMenuArrowOffset_ = engine::Vector2::ZERO;
-    engine::Vector2 mainMenuCursorOffset_ = engine::Vector2::ZERO;
-    engine::Vector2 mainMenuPromptBasePosition_ = engine::Vector2::ZERO;
+    engine::Vector2 mainMenuArrowOffset_ = engine::Vector2::kZero;
+    engine::Vector2 mainMenuCursorOffset_ = engine::Vector2::kZero;
+    engine::Vector2 mainMenuPromptBasePosition_ = engine::Vector2::kZero;
 
     // 配置済み主人公は借用し、カメラ追従用の補助Objectだけ所有する。
     engine::Object3D* titleHeroSlime_ = nullptr;
-    std::unique_ptr<engine::Object3D> titleCameraAnchor_ = nullptr;
+    std::unique_ptr<engine::Object3D> titleCameraAnchor_;
 
     // タイトル演出開始前に記録する主人公の基準姿勢。
-    engine::Vector3 titleHeroBasePosition_ = engine::Vector3::ZERO;
+    engine::Vector3 titleHeroBasePosition_ = engine::Vector3::kZero;
     engine::Vector3 titleHeroBaseScale_ = {1.0f, 1.0f, 1.0f};
-    engine::Vector3 titleHeroBaseRotation_ = engine::Vector3::ZERO;
+    engine::Vector3 titleHeroBaseRotation_ = engine::Vector3::kZero;
     bool titleHeroBaseCaptured_ = false; // タイトル演出前の主人公の配置姿勢を退避済みか。
 
     // 主人公の演出シーケンスの再生時刻。
@@ -239,8 +244,8 @@ class TitleScene : public BaseScene, public ISceneGameplayAccess {
     // 文字 Sprite の借用参照と基準配置。導入アニメーションはこの基準へオフセットを加える。
     struct TitleLogoGlyph {
         engine::Sprite* sprite = nullptr;
-        engine::Vector2 basePosition = engine::Vector2::ZERO;
-        engine::Vector2 baseSize = engine::Vector2::ZERO;
+        engine::Vector2 basePosition = engine::Vector2::kZero;
+        engine::Vector2 baseSize = engine::Vector2::kZero;
         float delay = 0.0f;
     };
 
@@ -313,5 +318,5 @@ class TitleScene : public BaseScene, public ISceneGameplayAccess {
     engine::Sprite* saveConfirmBackText_ = nullptr;
 
     // タイトルから開く設定画面の状態とSpriteを独立して所有する。
-    std::unique_ptr<SettingsMenuOverlay> settingsOverlay_ = nullptr;
+    std::unique_ptr<SettingsMenuOverlay> settingsOverlay_;
 };

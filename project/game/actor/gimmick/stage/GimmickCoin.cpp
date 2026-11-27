@@ -1,8 +1,10 @@
+#include <cstdint>
 #include "GimmickCoin.h"
 #include <numbers>
 #include "ObjectPropertyDefinition.h"
 #include "CollisionConfig.h"
 #include "game/system/progress/GameDataManager.h"
+#include "game/scene/gameplay/GamePlayScene.h"
 #include "SceneManager.h"
 #include "BaseScene.h"
 #include "game/system/combat/GroundEffectLocator.h"
@@ -25,7 +27,7 @@ json Vector3ToReplayJson(const engine::Vector3& value) {
 }
 
 engine::Vector3 ReplayJsonToVector3(const json& value, const engine::Vector3& fallback) {
-    // 旧記録や欠損データでは現在の値を維持します。
+    // 座標が配列でない場合や3要素に満たない場合は、呼出側が指定した座標を返す。
     if (!value.is_array() || value.size() < 3) {
         return fallback;
     }
@@ -34,17 +36,19 @@ engine::Vector3 ReplayJsonToVector3(const json& value, const engine::Vector3& fa
 }
 } // namespace
 
+// 配置コインの当たり判定と見た目を設定し、一時ドロップや取得演出の状態を初期化する。
 void GimmickCoin::Initialize(engine::Object3DCommon* common, const std::string& modelName) {
     BaseGimmick::Initialize(common, modelName);
 
     // コインはプレイヤーだけが拾える球トリガーとして初期化します。
-    SetCollisionAttribute(CollisionCategories::Get("trigger"));
-    SetCollisionMask(CollisionCategories::Get("player"));
-    SetColliderType(ColliderType::Sphere);
+    SetCollisionAttribute(engine::collisionCategories::Get("trigger"));
+    SetCollisionMask(engine::collisionCategories::Get("player"));
+    SetColliderType(engine::ColliderType::kSphere);
     SetCollisionRadius(1.0f);
     SetColor({1.0f, 0.9f, 0.0f, 1.0f});
     SetScale({0.6f, 0.6f, 0.15f});
 
+    // 一時ドロップの速度や期限は生成後にConfigureTemporaryDrop()で設定する。ここでは配置コインとして初期化する。
     isCollected_ = false;
     isTemporaryDrop_ = false;
     collectAnimationTimer_ = 0.0f;
@@ -61,7 +65,7 @@ void GimmickCoin::Initialize(engine::Object3DCommon* common, const std::string& 
     SetClassName("Gimmick");
     SetGimmickType("Coin");
 
-    // 編集項目の宣言です。動作処理と旧paramの保存キーは変更しません。
+    // 配置コインを種類一覧へ登録する。一時ドロップの速度や寿命は生成側が設定する。
     using Self = GimmickCoin;
     engine::ObjectPropertyDefinition<Self> properties(*this, kTypeId, "コイン",
         "配置用のコインです。一時ドロップの寿命や速度は生成側で設定し、配置用の編集項目には混ぜません。");
@@ -71,13 +75,14 @@ void GimmickCoin::Update(float deltaTime) {
     // 取得時の跳ね上がりと、一時ドロップの落下・寿命は通常の回転より優先します。
     engine::Vector3 rotate = GetRotation();
 
-    // 取得後は待機時の移動・回転を止め、その時点の位置と縮尺を基準に浮上して消えます。
+    // 取得済みなら待機時の処理を抜け、取得時の位置と縮尺を基準に浮上・回転・消滅を進める。
     if (isCollected_) {
         collectAnimationTimer_ += deltaTime;
         const float t = std::clamp(collectAnimationTimer_ / kCollectAnimationDuration, 0.0f, 1.0f);
         const float easeOut = 1.0f - (1.0f - t) * (1.0f - t);
         const float hop = std::sin(t * kPi);
 
+        // 取得位置から上へ移動し、終盤は縮尺と不透明度を落としてから遅延削除する。
         engine::Vector3 position = collectStartPosition_;
         position.y += 1.25f * easeOut + 0.25f * hop;
         SetTranslate(position);
@@ -103,9 +108,11 @@ void GimmickCoin::Update(float deltaTime) {
         return;
     }
 
+    // 未取得の一時ドロップでは、通常の回転より先に落下と寿命を更新する。
     if (isTemporaryDrop_) {
         UpdateTemporaryDrop(deltaTime);
 
+        // 寿命で削除を依頼したフレームは、共通処理だけ実行して回転を止める。
         if (IsDead()) {
             BaseGimmick::Update(deltaTime);
             return;
@@ -114,6 +121,7 @@ void GimmickCoin::Update(float deltaTime) {
 
     rotate.y += rotationSpeed_ * deltaTime;
 
+    // Y軸角度が1周を超えたフレームは2πラジアンを1回引く。
     if (rotate.y > kPi * 2.0f) {
         rotate.y -= kPi * 2.0f;
     }
@@ -123,6 +131,7 @@ void GimmickCoin::Update(float deltaTime) {
     BaseGimmick::Update(deltaTime);
 }
 
+// 初速、秒単位の寿命と点滅予告時間、接地面のY座標を一時ドロップに設定する。
 void GimmickCoin::ConfigureTemporaryDrop(const engine::Vector3& initialVelocity, float lifetime, float blinkStartTime,
                                          float groundY) {
     // モデルの底面と地面を揃え、落下中の見た目が地形へ埋まらないようにします。
@@ -131,9 +140,10 @@ void GimmickCoin::ConfigureTemporaryDrop(const engine::Vector3& initialVelocity,
     dropLifetime_ = (std::max)(0.2f, lifetime);
     dropBlinkStartTime_ = std::clamp(blinkStartTime, 0.0f, dropLifetime_);
     dropAge_ = 0.0f;
+    // 現在の姿勢でワールドAABBを求め、接地面の高さをコイン原点の高さに変換する。
     UpdateLocalMatrix();
     UpdateWorldMatrix();
-    const Aabb bounds = GetModelWorldAabb();
+    const engine::Aabb bounds = GetModelWorldAabb();
     dropGroundOffset_ = (std::max)(0.03f, GetTranslate().y - bounds.min.y + 0.03f);
     dropGroundY_ = groundY + dropGroundOffset_;
     dropSettleTimer_ = 0.0f;
@@ -165,18 +175,22 @@ void GimmickCoin::UpdateTemporaryDrop(float deltaTime) {
         dropVelocity_.y -= kDropGravity * deltaTime;
         position += dropVelocity_ * deltaTime;
 
+        // 落下後の原点がモデル底面を接地させる高さ以下なら、接地位置まで引き戻す。
         if (position.y <= dropGroundY_) {
             position.y = dropGroundY_;
 
+            // 接地時の鉛直速度の絶対値が0.45を超える間は、減速させて跳ね返す。
             if (std::abs(dropVelocity_.y) > kDropStopSpeed) {
                 dropVelocity_.y = -dropVelocity_.y * kDropBounceRate;
                 dropVelocity_.x *= kDropGroundFriction;
                 dropVelocity_.z *= kDropGroundFriction;
+            // 接地時の鉛直速度が閾値以下なら跳ね返りを終え、次回から水平移動だけを更新する。
             } else {
                 dropVelocity_.y = 0.0f;
                 dropSettleTimer_ = 0.01f;
             }
         }
+    // 跳ね返りを終えた後は水平速度にだけ摩擦をかけて滑らせる。
     } else {
         dropSettleTimer_ += deltaTime;
         dropVelocity_.x *= std::pow(kDropGroundFriction, deltaTime * 18.0f);
@@ -190,6 +204,7 @@ void GimmickCoin::UpdateTemporaryDrop(float deltaTime) {
     // 設定した残り時間に入ったら、消滅が近いほど点滅を速めます。
     const float remaining = dropLifetime_ - dropAge_;
 
+    // 点滅予告時間が正で、寿命の残り時間がその範囲に入った場合だけ点滅する。
     if (dropBlinkStartTime_ > 0.0f && remaining <= dropBlinkStartTime_) {
         const float blinkProgress = 1.0f - std::clamp(remaining / dropBlinkStartTime_, 0.0f, 1.0f);
         const float blinkSpeed = 8.0f + blinkProgress * 18.0f;
@@ -197,19 +212,22 @@ void GimmickCoin::UpdateTemporaryDrop(float deltaTime) {
         SetIsVisible(visible);
         const float alpha = visible ? (0.45f + 0.55f * (1.0f - blinkProgress * 0.35f)) : 0.0f;
         SetColor({1.0f, 0.92f, 0.18f, alpha});
+    // 点滅が無効か予告区間に入る前なら、不透明表示を維持する。
     } else {
         SetIsVisible(true);
         SetColor({1.0f, 0.92f, 0.18f, 1.0f});
     }
 }
 
+// 未取得のコインにプレイヤー属性の相手が触れた場合に取得を成立させ、trueを返す。
 bool GimmickCoin::OnCollision(engine::Object3D* other) {
     // 取得済みなら同じ接触から枚数を二度加算しません。
     if (isCollected_) {
         return false;
     }
 
-    if (other->GetCollisionAttribute() & CollisionCategories::Get("player")) {
+    // 衝突マスクに加え、通知された相手にプレイヤー属性が含まれることを確認する。
+    if (other->GetCollisionAttribute() & engine::collisionCategories::Get("player")) {
         Collect();
         return true;
     }
@@ -218,11 +236,12 @@ bool GimmickCoin::OnCollision(engine::Object3D* other) {
 }
 
 void GimmickCoin::Collect() {
-    // 取得演出を開始してからセーブ側の枚数を更新します。
+    // 取得済みなら演出を再開せず、所持コイン数も増やさない。
     if (isCollected_) {
         return;
     }
 
+    // 取得時の姿勢を演出の基準として保存し、演出中は触れ直せないよう衝突を止める。
     isCollected_ = true;
     collectAnimationTimer_ = 0.0f;
     collectStartPosition_ = GetTranslate();
@@ -232,8 +251,16 @@ void GimmickCoin::Collect() {
 
     GameDataManager::GetInstance()->AddCoin(1);
 
-    const int currentCoins = GameDataManager::GetInstance()->GetCoins();
-    const int currentLives = GameDataManager::GetInstance()->GetLives();
+    // 所持コインの100枚繰り上がりとは別に、シーン再生中は成立した取得をリザルト集計へ伝える。
+    if (auto* scenes = SceneManager::GetInstance(); scenes && scenes->IsPlaying()) {
+        // GamePlaySceneの再生中だけ、ステージ内の取得数へ加算する。
+        if (auto* gameplay = dynamic_cast<GamePlayScene*>(scenes->GetCurrentScene())) {
+            gameplay->RecordStageCoinPickup();
+        }
+    }
+
+    const std::int32_t currentCoins = GameDataManager::GetInstance()->GetCoins();
+    const std::int32_t currentLives = GameDataManager::GetInstance()->GetLives();
     DebugConsole::GetInstance()->AddLog("Coin Collected! (" + std::to_string(currentCoins) +
                                         "/100) Lives: " + std::to_string(currentLives));
 }
@@ -242,6 +269,7 @@ void GimmickCoin::RequestSelfRemove() {
     // 描画・衝突の走査中に直接破棄せず、シーンの遅延削除へ依頼します。
     BaseScene* scene = SceneManager::GetInstance() ? SceneManager::GetInstance()->GetCurrentScene() : nullptr;
 
+    // 現在のシーンを取得できるときだけ削除依頼を渡す。
     if (scene) {
         scene->RequestRemoveObject(this);
     }
@@ -266,7 +294,7 @@ void GimmickCoin::CaptureReplayCustomState(json& state) const {
 }
 
 void GimmickCoin::RestoreReplayCustomState(const json& state) {
-    // 欠けたキーは既定値のままにして、古い Replay も読めるようにします。
+    // 旧記録などにないキーは現在値を保持し、存在する項目だけ読み戻す。
     BaseGimmick::RestoreReplayCustomState(state);
     isCollected_ = state.value("coinCollected", isCollected_);
     isTemporaryDrop_ = state.value("coinTemporaryDrop", isTemporaryDrop_);
@@ -279,14 +307,17 @@ void GimmickCoin::RestoreReplayCustomState(const json& state) {
     dropGroundOffset_ = state.value("coinDropGroundOffset", dropGroundOffset_);
     dropSettleTimer_ = state.value("coinDropSettleTimer", dropSettleTimer_);
 
+    // 落下速度を記録していた場合だけ、3要素配列から復元する。
     if (state.contains("coinDropVelocity")) {
         dropVelocity_ = ReplayJsonToVector3(state["coinDropVelocity"], dropVelocity_);
     }
 
+    // 取得演出の開始位置が保存されている場合だけ復元する。
     if (state.contains("coinCollectStartPosition")) {
         collectStartPosition_ = ReplayJsonToVector3(state["coinCollectStartPosition"], collectStartPosition_);
     }
 
+    // 取得演出の開始縮尺が保存されている場合だけ復元する。
     if (state.contains("coinCollectStartScale")) {
         collectStartScale_ = ReplayJsonToVector3(state["coinCollectStartScale"], collectStartScale_);
     }

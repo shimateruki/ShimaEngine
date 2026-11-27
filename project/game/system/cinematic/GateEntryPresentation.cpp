@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include <cstdint>
 #include "game/system/cinematic/GateEntryPresentation.h"
 #include "Easing.h"
 #include "Player.h"
@@ -13,12 +14,15 @@
 
 namespace {
 constexpr float kDuration = 1.55f;
+// 演出の進行率に使う値を0〜1の範囲へ収めます。
 float Clamp(float t) { return std::clamp(t, 0.0f, 1.0f); }
 
 
+// 2つの座標の各成分を重みtで線形補間します。
 engine::Vector3 Lerp(const engine::Vector3& a, const engine::Vector3& b, float t) {
     return {a.x + (b.x-a.x)*t, a.y + (b.y-a.y)*t, a.z + (b.z-a.z)*t};
 }
+// 視点から注視点を向くピッチ・ヨーをラジアンで返します。同じ位置に近ければ回転を0にします。
 engine::Vector3 LookAt(const engine::Vector3& eye, const engine::Vector3& target) {
     const auto d = target - eye;
     const float length = std::sqrt(d.x*d.x + d.y*d.y + d.z*d.z);
@@ -29,26 +33,39 @@ engine::Object3D* ResolveAnchor(engine::Object3D* gate) {
     // 判定面が見た目の枠の子なら、枠の中心へ入ります。地形などの整理用の親は使いません。
     for (auto* parent = gate->GetParent(); parent; parent = parent->GetParent()) {
         const auto model = parent->GetModelName();
+        // 親が既知のゲート枠モデルを持つ場合は、判定オブジェクトの代わりにその枠を使う。
         if (model == "Stages/gate" || model == "Gimmicks/crown_stage_gate") return parent;
     }
     return gate;
 }
+// 突入先の中心をワールド座標で求めます。
 engine::Vector3 PortalPosition(engine::Object3D* gate, bool useModelCenter) {
+    // モデル中心を使わない設定か、モデルを持たない場合はゲートの原点を使う。
     if (!useModelCenter || !gate->GetModel()) return gate->GetWorldPosition();
     const auto bounds = gate->GetModelWorldAabb();
     return (bounds.min + bounds.max) * 0.5f;
 }
+// ゲート面を横切る水平の単位方向を求め、プレイヤーから入口へ向かう向きに揃えます。
 engine::Vector3 Direction(engine::Object3D* gate, const engine::Vector3& from, bool useModelCenter) {
     auto fallback = PortalPosition(gate,useModelCenter) - from;
     float length = std::sqrt(fallback.x*fallback.x + fallback.z*fallback.z);
+    // 入口に対する水平距離がない場合に備え、代替の向きには正のZを使う。
     fallback = length > 0.0001f ? engine::Vector3{fallback.x/length, 0.0f, fallback.z/length}
                               : engine::Vector3{0.0f, 0.0f, 1.0f};
     const auto& world = gate->GetTransform()->matWorld;
-    // モデルの最も薄い軸をゲート面の法線とみなし、ワールド行列で向きを取得します。
-    int normalAxis = 2;
+    // モデルがない場合の法線には、既定のローカルZ軸を使う。
+    std::int32_t normalAxis = 2;
+    // モデルがある場合は、ローカルAABBで最も薄い軸を法線に選ぶ。
     if (auto* model = gate->GetModel()) {
         const auto extent = model->GetLocalAabbMax() - model->GetLocalAabbMin();
-        normalAxis = extent.x < extent.y ? (extent.x < extent.z ? 0 : 2) : (extent.y < extent.z ? 1 : 2);
+        // XとYの厚さが同じならYを候補にし、候補とZの厚さが同じならZを維持する。
+        if (extent.x < extent.y) {
+            if (extent.x < extent.z) {
+                normalAxis = 0;
+            }
+        } else if (extent.y < extent.z) {
+            normalAxis = 1;
+        }
     }
     auto direction = engine::Vector3{world.m[normalAxis][0], 0.0f, world.m[normalAxis][2]};
     length = std::sqrt(direction.x*direction.x + direction.z*direction.z);
@@ -60,11 +77,12 @@ engine::Vector3 Direction(engine::Object3D* gate, const engine::Vector3& from, b
         direction = {-direction.x, 0.0f, -direction.z};
     return direction;
 }
+// 演出中のカメラを固定点モードにし、視点と注視点のワールド座標から姿勢を設定します。
 void SetCameraPose(engine::Camera* camera, const engine::Vector3& eye, const engine::Vector3& target) {
     const auto rotation = LookAt(eye, target);
     camera->SetInputEnabled(false);
     camera->SetFollowTarget(nullptr);
-    camera->SetFollowMode(engine::Camera::FollowMode::FixedPoint);
+    camera->SetFollowMode(engine::Camera::FollowMode::kFixedPoint);
     camera->ConfigFixedPoint(eye, rotation);
     // ConfigFixedPoint は設定値の保存だけなので、追従対象のないカメラにも現在姿勢を直接渡します。
     camera->SetEye(eye);
@@ -81,8 +99,8 @@ struct GateEntryPresentation::State {
         engine::Object3D* object = nullptr;
         engine::Object3D::MaterialState material{};
         engine::Vector4 color{};
-        BlendMode blend = BlendMode::Normal;
-        int materialType = 0;
+        BlendMode blend = BlendMode::kNormal;
+        std::int32_t materialType = 0;
         float emissive = 0.0f;
         bool visible = true;
     };
@@ -90,7 +108,7 @@ struct GateEntryPresentation::State {
     engine::Object3D* gate = nullptr;
     engine::Camera* camera = nullptr;
     engine::Object3D* cameraFollow = nullptr;
-    engine::Camera::FollowMode cameraMode = engine::Camera::FollowMode::Aimable;
+    engine::Camera::FollowMode cameraMode = engine::Camera::FollowMode::kAimable;
     bool cameraInput = true;
     engine::Vector3 start{}, scale{}, rotation{}, direction{};
     engine::Vector3 eye{}, target{}, cameraRotation{};
@@ -104,13 +122,16 @@ struct GateEntryPresentation::State {
 
 GateEntryPresentation::GateEntryPresentation() = default;
 GateEntryPresentation::~GateEntryPresentation() = default;
+// 演出用の状態を持っている間はtrueを返します。終了時刻に達したあともReset()までは状態を保持します。
 bool GateEntryPresentation::IsActive() const { return state_ != nullptr; }
+// 演出用の状態を持ち、1.55秒の進行を終えたらtrueを返します。
 bool GateEntryPresentation::IsFinished() const { return state_ && state_->timer >= kDuration; }
+// 演出がある場合の進行率を0〜1で返します。状態がなければ0です。
 float GateEntryPresentation::GetProgress() const { return state_ ? Clamp(state_->timer/kDuration) : 0.0f; }
 
 bool GateEntryPresentation::Start(Player* player, engine::Object3D* gate, bool manageCinemaBars) {
     engine::Camera* camera = CameraManager::GetInstance()->GetMainCamera();
-    // 演出が重複する場合や、プレイヤー・ゲート・カメラがそろわない場合は開始しません。
+    // すでに演出中、必要な実体がない、HPが0以下、または別の演出やゲート復帰で操作を制限している場合は開始しない。
     if (state_ || !player || !gate || !camera || player->GetHp() <= 0.0f || player->IsCinematicLocked() ||
         player->IsGateReturnAnimationActive())
         return false;
@@ -132,6 +153,7 @@ bool GateEntryPresentation::Start(Player* player, engine::Object3D* gate, bool m
     state->target = camera->GetTargetPoint();
     state->cameraRotation = camera->GetRotation();
     state->manageBars = manageCinemaBars;
+    // 帯の管理を開始する前の高さを控える。管理フラグが偽なら更新と復元ではこの値を書き込まない。
     state->baseBarHeight = PostEffect::GetInstance()->GetParams()->cinemaBarHeight;
 
     // 衝突フレーム内で操作・被弾・物理を止め、コピー形態はそのままゲートへ入れます。
@@ -150,14 +172,18 @@ bool GateEntryPresentation::Start(Player* player, engine::Object3D* gate, bool m
         saved.visible = object->GetIsVisible();
         saved.material = object->CaptureMaterialState();
         state->materials.push_back(saved);
+        // 有効な子参照だけを走査対象にし、子の材質も切り抜きと復元の対象に含める。
         for (auto* child : object->GetChildren()) if (child) pending.push_back(child);
     }
+    // 復元用の状態を保存してから、最初のフレームの姿勢・材質・カメラに反映する。
     state_ = std::move(state);
     Update(0.0f);
     return true;
 }
 
+// フレーム時間（秒）でゲート突入を進め、位置、切り抜き、カメラを更新します。
 void GateEntryPresentation::Update(float deltaTime) {
+    // 演出が開始されていなければ、プレイヤーやカメラの設定を操作しない。
     if (!state_) return;
     auto& s = *state_;
     // 時間を演出の長さまでで止め、位置や表示の補間が終了点を超えないようにする。
@@ -197,10 +223,11 @@ void GateEntryPresentation::Update(float deltaTime) {
     const float fade = Easing::InOutCubic01((clip-0.72f)/0.28f);
     const float heat = Clamp(0.08f+clip*0.18f+edgePeak*0.30f);
     // 開始時に控えた各描画部品に同じゲート面を適用し、元から非表示の部品は出さない。
+    // 保存された全パーツへ適用し、元が可視で切り抜きと演出時刻がしきい値に達していないものだけ表示する。
     for (const auto& saved : s.materials) {
         auto* object = saved.object;
         object->SetMaterialType(4);
-        object->SetBlendMode(BlendMode::Normal);
+        object->SetBlendMode(BlendMode::kNormal);
         object->SetEmissive((std::max)(saved.emissive,1.25f+clip*0.95f+edgePeak*1.45f));
         object->SetColor({saved.color.x*(1.0f-heat)+heat, saved.color.y*(1.0f-heat)+0.76f*heat,
                           saved.color.z*(1.0f-heat)+0.34f*heat, 1.0f-fade});
@@ -217,6 +244,7 @@ void GateEntryPresentation::Update(float deltaTime) {
             object->SetPortalClip(clipSettings);
         }
     }
+    // プレイヤーと子モデルのワールド行列を更新し、このフレームで変わった姿勢を描画へ渡す。
     s.player->UpdateLocalMatrix();
     s.player->UpdateWorldMatrix(true);
     // 現在の入口位置からカメラの注視点を決め、演出開始時の視点から寄せる。
@@ -233,7 +261,9 @@ void GateEntryPresentation::Update(float deltaTime) {
     }
 }
 
+// 退避したプレイヤーの姿勢・材質、カメラ設定、担当している帯を戻し、演出状態を破棄します。
 void GateEntryPresentation::Reset() {
+    // 演出用の状態を持っていなければ、復元する対象がないため終了する。
     if (!state_) return;
     auto& s = *state_;
     // 中断時に動かした座標・姿勢と操作制限を、演出の開始前へ戻す。

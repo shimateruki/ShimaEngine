@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include <cstdint>
 #include "KeyConfig.h"
 #include "InputGlyphResolver.h"
 #include <cassert>
@@ -15,7 +16,7 @@ static_assert(std::is_same_v<decltype(KeyConfig::GetInstance()->GetBindData("Jum
 int main() {
     auto* inputs = KeyConfig::GetInstance();
     inputs->Initialize();
-    const auto check = [inputs](const char* action, int key, int mouse, WORD pad) {
+    const auto check = [inputs](const char* action, std::int32_t key, std::int32_t mouse, WORD pad) {
         const auto* binding = inputs->GetBindData(action);
         assert(binding && binding->keyCode == key && binding->mouseButton == mouse && binding->padCode == pad);
     };

@@ -9,11 +9,12 @@
 
 // 攻撃側とコピー能力で共有する、状態を持たない計算。
 // 微小方向の扱いと補間式は既存の戦闘挙動を維持します。
-namespace CombatMath {
+namespace combatMath {
 // 入力の Y を捨てて XZ 平面で正規化します。長さがほぼゼロなら前方向 +Z を返します。
 inline engine::Vector3 NormalizePlanar(engine::Vector3 value) {
     value.y = 0.0f;
     const float length = std::sqrt(value.x * value.x + value.z * value.z);
+    // 水平距離が0.001ワールド単位以下では方向を安定して求められないため、前方へ揃える。
     if (length <= 0.001f) {
         return {0.0f, 0.0f, 1.0f};
     }
@@ -51,10 +52,11 @@ inline engine::Vector3 LerpVector3(const engine::Vector3& start, const engine::V
 inline engine::Vector3 MakePacedSpacingVelocity(const engine::Vector3& toTarget, float distance, float nearDistance, float farDistance,
                                         float speed, float retreatRate, float strafeRate, float elapsed,
                                         float cycleSeconds) {
-    // 遠ければ接近、近すぎれば後退し、間合い内に入ったときだけ横移動を選びます。
+    // 遠距離の境界を越えたら、横移動をせず目標へ接近する。
     if (distance > farDistance) {
         return {toTarget.x * speed, 0.0f, toTarget.z * speed};
     }
+    // 近距離の境界より内側では、目標と反対方向へ移動して間合いを戻す。
     if (distance < nearDistance) {
         return {-toTarget.x * speed * retreatRate, 0.0f, -toTarget.z * speed * retreatRate};
     }
@@ -72,4 +74,4 @@ inline engine::Vector3 SmoothPlanarVelocity(const engine::Vector3& previous, con
     const float blend = 1.0f - std::exp(-(std::max)(deltaTime, 0.0f) * followRate);
     return {engine::Math::Lerp(previous.x, requested.x, blend), requested.y, engine::Math::Lerp(previous.z, requested.z, blend)};
 }
-} // namespace CombatMath
+} // namespace combatMath

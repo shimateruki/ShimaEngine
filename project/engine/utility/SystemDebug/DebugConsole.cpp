@@ -2,8 +2,8 @@
 #include <Windows.h> 
 
 DebugConsole* DebugConsole::GetInstance() {
-    static DebugConsole instance;
-    return &instance;
+    static DebugConsole sInstance;
+    return &sInstance;
 }
 
 void DebugConsole::Initialize() {
@@ -25,11 +25,13 @@ void DebugConsole::Finalize() {
 
 void DebugConsole::AddLog(const std::string& log) {
 #ifdef USE_IMGUI
-    // 既存の文字列ログを接頭辞で分類し、型付きログと同じ保存経路へ流す。
-    LogLevel level = LogLevel::Info;
+    // 本文中のレベル表記で既存の文字列ログを分類し、型付きログと同じ保存処理へ渡す。
+    LogLevel level = LogLevel::kInfo;
+    // 文字列にエラーの印があれば、警告より優先してエラーとして保存する。
     if (log.find("[ERROR]") != std::string::npos)
-        level = LogLevel::Error;
-    else if (log.find("[WARN]") != std::string::npos) level = LogLevel::Warning;
+        level = LogLevel::kError;
+    // エラーの印がなく警告の印があれば、警告として保存する。
+    else if (log.find("[WARN]") != std::string::npos) level = LogLevel::kWarning;
 
     AddLog(level, log);
 #endif
@@ -40,7 +42,8 @@ void DebugConsole::AddLog(LogLevel level, const std::string& log) {
     // ログ数を上限に保ち、表示とVisual Studioの出力へ同じ本文を渡す。
     std::lock_guard<std::mutex> lock(logMutex_);
 
-    if (level == LogLevel::Error) {
+    // エラーを受け取った場合だけ累計件数を増やす。表示履歴から古いログが消えても件数は残る。
+    if (level == LogLevel::kError) {
         errorCount_.fetch_add(1, std::memory_order_relaxed);
     }
 
@@ -52,14 +55,16 @@ void DebugConsole::AddLog(LogLevel level, const std::string& log) {
         logs_.pop_front();
     }
 
-    // 古いログを削ってから末尾へ追加し、自動スクロールが有効なら次の描画に追従を予約します。
+    // 表示履歴の上限に空きを作ったら、受け取ったログを末尾へ追加する。
     logs_.push_back({ log, level });
 
+    // 自動スクロールが有効な場合は、次の描画で新しいログ位置まで追従する。
     if (autoScroll_) {
         scrollToBottom_ = true;
     }
 
     std::string outStr = log;
+    // 本文末尾に改行がない場合は、Visual Studioの出力で次のログとつながらないよう改行を補う。
     if (outStr.empty() || outStr.back() != '\n')
         outStr += "\n";
     OutputDebugStringA(outStr.c_str());
@@ -70,13 +75,13 @@ void DebugConsole::DrawImGui() {
 #ifdef USE_IMGUI
     ImGui::SetNextWindowSize(ImVec2(500, 400), ImGuiCond_FirstUseEver);
 
-    // 折りたたまれて中身を描画しない場合も、Begin に対応する End を呼んでから抜けます。
+    // ウィンドウが折りたたまれたなどの理由で中身を描画できない場合は、対応するEndを呼んで戻る。
     if (!ImGui::Begin("Debug Console")) {
         ImGui::End();
         return;
     }
 
-    // --- ツールバー ---
+    // クリアが押されたときは、書き込みとの競合を防いで表示履歴を消す。
     if (ImGui::Button("Clear")) {
         std::lock_guard<std::mutex> lock(logMutex_);
         logs_.clear();
@@ -104,18 +109,22 @@ void DebugConsole::DrawImGui() {
     {
         std::lock_guard<std::mutex> lock(logMutex_);
 
-        // ★追加: コピー処理の完全版（表示中のログだけを結合してコピー）
+        // コピーが押されたときだけ、検索条件と表示レベルを通ったログをクリップボードへ送る。
         if (copy) {
             std::string clipboardText;
 
             for (const auto& entry : logs_) {
+                // 検索欄の条件を通らないログはコピーしない。
                 if (!filter_.PassFilter(entry.message.c_str()))
                     continue;
-                if (entry.level == LogLevel::Info && !showInfo_)
+                // 情報レベルを非表示にしている場合は、情報ログをコピーしない。
+                if (entry.level == LogLevel::kInfo && !showInfo_)
                     continue;
-                if (entry.level == LogLevel::Warning && !showWarn_)
+                // 警告レベルを非表示にしている場合は、警告ログをコピーしない。
+                if (entry.level == LogLevel::kWarning && !showWarn_)
                     continue;
-                if (entry.level == LogLevel::Error && !showError_)
+                // エラーレベルを非表示にしている場合は、エラーログをコピーしない。
+                if (entry.level == LogLevel::kError && !showError_)
                     continue;
 
                 clipboardText += entry.message + "\n";
@@ -126,38 +135,42 @@ void DebugConsole::DrawImGui() {
 
         // ログ描画ループ
         for (const auto& entry : logs_) {
-            // フィルタ適用
+            // 検索欄の条件を通らないログは画面に出さない。
             if (!filter_.PassFilter(entry.message.c_str()))
                 continue;
 
-            //  チェックが外れているレベルのログはスキップ！
-            if (entry.level == LogLevel::Info && !showInfo_)
+            // 情報レベルが無効なら、対応するログの描画を飛ばす。
+            if (entry.level == LogLevel::kInfo && !showInfo_)
                 continue;
-            if (entry.level == LogLevel::Warning && !showWarn_)
+            // 警告レベルが無効なら、対応するログの描画を飛ばす。
+            if (entry.level == LogLevel::kWarning && !showWarn_)
                 continue;
-            if (entry.level == LogLevel::Error && !showError_)
+            // エラーレベルが無効なら、対応するログの描画を飛ばす。
+            if (entry.level == LogLevel::kError && !showError_)
                 continue;
 
-            // 色設定
+            // エラーと警告を色付きにし、それ以外はテーマの既定の文字色で表示する。
             bool hasColor = true;
             ImVec4 color;
 
             switch (entry.level) {
-            case LogLevel::Error:   color = ImVec4(1.0f, 0.4f, 0.4f, 1.0f); break; // 赤
+            case LogLevel::kError:   color = ImVec4(1.0f, 0.4f, 0.4f, 1.0f); break; // 赤
 
-            case LogLevel::Warning: color = ImVec4(1.0f, 1.0f, 0.0f, 1.0f); break; // 黄
+            case LogLevel::kWarning: color = ImVec4(1.0f, 1.0f, 0.0f, 1.0f); break; // 黄
 
-            default:                hasColor = false; break; // 白
+            default:                hasColor = false; break;
             }
 
+            // エラーか警告に個別色がある場合だけ、描画直前に文字色を上書きする。
             if (hasColor)
                 ImGui::PushStyleColor(ImGuiCol_Text, color);
             ImGui::TextUnformatted(entry.message.c_str());
+            // 色を上書きした場合は、次のログへ設定が残らないよう直後に元へ戻す。
             if (hasColor)
                 ImGui::PopStyleColor();
         }
 
-        // スクロール処理
+        // スクロールの予約があれば今回の描画で最下部へ移し、予約を消費する。
         if (scrollToBottom_) {
             ImGui::SetScrollHereY(1.0f);
             scrollToBottom_ = false;

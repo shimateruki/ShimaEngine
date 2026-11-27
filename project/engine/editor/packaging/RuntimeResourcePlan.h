@@ -11,6 +11,7 @@ namespace engine {
 // 配布するResourcesの依存関係を収集します。元の素材と保存データは読み取りだけに使います。
 // ExecutablePackageWindowは、この結果を既存のコピー処理へ渡して実行セットを作成します。
 struct RuntimeResourcePlan {
+    /// <summary>選別中に参照したファイルのパス・サイズ・更新日時を記録し、コピー後に変更を検出する。</summary>
     struct Input {
         std::filesystem::path path;
         std::uintmax_t bytes = 0;

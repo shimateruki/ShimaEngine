@@ -13,8 +13,8 @@ namespace engine { class Object3D; }
 class SceneSerializer {
 public:
     enum class SceneAssetTemplate {
-        Empty,
-        CurrentScene
+        kEmpty,
+        kCurrentScene
     };
 
     // Scene Asset の識別情報と分割ファイルへの参照。読込済みシーンの Object を所有するものではない。

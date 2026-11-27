@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "Object3D.h"
 #include"Model.h"
 #include <algorithm>
@@ -6,7 +7,7 @@
 #include <wrl.h>
 #include <nlohmann/json_fwd.hpp>
 
-// 担当：Object3dを土台に、メッシュVFXの寿命・色・拡大・ディゾルブを制御する。
+// 担当：Object3D を土台に、メッシュ VFX の寿命・色・拡大・ディゾルブを制御する。
 // 関連：Object3D（共通機能）、MeshEffectManager（生成・再利用）、MeshEffectEditor（編集）
 // 主な入口：Initialize / Play / Update / Draw / ResetForReuse
 class EffectObject3D : public engine::Object3D {
@@ -20,22 +21,23 @@ public:
         float intensity;
 
         float dissolveFade;   // 4バイト (0.0:完全な状態 ～ 1.0:完全に消滅)
-        float revealProgress; // 4バイト
+        float revealProgress; // 出現モードが有効なときに見せる割合（0〜1）。
 
         float distortionStrength;
         float distortionSpeed;
 
         float edgeFadeStrength;
-        float alphaReference; // ★discardの閾値 (シェーダー側の padding1 と一致)
+        // 歪みと通常描画で、ピクセルを破棄するアルファのしきい値。
+        float alphaReference;
 
         engine::Vector2 screenSize;
 
-        int enableDistortion; // 0: 加算/通常, 1: 背景歪みモード
-        int enableColorRamp;  //カラーランプ有効フラグ
-        int enableNoiseTexture; //ノイズテクスチャ有効フラグ
-        int enableReveal;
-        int proceduralType;
-        int useTextureColor;
+        std::int32_t enableDistortion; // 0: 加算/通常, 1: 背景歪みモード
+        std::int32_t enableColorRamp;  //カラーランプ有効フラグ
+        std::int32_t enableNoiseTexture; //ノイズテクスチャ有効フラグ
+        std::int32_t enableReveal;
+        std::int32_t proceduralType;
+        std::int32_t useTextureColor;
 
         float chantFlowStrength;
         float chantRibbonStrength;
@@ -56,19 +58,23 @@ public:
     /// <summary>エフェクト用パイプラインでメッシュを描画する。</summary>
     void Draw(ID3D12Resource* pointLightResource = nullptr, ID3D12Resource* spotLightResource = nullptr) override;
 
+    // 指定カメラ用の変換枠を使って描画し、通常画面用の行列は保つ。
     void DrawForCamera(engine::Camera* camera, ID3D12Resource* pointLightResource,
-                       ID3D12Resource* spotLightResource, int previewBufferIndex = 0) override;
+                       ID3D12Resource* spotLightResource, std::int32_t previewBufferIndex = 0) override;
 
-    // エフェクト用マテリアルの描画値。バッファ未作成時の設定は反映されない。
+    // 材質の定数バッファを作成済みの場合だけ、以下の描画パラメーターを反映する。
     void SetColor(const engine::Vector4& color) { if (materialData_) materialData_->color = color; }
 
+    // 材質作成後に、UV の X・Y 方向へ進む速さを設定する。
     void SetScrollSpeed(const engine::Vector2& speed) { if (materialData_) materialData_->scrollSpeed = speed; }
 
+    // 材質作成後に、エフェクトの発光強度へ反映する。
     void SetIntensity(float intensity) { if (materialData_) materialData_->intensity = intensity; }
 
     // 材質シェーダーの時間だけを0へ戻す。寿命の再生位置とは別。
     void ResetTime() { if (materialData_) materialData_->time = 0.0f; }
 
+    // マップ済みの GPU 材質データを借用参照で返す。初期化できていなければ nullptr。
     EffectMaterial* GetMaterialData() const { return materialData_; }
 
     /// <summary>寿命を指定し、再生位置を先頭に戻して開始する。</summary>
@@ -76,6 +82,7 @@ public:
         currentTime_ = 0.0f; // 再生開始からの経過秒数。
         lifetime_ = lifetime; // 一回の再生の長さ（秒）。
         isPlaying_ = true;
+        // 材質バッファがある場合は、寿命とは別のシェーダー時刻も先頭に戻す。
         if (materialData_)
             materialData_->time = 0.0f;
     }
@@ -84,6 +91,7 @@ public:
     void Restart() {
         currentTime_ = 0.0f; // 再生開始からの経過秒数。
         isPlaying_ = true;
+        // 材質バッファがあれば、再開したフレームのシェーダー時刻も0へ戻す。
         if (materialData_)
             materialData_->time = 0.0f;
     }
@@ -107,12 +115,16 @@ public:
 
     void SetEndColor(const engine::Vector4& c) { endColor_ = c; }
 
+    // この一連の材質設定はバッファ作成後に反映する。歪み強度は0以上に制限する。
     void SetDistortionStrength(float strength) { if (materialData_) materialData_->distortionStrength = (std::max)(0.0f, strength); }
 
+    // 材質がある場合は、歪みの速度設定を材質データに保持する。
     void SetDistortionSpeed(float s) { if (materialData_) materialData_->distortionSpeed = s; }
 
+    // 材質がある場合は、刃の幅方向の減衰に使う値を渡す。
     void SetEdgeFadeStrength(float s) { if (materialData_) materialData_->edgeFadeStrength = s; }
 
+    // 材質がある場合は、描画モードの切り替えを 0 または 1 で渡す。
     void SetEnableDistortion(bool enable) { if (materialData_) materialData_->enableDistortion = enable ? 1 : 0; }
 
     /// <summary>歪み描画が有効で、強度も正かを返す。</summary>
@@ -121,40 +133,51 @@ public:
     }
 
     // ピクセルのアルファがこの値以下なら破棄する。歪み描画と通常描画で共通のしきい値。
+    // 材質バッファを作成済みのエフェクトにだけ、しきい値を転送する。
     void SetAlphaReference(float ref) { if (materialData_) materialData_->alphaReference = ref; }
 
     void SetNoiseTexture(uint32_t handle) { noiseTextureHandle_ = handle; }
 
     void SetRampTexture(uint32_t handle) { rampTextureHandle_ = handle; }
 
+    // 以下のフラグと強度も、作成済みの材質バッファへ書き込む。
     void SetEnableColorRamp(bool enable) { if (materialData_) materialData_->enableColorRamp = enable ? 1 : 0; }
 
+    // 材質作成後に、ノイズ画像をサンプリングするか設定する。
     void SetEnableNoiseTexture(bool enable) { if (materialData_) materialData_->enableNoiseTexture = enable ? 1 : 0; }
 
+    // 材質作成後に、メイン画像の RGB を採用するか設定する。
     void SetUseTextureColor(bool enable) { if (materialData_) materialData_->useTextureColor = enable ? 1 : 0; }
 
+    // 材質作成後に、詠唱の流れの強さを 0〜1 で設定する。
     void SetChantFlowStrength(float strength) { if (materialData_) materialData_->chantFlowStrength = std::clamp(strength, 0.0f, 1.0f); }
 
+    // 材質作成後に、詠唱の帯状の光の強さを 0〜1 で設定する。
     void SetChantRibbonStrength(float strength) { if (materialData_) materialData_->chantRibbonStrength = std::clamp(strength, 0.0f, 1.0f); }
 
+    // 材質作成後に、リングの発光表現の強さを 0〜1 で設定する。
     void SetRingEnergyStrength(float strength) { if (materialData_) materialData_->ringEnergyStrength = std::clamp(strength, 0.0f, 1.0f); }
 
+    // 材質作成後に、リングの回転速度を −40〜40 に収めて渡す。
     void SetRingSpinSpeed(float speed) { if (materialData_) materialData_->ringSpinSpeed = std::clamp(speed, -40.0f, 40.0f); }
 
     void SetBlendMode(BlendMode mode) { blendMode_ = mode; }
 
     BlendMode GetBlendMode() const { return blendMode_; }
 
+    // 材質バッファがあれば、boolean指定を基本の出現モード0または1へ変換する。
     void SetEnableReveal(bool enable) { if (materialData_) materialData_->enableReveal = enable ? 1 : 0; }
 
     // 0は出現制限なし、1はUV横方向、2は上から時計回りの円弧で見せる。
-    void SetRevealMode(int mode) { if (materialData_) materialData_->enableReveal = std::clamp(mode, 0, 2); }
+    // モードは材質バッファ作成後に適用し、シェーダーが扱える0～2に収める。
+    void SetRevealMode(std::int32_t mode) { if (materialData_) materialData_->enableReveal = std::clamp(mode, 0, 2); }
 
+    // 材質バッファがあれば、0～1に収めた出現割合をシェーダーへ渡す。
     void SetRevealProgress(float progress) { if (materialData_) materialData_->revealProgress = std::clamp(progress, 0.0f, 1.0f); }
 
-    void SetEasingType(int type) { easingType_ = type; }
+    void SetEasingType(std::int32_t type) { easingType_ = type; }
 
-    int GetEasingType() const { return easingType_; }
+    std::int32_t GetEasingType() const { return easingType_; }
 
     void SetAutoLoop(bool loop) { isAutoLoop_ = loop; }
 
@@ -168,12 +191,13 @@ public:
 
     void SetTargetObject(engine::Object3D* target) { targetObject_ = target; }
 
-    // 追従先から見たローカル位置差と回転差。描画位置への合成はUpdateで行う。
+    // 位置差は追従先のローカル座標。回転はラジアンで、Update() で追従先のヨーを Y に加える。
     void SetOffsets(const engine::Vector3& pos, const engine::Vector3& rot) { offsetPos_ = pos; offsetRot_ = rot; }
 
     engine::Object3D* GetTargetObject() const { return targetObject_; }
 
-    void SetProceduralType(int type) { if (materialData_) materialData_->proceduralType = type; }
+    // 材質バッファがある場合だけ、手続き形状のシェーダー側の種別を設定する。
+    void SetProceduralType(std::int32_t type) { if (materialData_) materialData_->proceduralType = type; }
 
     /// <summary>編集パラメータから手続き生成メッシュを再構築する。</summary>
     void UpdateProceduralMesh();
@@ -189,17 +213,17 @@ public:
     struct MeshSettings {
         // --- プロシージャルメッシュ用パラメータ ---
         float slashAngle = 360.0f; // 斬撃の角度（360度以上も可能に）
-        float innerRadius = 0.5f;  // 内径（剣の根元）
-        float outerRadius = 4.0f;  // 外径（剣の先端）
+        float innerRadius = 0.5f; // 内側の半径（剣の根元側）。
+        float outerRadius = 4.0f; // 外側の半径（剣の先端側）。
         float thickness = 0.5f;    // 軌跡の厚み
         float spiralPitch = 0.0f;  // 螺旋の高さ（スパイラル）
         float thrustLength = 5.0f; // 突きの長さ
         float thrustRadius = 0.8f; // 突きの根本の太さ
-        int   meshSegments = 16;   // ポリゴンの分割数（滑らかさ）
+        std::int32_t   meshSegments = 16;   // ポリゴンの分割数（滑らかさ）
     
         // 基本プリミティブ用
         float sphereRadius = 1.0f;
-        int   sphereRings = 16;
+        std::int32_t   sphereRings = 16;
 
         float cylinderRadius = 1.0f;
         float cylinderHeight = 2.0f;
@@ -207,7 +231,7 @@ public:
         engine::Vector3 boxSize = {1.0f, 1.0f, 1.0f};
 
         engine::Vector2 planeSize = {2.0f, 2.0f};
-        int   planeSubdivisions = 1;
+        std::int32_t   planeSubdivisions = 1;
 
         float torusMajorRadius = 1.0f;
         float torusMinorRadius = 0.3f;
@@ -223,13 +247,14 @@ public:
         engine::Vector2 uvTiling = {1.0f, 1.0f};
 
         bool hasCollision = false;
-        int collisionShape = 0; // 0:Sphere, 1:Aabb, 2:Obb, 3:Cylinder
+        std::int32_t collisionShape = 0; // 0:Sphere, 1:Aabb, 2:Obb, 3:Cylinder
         engine::Vector3 collisionSize = { 1.0f, 1.0f, 1.0f };
-        engine::Vector3 collisionOffset = engine::Vector3::ZERO;
+        engine::Vector3 collisionOffset = engine::Vector3::kZero;
 
     };
 
     const MeshSettings& GetMeshSettings() const { return meshSettings_; }
+    // 形状設定をまとめて保持する。メッシュへの反映は UpdateProceduralMesh() が行う。
     void SetMeshSettings(const MeshSettings& settings) { meshSettings_ = settings; }
 
     template<class Value>
@@ -254,13 +279,13 @@ private:
     // materialBuffer_ をMapした領域への借用ポインター。バッファがなければ nullptr です。
     EffectMaterial* materialData_ = nullptr;
     engine::Object3D* targetObject_ = nullptr; // 追従するObject。借用参照。
-    engine::Vector3 offsetPos_ = engine::Vector3::ZERO; // 追従対象からの位置補正。
-    engine::Vector3 offsetRot_ = engine::Vector3::ZERO; // 追従対象からの回転補正（ラジアン）。
+    engine::Vector3 offsetPos_ = engine::Vector3::kZero; // 追従対象からの位置補正。
+    engine::Vector3 offsetRot_ = engine::Vector3::kZero; // 追従対象からの回転補正（ラジアン）。
 
     // エフェクト用マテリアルをGPUへ渡す定数バッファを作る。
     bool CreateMaterialBuffer(ID3D12Device* device);
 
-    BlendMode blendMode_ = BlendMode::Add;
+    BlendMode blendMode_ = BlendMode::kAdd;
 
     float currentTime_ = 0.0f; // 再生開始からの経過秒数。
     float lifetime_ = 1.0f; // 一回の再生の長さ（秒）。
@@ -272,10 +297,10 @@ private:
     engine::Vector3 startScale_ = { 1.0f, 1.0f, 1.0f }; // 再生開始時の拡縮。
     engine::Vector3 endScale_ = { 1.0f, 1.0f, 1.0f }; // 再生終了時の拡縮。
 
-    engine::Vector4 startColor_ = engine::Colors::White;
-    engine::Vector4 endColor_ = engine::Colors::White;
+    engine::Vector4 startColor_ = engine::colors::kWhite;
+    engine::Vector4 endColor_ = engine::colors::kWhite;
 
-    int easingType_ = 0; // デフォルトは 0 (Linear)
+    std::int32_t easingType_ = 0; // デフォルトは 0 (Linear)
     bool isAutoLoop_ = false;
 
     // 動的生成専用のモデル
@@ -285,34 +310,34 @@ private:
     std::vector<uint32_t> proceduralIndices_;
 
     // 以下の Generate* は形状別の頂点・インデックスを proceduralVertices_ / proceduralIndices_ に生成する。
-    void GenerateSlashVertices(float angleDeg, float inRad, float outRad, float thickness, float spiralPitch, int segments, bool isCrescent = false);
+    void GenerateSlashVertices(float angleDeg, float inRad, float outRad, float thickness, float spiralPitch, std::int32_t segments, bool isCrescent = false);
 
     // 長さ・半径・分割数から突き形状の頂点を作る。
-    void GenerateThrustVertices(float length, float radius, int segments);
+    void GenerateThrustVertices(float length, float radius, std::int32_t segments);
 
     // 緯度ごとのリングを作り、UVの継ぎ目用に各リングの端点を重複させる。
-    void GenerateSphereVertices(float radius, int segments, int rings);
+    void GenerateSphereVertices(float radius, std::int32_t segments, std::int32_t rings);
 
     // 半径・高さ・周方向の分割数から円柱の頂点を作る。
-    void GenerateCylinderVertices(float radius, float height, int segments);
+    void GenerateCylinderVertices(float radius, float height, std::int32_t segments);
 
     // 各面に独立した法線とUVを持たせ、箱の角が滑らかに補間されないようにする。
     void GenerateBoxVertices(const engine::Vector3& size);
 
     // 平面を等間隔の格子に分け、変形可能な頂点とUVを生成する。
-    void GeneratePlaneVertices(const engine::Vector2& size, int subdivisions);
+    void GeneratePlaneVertices(const engine::Vector2& size, std::int32_t subdivisions);
 
     // 大円に沿って小円を並べ、継ぎ目のUVを複製して輪状Meshを作る。
-    void GenerateTorusVertices(float majorRad, float minorRad, int segments, int rings);
+    void GenerateTorusVertices(float majorRad, float minorRad, std::int32_t segments, std::int32_t rings);
 
     // 半径・高さ・周方向の分割数から円錐の頂点を作る。
-    void GenerateConeVertices(float radius, float height, int segments);
+    void GenerateConeVertices(float radius, float height, std::int32_t segments);
 
     // 円錐一枚では表現できない刃・鍔・柄の輪郭を持つ槍を生成します。
-    void GenerateLanceVertices(float radius, float height, int segments);
+    void GenerateLanceVertices(float radius, float height, std::int32_t segments);
 
     // 外半径・内半径・分割数から輪の頂点を作る。
-    void GenerateRingVertices(float outerRad, float innerRad, int segments);
+    void GenerateRingVertices(float outerRad, float innerRad, std::int32_t segments);
 
     // 重心が原点に来る正三角形をXZ平面へ作り、法線を上向きに揃える。
     void GenerateTriangleVertices(float size);

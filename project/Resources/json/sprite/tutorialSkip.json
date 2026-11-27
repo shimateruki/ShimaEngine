@@ -1,0 +1,315 @@
+{
+  "designResolution": [
+    1920,
+    1080
+  ],
+  "scaleToWindow": true,
+  "sprites": [
+    {
+      "name": "skip_open",
+      "texture": "ui/settings/settings_footer_button.png",
+      "position": [
+        1704,
+        74
+      ],
+      "size": [
+        368,
+        92
+      ],
+      "anchor": [
+        0.5,
+        0.5
+      ],
+      "color": [
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "skip_open_label",
+      "texture": "generated/text/tutorial_skip.png",
+      "position": [
+        1704,
+        74
+      ],
+      "size": [
+        365,
+        53
+      ],
+      "anchor": [
+        0.5,
+        0.5
+      ],
+      "color": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "textureCrop": [
+        0,
+        0,
+        416,
+        60
+      ]
+    },
+    {
+      "name": "skip_backdrop",
+      "texture": "common/white.png",
+      "position": [
+        960,
+        540
+      ],
+      "size": [
+        1920,
+        1080
+      ],
+      "anchor": [
+        0.5,
+        0.5
+      ],
+      "color": [
+        0.025,
+        0.07,
+        0.11,
+        0.56
+      ]
+    },
+    {
+      "name": "skip_panel",
+      "texture": "ui/settings/settings_panel.png",
+      "position": [
+        960,
+        535
+      ],
+      "size": [
+        856,
+        418
+      ],
+      "anchor": [
+        0.5,
+        0.5
+      ],
+      "color": [
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "skip_title",
+      "texture": "generated/text/tutorial_skip.png",
+      "position": [
+        960,
+        431
+      ],
+      "size": [
+        800,
+        68
+      ],
+      "anchor": [
+        0.5,
+        0.5
+      ],
+      "color": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "textureCrop": [
+        0,
+        60,
+        800,
+        68
+      ]
+    },
+    {
+      "name": "skip_description",
+      "texture": "generated/text/tutorial_skip.png",
+      "position": [
+        960,
+        506
+      ],
+      "size": [
+        772,
+        52
+      ],
+      "anchor": [
+        0.5,
+        0.5
+      ],
+      "color": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "textureCrop": [
+        0,
+        128,
+        800,
+        54
+      ]
+    },
+    {
+      "name": "skip_cancel",
+      "texture": "ui/settings/settings_footer_button.png",
+      "position": [
+        777,
+        616
+      ],
+      "size": [
+        300,
+        92
+      ],
+      "anchor": [
+        0.5,
+        0.5
+      ],
+      "color": [
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "skip_cancel_label",
+      "texture": "generated/text/tutorial_skip.png",
+      "position": [
+        777,
+        615
+      ],
+      "size": [
+        292,
+        37
+      ],
+      "anchor": [
+        0.5,
+        0.5
+      ],
+      "color": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "textureCrop": [
+        0,
+        182,
+        315,
+        40
+      ]
+    },
+    {
+      "name": "skip_confirm",
+      "texture": "ui/settings/settings_footer_button.png",
+      "position": [
+        1143,
+        616
+      ],
+      "size": [
+        300,
+        92
+      ],
+      "anchor": [
+        0.5,
+        0.5
+      ],
+      "color": [
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "skip_confirm_label",
+      "texture": "generated/text/tutorial_skip.png",
+      "position": [
+        1143,
+        615
+      ],
+      "size": [
+        292,
+        37
+      ],
+      "anchor": [
+        0.5,
+        0.5
+      ],
+      "color": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "textureCrop": [
+        0,
+        222,
+        315,
+        40
+      ]
+    },
+    {
+      "name": "skip_hint",
+      "texture": "generated/text/tutorial_skip.png",
+      "position": [
+        960,
+        700
+      ],
+      "size": [
+        744,
+        33
+      ],
+      "anchor": [
+        0.5,
+        0.5
+      ],
+      "color": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "textureCrop": [
+        0,
+        262,
+        800,
+        36
+      ]
+    },
+    {
+      "name": "skip_save_error",
+      "texture": "generated/text/tutorial_skip.png",
+      "position": [
+        960,
+        506
+      ],
+      "size": [
+        772,
+        52
+      ],
+      "anchor": [
+        0.5,
+        0.5
+      ],
+      "color": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "textureCrop": [
+        0,
+        298,
+        800,
+        54
+      ]
+    }
+  ]
+}

@@ -139,32 +139,59 @@ float4 main(VSOutput input) : SV_TARGET
             float barrierRadius = length(input.worldPos.xz - barrierCenter.xz);
             bool cameraOutside = length(cameraWorldPosition.xz - barrierCenter.xz) >= barrierRadius;
             float facing = dot(barrierNormal, normalize(cameraWorldPosition - input.worldPos));
-            // Soften the transition at grazing angles while keeping the opposite side hidden.
-            float visibleFacing = cameraOutside ? facing : -facing;
-            angleOpacity = smoothstep(0.0f, 0.15f, visibleFacing);
+            // Keep the rear wall visible from outside so the shield reads as a closed ring.
+            // From inside, fade grazing angles to keep the wall from filling the view.
+            angleOpacity = cameraOutside
+                ? lerp(0.34f, 1.0f, smoothstep(-0.12f, 0.18f, facing))
+                : smoothstep(0.0f, 0.15f, -facing);
             cameraSurfaceFade = smoothstep(1.25f, 4.50f,
                 length(cameraWorldPosition - input.worldPos));
         }
 
+        bool roundedCorners = mode == 3.25f;
+        // The forge radius also identifies the panels that need stronger contrast over lava.
+        bool forgeBarrier = roundedCorners && abs(effectScaleZ) > 1.0f;
         float2 absP = abs(p);
-        float edgeDistance = 1.0f - (mode > 3.5f ? absP.y : max(absP.x, absP.y));
+        // Curved joins share their vertical edge with the next panel. Keep only top and bottom trims.
+        float edgeDistance = 1.0f - (mode > 3.5f || roundedCorners ? absP.y : max(absP.x, absP.y));
         float outerMask = smoothstep(0.0f, 0.055f, edgeDistance);
         float border = 1.0f - smoothstep(0.018f, 0.115f, edgeDistance);
 
         float revealTop = -1.04f + activation * 2.12f;
-        float revealMask = 1.0f - smoothstep(revealTop - 0.045f, revealTop + 0.075f, p.y);
-        revealMask *= outerMask;
+        float reveal = 1.0f - smoothstep(revealTop - 0.045f, revealTop + 0.075f, p.y);
+        float revealMask = reveal * outerMask;
 
-        // Fade the camera-side half of arena boundaries above a persistent ground rim.
+        // Fade foreground arena boundaries above a persistent ground rim.
         // Use an authored floor height so jumping never moves the visible boundary.
         float arenaOpacity = 1.0f;
+        float latticeBlend = 0.0f;
+        float latticeOpacity = saturate(-foregroundBarrierParameters.w);
         if (foregroundBarrierCenter.w > 0.0001f)
         {
             float2 arenaToEye = cameraWorldPosition.xz - foregroundBarrierCenter.xz;
-            float arenaEyeLength = max(length(arenaToEye), 0.001f);
-            float frontDistance = dot(input.worldPos.xz - foregroundBarrierCenter.xz, arenaToEye / arenaEyeLength);
-            float feather = max(foregroundBarrierParameters.w, 0.01f);
-            float cameraSide = smoothstep(-feather, feather, frontDistance);
+            float2 towardEye = arenaToEye / max(length(arenaToEye), 0.001f);
+            // Negative values opt into the faint lattice on flat panels.
+            bool latticeRequested = foregroundBarrierParameters.w < 0.0f;
+            bool keepLattice = mode <= 3.5f && latticeRequested;
+            float cameraSide;
+            if (mode <= 3.5f)
+            {
+                // Straight panels keep a constant normal. Only curved ends turn toward the camera.
+                float2 wallCenter = float2(world._41, world._43);
+                float2 wallNormal = barrierNormal.xz;
+                wallNormal /= max(length(wallNormal), 0.001f);
+                float wallOrientation = sign(dot(wallCenter - foregroundBarrierCenter.xz, wallNormal));
+                float2 outward = wallNormal * wallOrientation;
+                cameraSide = smoothstep(0.35f, 0.82f, dot(outward, towardEye));
+            }
+            else
+            {
+                // A curved barrier still fades across its camera-facing arc.
+                float frontDistance = dot(input.worldPos.xz - foregroundBarrierCenter.xz, towardEye);
+                float feather = latticeRequested ? 1.0f : max(foregroundBarrierParameters.w, 0.01f);
+                cameraSide = smoothstep(-feather, feather, frontDistance);
+            }
+            latticeBlend = keepLattice ? saturate(foregroundBarrierCenter.w) * cameraSide : 0.0f;
             float aboveRim = smoothstep(foregroundBarrierParameters.y,
                 foregroundBarrierParameters.y + 0.65f, input.worldPos.y - foregroundBarrierParameters.x);
             float arenaClear = saturate(foregroundBarrierCenter.w) * cameraSide * aboveRim;
@@ -172,13 +199,21 @@ float4 main(VSOutput input) : SV_TARGET
         }
         float subjectOpacity = 1.0f - CameraVisibilityMask(input.worldPos, normalize(input.normal),
             cameraWorldPosition, visibilityCenterRadius, visibilityParameters);
-        float viewOpacity = arenaOpacity * subjectOpacity * angleOpacity;
+        float opticalFade = 0.9f * latticeBlend * smoothstep(0.0f, 0.1f, latticeOpacity);
+        float viewOpacity = arenaOpacity * subjectOpacity * angleOpacity * (1.0f - opticalFade);
 
+        // Sample one world-space pattern across the joins to avoid a phase reset at the corners.
+        if (roundedCorners)
+        {
+            p.x = dot(input.worldPos.xz, float2(0.30f, 0.30f)) / (8.0f + detail * 0.11f);
+        }
         float2 barrierUV = p * float2(mode > 3.5f ? 20.0f : 8.0f + detail * 0.11f,
             4.2f + detail * 0.045f);
         float2 barrierCell = frac(barrierUV + float2(t * 0.08f, -t * 0.13f)) - 0.5f;
         float diamondDistance = abs(abs(barrierCell.x) + abs(barrierCell.y) - 0.43f);
-        float diamondLattice = 1.0f - smoothstep(0.025f, 0.085f, diamondDistance);
+        float diamondLattice = forgeBarrier
+            ? 1.0f - smoothstep(0.034f, 0.108f, diamondDistance)
+            : 1.0f - smoothstep(0.025f, 0.085f, diamondDistance);
 
         float verticalFilament = pow(
             saturate(0.5f + 0.5f * sin((p.x * (13.0f + detail * 0.12f) + t * 0.42f) * 6.2831853f)),
@@ -204,6 +239,21 @@ float4 main(VSOutput input) : SV_TARGET
         burstLine *= activationBurst * outerMask;
         energy = saturate(energy + burstLine * 1.35f);
 
+        // A rising ribbon links the ground to the upper rim of the crowned shield.
+        float crownGlow = 0.0f;
+        if (mode > 3.5f)
+        {
+            float height = input.uv.y;
+            float phase = frac(time * 0.64f);
+            float ribbon = 1.0f - smoothstep(0.023f, 0.105f, abs(height - phase));
+            ribbon *= smoothstep(0.0f, 0.10f, phase) * (1.0f - smoothstep(0.89f, 1.0f, phase));
+            float upperRim = smoothstep(0.91f, 0.97f, height);
+            float latticeGlow = diamondLattice * (0.30f + verticalFilament * 0.34f);
+            // The cylindrical mode receives the crown's arrival flash through effectSoftness.
+            crownGlow = latticeGlow + upperRim * (0.48f + softness * 0.90f)
+                + ribbon * (0.90f + softness * 0.55f);
+        }
+
         float2 distortDirection = float2(
             sin(p.y * 12.0f + t * 1.7f),
             cos(p.x * 9.0f - t * 1.3f));
@@ -220,11 +270,35 @@ float4 main(VSOutput input) : SV_TARGET
         barrierColor *= saturate(color.rgb + 0.34f);
 
         float veil = 0.15f + diamondLattice * 0.08f + scanBand * 0.055f;
-        float alpha = saturate((veil + energy * 0.48f + border * 0.26f) * revealMask * color.a);
+        if (forgeBarrier)
+        {
+            // Reinforce only the grid and upper trim; their opacity still follows the camera fade.
+            float upperTrim = smoothstep(0.78f, 0.95f, p.y);
+            float lineCore = max(diamondLattice * 0.76f, upperTrim);
+            veil += lineCore * 0.27f;
+            float3 warmCore = lerp(float3(0.95f, 0.57f, 0.21f), float3(1.0f, 0.89f, 0.65f), upperTrim);
+            barrierColor = lerp(barrierColor, warmCore, lineCore * 0.67f);
+        }
+        float alpha = saturate((veil + energy * 0.48f + border * 0.26f + crownGlow * 0.18f) * revealMask * color.a);
         alpha *= cameraSurfaceFade * viewOpacity;
         float3 refractedScene = scene * lerp(0.88f, 0.30f, alpha);
         float3 finalBarrierColor = lerp(refractedScene, barrierColor * (0.70f + intensity * 0.38f), alpha);
         finalBarrierColor += barrierColor * energy * (0.22f + intensity * 0.16f) * revealMask * viewOpacity;
+        finalBarrierColor += float3(0.24f, 0.92f, 1.34f) * crownGlow * revealMask * viewOpacity * cameraSurfaceFade;
+
+        // Preserve a faint outline and lattice without the player cutout or refraction.
+        // Let the outline reach the panel edges so adjacent barrier panels remain connected.
+        if (latticeBlend > 0.0f)
+        {
+            float latticePattern = max(diamondLattice * 0.64f * outerMask, border * 0.9f);
+            float latticeAlpha = saturate(latticePattern * latticeOpacity *
+                latticeBlend * reveal * cameraSurfaceFade * color.a);
+            float remainingAlpha = (1.0f - alpha) * latticeAlpha;
+            float3 latticeColor = lerp(float3(0.20f, 0.67f, 0.74f), float3(0.58f, 0.89f, 0.92f), border);
+            finalBarrierColor = (finalBarrierColor * alpha + latticeColor * remainingAlpha) /
+                max(alpha + remainingAlpha, 0.0001f);
+            alpha += remainingAlpha;
+        }
 
         if (alpha < 0.008f)
         {

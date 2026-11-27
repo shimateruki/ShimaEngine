@@ -1,9 +1,9 @@
 #pragma once
+#include <cstdint>
 #include "Object3D.h"
 #include <functional>
 #include <string>
 
-// 前方宣言
 namespace engine { class Object3DCommon; }
 
 // 一定間隔で敵を発生させるための配置用オブジェクト
@@ -12,11 +12,11 @@ namespace engine { class Object3DCommon; }
 class EnemySpawner : public engine::Object3D {
   public:
     /// <summary>
-    /// スポナーの初期化
+    /// 敵の種別名、通知間隔（秒）、最大通知回数を設定する。回数が0以下なら無制限。
     /// </summary>
-    void Initialize(engine::Object3DCommon* common, const std::string& enemyType, float interval, int maxCount);
+    void Initialize(engine::Object3DCommon* common, const std::string& enemyType, float interval, std::int32_t maxCount);
 
-    // タイマーを進め、条件を満たしたらスポーン通知を出す
+    // 経過秒を進め、間隔に達して回数上限に余裕があれば通知を試みる。
     void Update(float deltaTime) override;
 
     using SpawnCallback = std::function<void(const engine::Vector3&)>;
@@ -33,9 +33,9 @@ class EnemySpawner : public engine::Object3D {
     engine::Object3DCommon* common_ = nullptr;
 
     std::string enemyType_;      // 生成したい敵タイプ名。
-    float spawnInterval_ = 1.0f; // 次のスポーンまでの間隔。
-    float timer_ = 0.0f;         // 経過時間。
+    float spawnInterval_ = 1.0f; // 次の通知までの間隔（秒）。
+    float timer_ = 0.0f;         // 前回通知周期からの経過秒数。
     SpawnCallback onSpawnCallback_ = nullptr;
-    int maxCount_ = 0;   // 最大生成数。0以下なら無制限扱い。
-    int spawnCount_ = 0; // 生成済みカウント。
+    std::int32_t maxCount_ = 0;   // 最大生成数。0以下なら無制限扱い。
+    std::int32_t spawnCount_ = 0; // Spawnを呼んだ回数。生成そのものの成否は数えない。
 };

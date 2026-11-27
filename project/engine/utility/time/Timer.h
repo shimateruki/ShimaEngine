@@ -9,12 +9,14 @@ class Timer;
 // Elapsed / IsRunningで確認し、IsValidで所有者の生存を判定する。スレッド間共有用ではない。
 class TimerView {
 public:
+    // 時計への接続があり、所有者のTimerが生存していればtrue。
     bool IsValid() const;
     float Elapsed() const; // 秒。未接続・所有者破棄後は0。
     bool IsRunning() const; // 未接続・所有者破棄後はfalse。
 
 private:
     friend class Timer;
+    /// <summary>Timerが所有し、TimerViewが読み取る経過秒数と計測中フラグ。</summary>
     struct State {
         float elapsed = 0.0f; // 開始からの秒数。Seekで指定時刻へ変更できる。
         bool running = false; // Updateによる加算を許可するか。
@@ -26,6 +28,7 @@ private:
 // 演出の長さ・ループ・イベントはCinematicPlayerが担当する。
 class Timer {
 public:
+    // 0秒で停止中の時計を作る。
     Timer();
     Timer(const Timer&) = delete;
     Timer& operator=(const Timer&) = delete;
@@ -38,8 +41,11 @@ public:
     void Stop(); // 停止して0秒へ戻す。既存ビューも追従する。
     void Update(float deltaSeconds); // 正の有限秒数のみ加算。停止中は無視する。
     void Seek(float seconds); // 進行状態を変えず時刻設定。負値は0、非有限値は無視する。
+    // 現在の時刻を秒で返す。
     float Elapsed() const;
+    // Updateで時刻を進められる状態ならtrue。
     bool IsRunning() const;
+    // 同じ時計の値を読む非所有ビューを返す。Timerを破棄すると無効になる。
     TimerView GetView() const;
 
 private:

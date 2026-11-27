@@ -1,12 +1,13 @@
 #define NOMINMAX
+#include <cstdint>
 #include "KeyConfig.h"
 #include <dinput.h>
 #include <Xinput.h>
 
 KeyConfig* KeyConfig::GetInstance() {
     // 入力割当をゲーム全体で共有し、シーン切替で消さない。
-    static KeyConfig instance;
-    return &instance;
+    static KeyConfig sInstance;
+    return &sInstance;
 }
 
 void KeyConfig::Initialize() {
@@ -30,10 +31,9 @@ void KeyConfig::Initialize() {
     bindings_["PrimaryAttack"] = { 0, 0, XINPUT_GAMEPAD_X };
     bindings_["SecondaryAction"] = { 0, 1, XINPUT_GAMEPAD_LEFT_SHOULDER };
 
-    // 保存済みキー設定は読み込まず、全シーンで固定操作を使用する。
 }
 
-int KeyConfig::GetKeyCode(const std::string& actionName) const {
+std::int32_t KeyConfig::GetKeyCode(const std::string& actionName) const {
     // 未登録アクションはキーなしを意味する0で返す。
     auto it = bindings_.find(actionName);
     return (it != bindings_.end()) ? it->second.keyCode : 0;
@@ -45,10 +45,8 @@ WORD KeyConfig::GetPadCode(const std::string& actionName) const {
     return (it != bindings_.end()) ? it->second.padCode : 0;
 }
 
-// =================================================================
-// 数値のキーコードを「A」や「Space」などの分かりやすい文字列に変換する（完全版）
-// =================================================================
-std::string KeyConfig::GetKeyName(int keyCode) const {
+// キーコードを操作ガイドや設定画面で表示できる名称に変換する。
+std::string KeyConfig::GetKeyName(std::int32_t keyCode) const {
     // 0は未割当。対応表のない非ゼロ値だけを末尾で16進表示する。
     if (keyCode == 0)
         return "None";
@@ -202,8 +200,9 @@ std::string KeyConfig::GetKeyName(int keyCode) const {
     return "Unknown (" + std::string(hex) + ")";
 }
 
+// XInputのボタン値を案内表示名に変換する。未登録の値は数値付きで返す。
 std::string KeyConfig::GetPadName(WORD padCode) const {
-    // 画面に出せない未知のコードも数値付きで表示し、割当の確認を可能にする。
+    // 0はパッドの操作が未割当であることを表す。未知の非ゼロ値は数値付きで表示する。
     if (padCode == 0)
         return "None";
     // ボタン単体のXInput値を案内名へ変換する。ここでは複数ボタンの組み合わせを分解しない。
@@ -237,26 +236,28 @@ std::string KeyConfig::GetPadName(WORD padCode) const {
     case XINPUT_GAMEPAD_RIGHT_THUMB: return "R3 (Stick)";
     }
 
+    // 個別に対応していないボタン値は、組み合わせを分解せず元の数値で表示する。
     return "Pad:" + std::to_string(padCode);
 }
 
-// =================================================================
-// 固定操作表の読み取り
-// =================================================================
+// 登録表の割り当てを参照で返す。未登録ならnullptr。
 const BindData* KeyConfig::GetBindData(const std::string& actionName) const {
     // 呼び出し側へ所有権を渡さず、登録済みの割当だけ参照させる。
     auto it = bindings_.find(actionName);
 
+    // 登録された操作だけ、保持している割当への参照を返す。
     if (it != bindings_.end()) {
-        return &it->second; // データのポインタを返す
+        return &it->second;
     }
 
-    return nullptr; // 見つからない場合
+    return nullptr;
 }
 
-bool KeyConfig::IsKeyAssigned(int keyCode) const {
+// 実際のDIKキーコードが固定入力表にあるかを調べる。
+bool KeyConfig::IsKeyAssigned(std::int32_t keyCode) const {
     // エディターのショートカットと固定ゲーム操作が競合しないよう調べる。
     for (const auto& [action, binding] : bindings_) {
+        // 固定のゲーム操作と同じキーを見つけたら、割当済みとして返す。
         if (binding.keyCode == keyCode)
             return true;
     }

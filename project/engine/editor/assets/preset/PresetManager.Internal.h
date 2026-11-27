@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 // 担当：Prefabの識別子・JSON階層・継承差分を扱う内部関数。
 // 関連：PresetManagerの分割.cpp、EditorPropertyRegistry（項目定義）
@@ -28,7 +29,7 @@
 
 namespace fs = std::filesystem;
 
-namespace PresetManagerImplementation {
+namespace presetManagerImplementation {
 
 std::string ReadString(const json& source, const char* key, const std::string& fallback = "");
 
@@ -82,7 +83,7 @@ void CollectPrefabNodeLocations(
     std::unordered_map<std::string, PrefabNodeLocation>& locations);
 
 // 子を再帰的に数え、Prefabの展開規模を把握する。
-int CountPrefabNodes(const json& node);
+std::int32_t CountPrefabNodes(const json& node);
 
 // 既知IDの子はOverrideから除き、Prefab本体から継承できる状態を維持する。
 void RemovePrefabChildrenWithKnownIds(json& node, const std::unordered_set<std::string>& knownIds);

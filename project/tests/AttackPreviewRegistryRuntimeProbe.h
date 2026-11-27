@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #ifdef USE_IMGUI
 #include "DebugEditor.h"
 #include "BaseEnemy.h"
@@ -13,24 +14,25 @@
 
 // 専用起動時だけ、既存の全攻撃を実際の隔離プレビューへ順番に接続します。
 struct AttackPreviewRegistryRuntimeProbe {
-    struct Case { std::string type; int attack; std::string option; };
+    /// <summary>敵の種類・攻撃の番号・追加オプションを指定する攻撃プレビュー検証の一件。</summary>
+    struct Case { std::string type; std::int32_t attack; std::string option; };
     static bool Enabled() { return GetEnvironmentVariableA("CG2_ATTACK_PREVIEW_REGISTRY_TEST", nullptr, 0) > 0; }
     static void Require(bool value, const char* message) {
         if (!value) throw std::runtime_error(message);
     }
     static void AfterDraw(SceneManager* manager, DebugEditor* editor, const std::string& path) {
         static std::ofstream log(path, std::ios::trunc);
-        static int phase=0, wait=0;
-        static size_t index=0;
-        static std::vector<Case> cases;
-        static bool done=false;
-        if (done || !manager || !editor || manager->IsTransitioning()) return;
-        auto finish=[&](const std::string& text) { log<<text<<std::endl; done=true; WinApp::CloseNow(); };
+        static std::int32_t sPhase=0, sWait=0;
+        static size_t sIndex=0;
+        static std::vector<Case> sCases;
+        static bool sDone=false;
+        if (sDone || !manager || !editor || manager->IsTransitioning()) return;
+        auto finish=[&](const std::string& text) { log<<text<<std::endl; sDone=true; WinApp::CloseNow(); };
         try {
-            if (phase==0) { manager->SetIsPlaying(false); manager->ChangeScene("GAMEPLAY"); phase=1; return; }
-            if (manager->GetCurrentSceneName()!="GAMEPLAY" || ++wait<3) return;
+            if (sPhase==0) { manager->SetIsPlaying(false); manager->ChangeScene("GAMEPLAY"); sPhase=1; return; }
+            if (manager->GetCurrentSceneName()!="GAMEPLAY" || ++sWait<3) return;
             auto& preview=*GetGameActorDebugPanel();
-            if (phase==1) {
+            if (sPhase==1) {
                 const std::vector<std::string> expected={"Slime","FireSlime","ThunderSlime","GiantSlime",
                     "PrismSlime","MagmaSlime","Bomber","WindSlime","FalseKingSlime"};
                 const auto& entries=EnemyAttackPreviewRegistry::GetEntries();
@@ -52,15 +54,15 @@ struct AttackPreviewRegistryRuntimeProbe {
                     for(const auto& attack:profile.attacks)
                         Require(loaded.FindAttack(attack.id)!=nullptr,"profile round-trip attack ID");
                     bool added=false;
-                    for(int a=0;a<static_cast<int>(profile.attacks.size());++a) {
+                    for(std::int32_t a=0;a<static_cast<std::int32_t>(profile.attacks.size());++a) {
                         const auto& attack=profile.attacks[a];
                         if(attack.sequence.enabled && attack.sequence.binding=="player_special") continue;
                         Require(profile.FindAttack(attack.id)!=nullptr,"attack ID lookup");
-                        cases.push_back({entry.type,a,{}});
+                        sCases.push_back({entry.type,a,{}});
                         added=true;
                     }
-                    if(!added) cases.push_back({entry.type,0,{}});
-                    for(const auto& option:entry.options) cases.push_back({entry.type,0,option.id});
+                    if(!added) sCases.push_back({entry.type,0,{}});
+                    for(const auto& option:entry.options) sCases.push_back({entry.type,0,option.id});
                 }
                 // 重複・不正な一括登録は、既存一覧へ一部だけ追加しません。
                 auto duplicate=entries.front();
@@ -71,13 +73,13 @@ struct AttackPreviewRegistryRuntimeProbe {
                 Require(!EnemyAttackPreviewRegistry::Register({extra}),"duplicate option accepted");
                 Require(!EnemyAttackPreviewRegistry::Find("unknown") &&
                     !EnemyAttackPreviewRegistry::FindOption("Slime","unknown"),"unknown ID accepted");
-                log<<"OK 9 legacy types, attack IDs, wrong-type guards, atomic rejection; cases="<<cases.size()<<std::endl;
+                log<<"OK 9 legacy types, attack IDs, wrong-type guards, atomic rejection; cases="<<sCases.size()<<std::endl;
                 preview.loop_=false;
                 EditorManager::GetInstance()->SetSelectedObject(&preview);
-                phase=2;
+                sPhase=2;
             }
-            if(phase==2) {
-                if(index==cases.size()) {
+            if(sPhase==2) {
+                if(sIndex==sCases.size()) {
                     preview.StopPreview();
                     // 登録追加後も、既に選んだ敵は番号ではなくIDで保持します。
                     auto extra=*EnemyAttackPreviewRegistry::Find("Slime");
@@ -88,7 +90,7 @@ struct AttackPreviewRegistryRuntimeProbe {
                     finish("PASS: registered enemy/attack selection, real preview generation, fixed-step seek and cleanup");
                     return;
                 }
-                const auto& test=cases[index];
+                const auto& test=sCases[sIndex];
                 preview.enemyType_=test.type;
                 preview.LoadSelectedProfile();
                 Require(preview.previewOptionId_.empty(),"previous special selection leaked");
@@ -112,21 +114,21 @@ struct AttackPreviewRegistryRuntimeProbe {
                     :test.option),"registered attack rejected real actor");
                 Require(preview.previewEnemy_->GetEnemyType()==test.type,"different enemy generated");
                 preview.playing_=false;
-                wait=0; phase=3;
+                sWait=0; sPhase=3;
                 return;
             }
-            if(phase==3) {
+            if(sPhase==3) {
                 preview.SeekPreview(0.5f);
                 Require(preview.GetCurrentPhaseName()!=nullptr,"phase label missing");
                 Require(std::abs(preview.elapsedTime_-0.5f)<0.001f,"forward seek mismatch");
                 preview.SeekPreview(0.25f);
                 Require(std::abs(preview.elapsedTime_-0.25f)<0.001f,"backward seek mismatch");
-                const auto& test=cases[index];
+                const auto& test=sCases[sIndex];
                 log<<"OK "<<test.type<<" attack="<<test.attack<<" option="<<test.option<<
                     " phase="<<preview.GetCurrentPhaseName()<<std::endl;
                 preview.StopPreview();
                 Require(!preview.previewEnemy_ && !preview.previewTarget_ && !preview.enabled_,"cleanup retained actor");
-                ++index; wait=0; phase=2;
+                ++sIndex; sWait=0; sPhase=2;
             }
         } catch(const std::exception& error) {
             finish(std::string("FAIL: ")+error.what());

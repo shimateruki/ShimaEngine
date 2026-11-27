@@ -1,0 +1,77 @@
+{
+    "designResolution": [
+        724,
+        581
+    ],
+    "scaleToWindow": true,
+    "sprites": [
+        {
+            "name": "BombBreakVideo",
+            "texture": "guide_sign/bomb_poster.png",
+            "position": [
+                21,
+                124
+            ],
+            "size": [
+                682,
+                383.625
+            ],
+            "anchor": [
+                0,
+                0
+            ],
+            "color": [
+                1,
+                1,
+                1,
+                1
+            ],
+            "video": "guide_sign/bomb_break.mp4",
+            "emissive": 1.46
+        },
+        {
+            "name": "WoodFrame",
+            "texture": "guide_sign/bomb_popup_frame.png",
+            "position": [
+                0,
+                0
+            ],
+            "size": [
+                724,
+                590
+            ],
+            "anchor": [
+                0,
+                0
+            ],
+            "color": [
+                1,
+                1,
+                1,
+                1
+            ]
+        },
+        {
+            "name": "BombTitle",
+            "texture": "guide_sign/bomb_popup_title.png",
+            "position": [
+                362,
+                67
+            ],
+            "size": [
+                690,
+                84
+            ],
+            "anchor": [
+                0.5,
+                0.5
+            ],
+            "color": [
+                1,
+                1,
+                1,
+                1
+            ]
+        }
+    ]
+}

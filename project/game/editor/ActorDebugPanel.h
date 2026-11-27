@@ -60,6 +60,7 @@ public:
     /// 攻撃配置用のビューポートが操作対象か返す。
     bool IsAuthoringViewportActive() const;
 
+    // 確認中の王冠ムービー、コピー能力、敵攻撃の順でパネル名を決める。
     std::string GetName() override { return crownMovieMode_ ? "Crown Movie Preview" : (playerCopyMode_ ? "Player Ability Preview" : "Enemy Attack Preview"); }
 
     bool IsEnabled() const { return enabled_; }
@@ -95,11 +96,13 @@ private:
     std::unique_ptr<GameRule> previewRules_;
     bool effectsOwned_ = false;
     std::function<void()> restoreMovieCamera_;
+    // プレビュー対象の配置基準になったワールド位置を返す。
     engine::Vector3 GetGroundPosition() const { return sourcePosition_; }
     // プレビュー用Actorを生成・接続する。既存のプレビューはReleaseRuntimeで先に回収する。
     void BuildRuntime(bool requestCameraRecenter = false);
     // 登録したプレビューActor・弾・演出を回収し、借用参照を無効にする。
     void ReleaseRuntime();
+    // 指定位置から実シーンの地面を探し、十分に上向きの面がなければ fallback の高さを返す。
     float ResolveGroundHeight(const engine::Vector3& position, float fallback) const;
     // プレビューの表示・再生状態を準備する。保存用Profileの数値はここでは書き換えない。
     void BeginEffects();
@@ -107,7 +110,7 @@ private:
     void EndEffects();
     ProjectWindow* authoringAssets_ = nullptr; // Editorが所有。素材サムネイルだけを借用します。
 
-    /// <summary>選択中の敵またはコピー能力のプレビュー用Actorがあるか調べます。</summary>
+    /// <summary>プレビューの種類に応じ、王冠ムービーの準備完了、またはコピー用 Player・敵の生成を確認します。</summary>
     bool HasPreviewActor() const { return crownMovieMode_ ? crownMoviePrepared_ : (playerCopyMode_ ? previewPlayer_ != nullptr : previewEnemy_ != nullptr); }
 
     /// <summary>コピー能力に固有の入力と動作を設定するUIを描画します。</summary>
@@ -166,14 +169,14 @@ private:
     void ApplyPlacementTransform(const engine::Vector3& position, const engine::Vector3& rotation, const engine::Vector3& scale);
 
     // 術者はSceneの参照、生成Objectは攻撃データの選択。既存JSONの番号とは分けます。
-    enum class AuthoringSelectionKind { Attack, Actor, Event, Track };
+    enum class AuthoringSelectionKind { kAttack, kActor, kEvent, kTrack };
 
     AuthoringSelectionKind GetAuthoringSelectionKind() const;
 
     bool authoringActorSelected_ = false;
     bool hidePlacementActor_ = false;
 
-    int placementOperation_ = 0; // 0=移動、1=回転、2=大きさ
+    std::int32_t placementOperation_ = 0; // 0=移動、1=回転、2=大きさ
     bool placementGizmoUsing_ = false;
     AttackSequenceDefinition placementGestureBefore_;
 
@@ -190,7 +193,7 @@ private:
     float draftRefreshDelay_ = 0;
 
     bool showAttackRadii_ = true;
-    int projectileSection_ = 0; // 発射・本体・判定・軌跡・着弾の選択。
+    std::int32_t projectileSection_ = 0; // 発射・本体・判定・軌跡・着弾の選択。
 
     EnemyAttackProfile draftProfile_; // 再生中は編集データと分離したスナップショットを使います。
 
@@ -222,6 +225,7 @@ private:
 
     const CopyAbilityPreviewDescriptor* GetCopyDescriptor() const;
     const CopyAbilityPreviewAction* GetCopyAction() const;
+    const std::string* GetCopyProfileActionId(const EnemyAttackDefinition& attack) const;
     void SelectCopyProfileAction();
 
     // 先の再生から遅れて届く生成を拒否する、生存期間だけを表すトークンです。
@@ -272,10 +276,10 @@ private:
     // 実戦と同じ第二形態のカメラカットを、固定刻みのプレビューへ反映します。
     void ApplySealBarrageMovieCamera();
 
-    /// <summary>実プレイヤーを対象にした弾の命中を検出します。</summary>
+    /// <summary>プレビュー用 Player に敵の弾が触れたか、実際のコライダーで確認して被弾イベントを送ります。</summary>
     void ResolvePreviewProjectileHits();
 
-    /// <summary>被弾確認用のイベントを実プレイヤーへ送ります。</summary>
+    /// <summary>プレビュー用の敵から Player へ、選択中の攻撃設定を使った被弾イベントを送ります。</summary>
     void TriggerPreviewPlayerDamage();
 
     /// <summary>選択中の攻撃に対応するダメージ種別と状態異常を返します。</summary>
@@ -319,6 +323,7 @@ private:
     /// <summary>選択中の攻撃定義を参照します。存在しない場合はnullptrです。</summary>
     const EnemyAttackDefinition* GetSelectedAttackDefinition() const;
 
+    // 読み取り版と同じ選択条件で、編集可能な定義を返す。攻撃定義を使わないプレビューでは nullptr。
     EnemyAttackDefinition* GetSelectedAttackDefinition();
 
     /// <summary>敵と攻撃種別に合わせた初期プレビュー距離・周期を返します。</summary>
@@ -356,7 +361,7 @@ private:
 
     // 一覧の並び順から独立した、保存データと同じ敵種類IDです。
     std::string enemyType_ = "Slime";
-    int profileAttackIndex_ = 0;
+    std::int32_t profileAttackIndex_ = 0;
 
     std::string previewOptionId_; // 保存しない追加確認項目の安定ID。
     bool sealBarrageMovieCameraPreview_ = true;
@@ -383,14 +388,14 @@ private:
     std::string profileStatus_;
     bool profileDirty_ = false; // 編集中の攻撃Profileに未保存の変更があるか。
 
-    int selectedTrack_ = -1; // 選択中のトラック番号。-1は未選択。
+    std::int32_t selectedTrack_ = -1; // 選択中のトラック番号。-1は未選択。
 
     std::string authoringIdentity_;
     std::string authoringAssetName_ = "new_attack";
 
     std::vector<AttackSequenceDefinition> authoringUndo_, authoringRedo_;
     bool authoringGestureOpen_ = false; // ドラッグ操作を一回のUndo履歴にまとめているか。
-    int authoringDragMode_ = 0; // 0=全体移動、1=開始端、2=終了端
+    std::int32_t authoringDragMode_ = 0; // 0=全体移動、1=開始端、2=終了端
 };
 
 #endif

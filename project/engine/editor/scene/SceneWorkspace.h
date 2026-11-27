@@ -60,8 +60,8 @@ private:
     // 関連：SceneWorkspace（この型を使う機能の本体）
     struct CameraBookmark {
         bool valid = false;
-        engine::Vector3 position = engine::Vector3::ZERO;
-        engine::Vector3 rotation = engine::Vector3::ZERO;
+        engine::Vector3 position = engine::Vector3::kZero;
+        engine::Vector3 rotation = engine::Vector3::kZero;
         std::string objectGuid;
         std::string objectName;
     };

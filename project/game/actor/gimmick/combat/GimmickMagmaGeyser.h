@@ -1,13 +1,14 @@
 ﻿#pragma once
 
+#include <cstdint>
 #include "game/actor/enemy/combat/AttackTelegraph.h"
 #include "BaseGimmick.h"
 
 #include <memory>
 #include <array>
 
-// 警告、噴出、休止を周期的に繰り返すマグマ噴出口です。
-// 関連：BaseGimmickの配置・衝突基盤を使い、固有の状態と表示をこのクラスで更新する。調整項目はInitializeでProperty登録する。
+// 噴出口の周期と接触攻撃、単発の火山弾、移動床に追従する水柱を管理する。
+// 噴出から得た上昇量を移動床へ渡し、弾はBulletManager、特殊材質はシーンの専用描画パスを使う。
 // 主な入口：Initialize / Update / OnCollision / OnTrigger
 class GimmickMagmaGeyser : public BaseGimmick {
   public:
@@ -26,12 +27,12 @@ class GimmickMagmaGeyser : public BaseGimmick {
 
     /// 指定カメラのプレビューへ噴出口を描画する。
     void DrawForCamera(engine::Camera* camera, ID3D12Resource* pointLightResource, ID3D12Resource* spotLightResource,
-                       int previewBufferIndex = 0) override;
+                       std::int32_t previewBufferIndex = 0) override;
 
-    /// 接触対象への攻撃判定を処理する。
+    // 噴射ダメージモードで噴出中のプレイヤーへの接触にだけダメージを通知する。常にtrueを返す。
     bool OnCollision(engine::Object3D* other) override;
 
-    /// 外部トリガーによる噴出を要求する。
+    // 単発トリガーで稼働状態の反転を要求する。火山弾の単発発射はRequestFireballEruptionを使う。
     void OnTrigger() override;
 
     /// スイッチ状態に応じて周期動作を有効・無効にする。
@@ -45,7 +46,7 @@ class GimmickMagmaGeyser : public BaseGimmick {
 
     /// 噴出表示をプレビューカメラの特殊材質パスへ描く。
     void DrawOwnedSpecialMaterialVisualsForCamera(engine::Camera* camera, uint32_t depthSrvHandle, uint32_t grabSrvHandle,
-                                                  int previewBufferIndex = 0) override;
+                                                  std::int32_t previewBufferIndex = 0) override;
 
     /// 配置用の噴出口複製を作る。
     std::unique_ptr<engine::Object3D> Clone() const override;
@@ -61,7 +62,7 @@ class GimmickMagmaGeyser : public BaseGimmick {
     /// 逃走イベント向けに噴出周期と有効状態を初期値へ戻す。
     void ResetEscapeCycle(bool active);
 
-    // Timeline の信号で単発噴出へ切り替えます。編集中または処理中の重複要求は無視します。
+    // タイムラインから単発火山弾を要求する。プレイ外・既に処理中・水柱の場合は受け付けない。
     void RequestFireballEruption();
 
   private:
@@ -76,21 +77,22 @@ class GimmickMagmaGeyser : public BaseGimmick {
 
     bool singleEruption_ = false;
     bool singleFired_ = false;
+    // 単発の予告が始まってからの経過秒数。発射後の待ち時間にも使う。
     float singleTimer_ = 0.0f;
 
     /// 単発噴出で飛ぶ火球の移動時間を返す。
     float GetFireballFlightDuration() const;
 
     enum class Phase {
-        Warning,
-        Erupting,
-        Cooldown,
+        kWarning,
+        kErupting,
+        kCooldown,
     };
 
     /// Play 中の更新か判定する。
     bool IsPlaying() const;
 
-    /// プレイヤーが噴出口のシミュレーション範囲内か返す。
+    // プレイヤーがいないか、噴出口との水平距離が稼働範囲内の場合にtrueを返す。
     bool IsPlayerWithinSimulationRange() const;
 
     /// Play 開始時の周期と演出を設定する。
@@ -102,7 +104,7 @@ class GimmickMagmaGeyser : public BaseGimmick {
     /// 攻撃予告段階へ切り替える。
     void BeginWarning();
 
-    /// 噴出段階へ切り替え、火山弾か噴出直後の演出を出す。接触判定は UpdateEruptionVisual() が決める。
+    // 噴出段階に入り、火山弾または開始エフェクトを出す。柱と接触の更新はUpdateEruptionVisualが担当する。
     void BeginEruption();
 
     /// 指定時間の休止段階へ切り替える。
@@ -135,26 +137,37 @@ class GimmickMagmaGeyser : public BaseGimmick {
     /// 噴出中の粒子を発生させる。
     void EmitEruptionParticles();
 
+    // 発射口のワールド座標を返す。接続した上昇液面があれば火山弾の発射高さに使う。
     engine::Vector3 GetMouthPosition() const;
 
+    // 警告の所要秒数。設定値は0.2秒以上。
     float GetWarningDuration() const;
 
+    // 噴出段階の所要秒数。設定値は0.2秒以上。
     float GetEruptionDuration() const;
 
+    // 次の警告までの休止秒数。設定値は0.2秒以上。
     float GetCooldownDuration() const;
 
+    // プレイ開始または脱出開始時の待ち秒数。0〜30秒に収める。
     float GetInitialDelay() const;
 
+    // 噴射と火山弾で使うダメージ量。負の値は0。
     float GetDamage() const;
 
+    // 最大噴出高をワールド単位で返す。
     float GetGeyserHeight() const;
 
+    // 円柱の描画と接触判定の半径をワールド単位で返す。
     float GetGeyserRadius() const;
 
+    // 被弾時に与える水平方向の速度の大きさ。
     float GetHorizontalKnockback() const;
 
+    // 被弾時に与える上向きの速度の大きさ。
     float GetVerticalKnockback() const;
 
+    // シミュレーションを行うプレイヤーとの水平距離。20〜500ワールド単位。
     float GetSimulationWakeDistance() const;
 
     AttackTelegraph warningTelegraph_;
@@ -165,20 +178,23 @@ class GimmickMagmaGeyser : public BaseGimmick {
     float boilingClock_ = 0.0f;
     bool ventInLiquid_ = false;
 
-    Phase phase_ = Phase::Warning;
+    Phase phase_ = Phase::kWarning;
+    // 現在の段階に入ってからの経過秒数。
     float phaseTimer_ = 0.0f;
     float phaseDuration_ = 1.0f;
 
+    // 再び接触ダメージを与えられるまでの残り秒数。
     float damageCooldownTimer_ = 0.0f;
 
+    // 次に噴出粒子を生成するまでの残り秒数。
     float particleTimer_ = 0.0f;
     float visualTimer_ = 0.0f;
-    int particleBandIndex_ = 0;
+    std::int32_t particleBandIndex_ = 0;
 
     bool initializedForPlay_ = false;
     bool active_ = true;
     bool simulationSleeping_ = false;
 
-    engine::Vector4 baseColor_ = engine::Colors::White;
+    engine::Vector4 baseColor_ = engine::colors::kWhite;
     float baseEmissive_ = 1.0f;
 };

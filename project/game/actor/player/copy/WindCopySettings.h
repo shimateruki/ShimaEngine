@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "json.hpp"
 #include <algorithm>
 #include <cmath>
@@ -56,6 +57,7 @@ struct WindCopySettings {
     void Load() {
         try {
             std::ifstream in(kConfigPath);
+            // 設定ファイルを開けない場合は、現在値を保って読み込みを終える。
             if (!in) return;
             nlohmann::json j; in >> j;
             // 読み込み途中の値は別の設定に置き、成功時だけ現在値を差し替える。
@@ -82,6 +84,7 @@ struct WindCopySettings {
             next.vortexSpinRate = j.value("vortexSpinRate", next.vortexSpinRate);
             // すべて読み込んでから補正し、次に能力を使うときの設定にする。
             next.Sanitize(); *this = next;
+        // JSONの構文や値の型で例外が出た場合は、読み込み途中の設定を反映しない。
         } catch (...) {}
     }
     bool Save() const {
@@ -106,19 +109,23 @@ struct WindCopySettings {
         j["vortexVisualHeight"] = safe.vortexVisualHeight;
         j["vortexVisualWidth"] = safe.vortexVisualWidth;
         j["vortexSpinRate"] = safe.vortexSpinRate;
-        // 保存先を作れない場合は書き込まず、UIへ失敗を返す。
+        // 保存ファイルを開く前に、親フォルダーを用意する。
         std::error_code ec;
         std::filesystem::create_directories(std::filesystem::path(kConfigPath).parent_path(), ec);
+        // 親フォルダーの準備でエラーが出た場合は、ファイルを書き出さず失敗を返す。
         if (ec) return false;
+        // 出力ファイルを開けない場合も失敗を返し、JSONを書き込まない。
         std::ofstream out(kConfigPath); if (!out) return false;
         out << j.dump(2); return out.good();
     }
+    // 最初の取得で保存済みの設定を読み、二回目以降は同じ設定を返します。
     static WindCopySettings& Get() {
-        static WindCopySettings settings = [] { WindCopySettings v; v.Load(); return v; }();
-        return settings;
+        static WindCopySettings sSettings = [] { WindCopySettings v; v.Load(); return v; }();
+        return sSettings;
     }
 #ifdef USE_IMGUI
     void DrawEditor() {
+        // 設定欄が閉じている間は、値の入力や保存ボタンを描画しない。
         if (!ImGui::CollapsingHeader("風コピー・風跳びと小型竜巻", ImGuiTreeNodeFlags_DefaultOpen)) return;
         ImGui::TextWrapped("右クリックで地上から真上へ跳び、頂点から緩降下。左クリックで竜巻へ接続。Eで前へ進む小型竜巻。");
         ImGui::DragFloat("風跳びの初速倍率", &liftJumpScale, 0.01f, 0.8f, 1.45f);
@@ -141,10 +148,11 @@ struct WindCopySettings {
         Sanitize();
         // 速度と寿命の積を表示し、設定した二つの値から到達距離を見積もれるようにする。
         ImGui::Text("竜巻中心の最大移動距離 %.1f", vortexSpeed * vortexLifetime);
-        static int result = 0;
+        static std::int32_t sResult = 0;
         // その場の調整値を次回起動でも使う場合に、設定ファイルへ保存する。
-        if (ImGui::Button("風コピー設定を保存")) result = Save() ? 1 : -1;
-        if (result) ImGui::TextUnformatted(result > 0 ? "保存しました" : "保存に失敗しました");
+        if (ImGui::Button("風コピー設定を保存")) sResult = Save() ? 1 : -1;
+        // 保存を試した後だけ、記録した成功または失敗を表示する。
+        if (sResult) ImGui::TextUnformatted(sResult > 0 ? "保存しました" : "保存に失敗しました");
     }
 #endif
 };

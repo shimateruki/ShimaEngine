@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #ifdef USE_IMGUI
 #include "SceneManager.h"
 #include "game/system/scene/SceneGameplayAccess.h"
@@ -13,10 +14,10 @@
 
 // 明示的な検証起動だけで実GAMEPLAYのAI、Bullet、Collision、GameRuleを通します。
 // プロファイルの復元は起動スクリプトがfinallyで担当します。
-namespace AttackLifecycleRuntimeProbe {
+namespace attackLifecycleRuntimeProbe {
 inline bool Enabled() {
-    static const bool enabled = GetEnvironmentVariableA("CG2_ATTACK_LIFECYCLE_TEST", nullptr, 0) > 0;
-    return enabled;
+    static const bool kEnabled = GetEnvironmentVariableA("CG2_ATTACK_LIFECYCLE_TEST", nullptr, 0) > 0;
+    return kEnabled;
 }
 inline bool WantsPlay(SceneManager* manager) {
     return Enabled() && manager && !manager->IsTransitioning() && manager->GetCurrentSceneName() == "GAMEPLAY";
@@ -25,33 +26,33 @@ inline void AfterDraw(SceneManager* manager, const std::string& path) {
     if (!Enabled() || !manager)
         return;
     static std::ofstream log(path, std::ios::trunc);
-    static ULONGLONG began = GetTickCount64();
-    static int phase = 0, frames = 0;
-    static BaseEnemy* enemy = nullptr;
-    static float hpBefore = 0;
-    static int damageEvents = 0;
-    static EventManager::SubscriptionId damageSubscription = EventManager::kInvalidSubscriptionId;
-    static bool sawBullet = false, sawAction = false, ended = false;
-    static EnemyAttackProfile authored;
-    static bool done = false;
-    if (done)
+    static ULONGLONG sBegan = GetTickCount64();
+    static std::int32_t sPhase = 0, sFrames = 0;
+    static BaseEnemy* sEnemy = nullptr;
+    static float sHpBefore = 0;
+    static std::int32_t sDamageEvents = 0;
+    static EventManager::SubscriptionId sDamageSubscription = EventManager::kInvalidSubscriptionId;
+    static bool sSawBullet = false, sSawAction = false, sEnded = false;
+    static EnemyAttackProfile sAuthored;
+    static bool sDone = false;
+    if (sDone)
         return;
     auto finish = [&](const std::string& message) {
-        EventManager::GetInstance()->Unsubscribe(damageSubscription);
-        damageSubscription = EventManager::kInvalidSubscriptionId;
+        EventManager::GetInstance()->Unsubscribe(sDamageSubscription);
+        sDamageSubscription = EventManager::kInvalidSubscriptionId;
         log << message << std::endl;
-        done = true;
+        sDone = true;
         WinApp::CloseNow();
     };
-    if (GetTickCount64() - began > 300000) {
+    if (GetTickCount64() - sBegan > 300000) {
         finish("FAIL: lifecycle timeout");
         return;
     }
     if (manager->IsTransitioning())
         return;
-    if (phase == 0) {
+    if (sPhase == 0) {
         manager->ChangeScene("GAMEPLAY");
-        phase = 1;
+        sPhase = 1;
         log << "REQUEST GAMEPLAY" << std::endl;
         return;
     }
@@ -63,9 +64,9 @@ inline void AfterDraw(SceneManager* manager, const std::string& path) {
         finish("FAIL: no runtime player");
         return;
     }
-    if (phase == 1) {
+    if (sPhase == 1) {
         // 入場ムービーの無敵・操作ロックが解けてから通常の被弾を検証します。
-        if (++frames < 240 || player->IsCinematicLocked() || !player->IsControlActive())
+        if (++sFrames < 240 || player->IsCinematicLocked() || !player->IsControlActive())
             return;
         for (auto& object : scene->GetObjects())
             if (auto* other = dynamic_cast<BaseEnemy*>(object.get())) {
@@ -73,11 +74,11 @@ inline void AfterDraw(SceneManager* manager, const std::string& path) {
                 other->SetCollisionMask(0);
             }
         std::string error;
-        if (!authored.LoadForEnemy("FireSlime", &error)) {
+        if (!sAuthored.LoadForEnemy("FireSlime", &error)) {
             finish("FAIL: " + error);
             return;
         }
-        auto attack = *authored.FindAttack("fireball");
+        auto attack = *sAuthored.FindAttack("fireball");
         attack.id = "runtime_authored_attack";
         attack.displayName = "保存再読込の検証用攻撃";
         attack.sequence.priority = 999;
@@ -85,26 +86,26 @@ inline void AfterDraw(SceneManager* manager, const std::string& path) {
         attack.statusEffectType = "none"; // 継続ダメージと直撃の結果を分離します。
         attack.sequence.events.front().projectile.damage = 2;
         attack.sequence.events.front().name = "RuntimeAuthoredProjectile";
-        authored.attacks.push_back(attack);
-        damageSubscription = EventManager::GetInstance()->Subscribe([](const DamageEvent& event) {
+        sAuthored.attacks.push_back(attack);
+        sDamageSubscription = EventManager::GetInstance()->Subscribe([](const DamageEvent& event) {
             const auto* bullet = dynamic_cast<const Bullet*>(event.attacker);
             if (bullet && bullet->GetName() == "RuntimeAuthoredProjectile")
-                ++damageEvents;
+                ++sDamageEvents;
         });
-        phase = 2;
-        frames = 0;
+        sPhase = 2;
+        sFrames = 0;
     }
-    if (phase == 2 || phase == 4) {
-        const bool hitEnabled = phase == 2;
-        if (enemy) {
-            enemy->SetIsVisible(false);
-            enemy->SetCollisionMask(0);
+    if (sPhase == 2 || sPhase == 4) {
+        const bool hitEnabled = sPhase == 2;
+        if (sEnemy) {
+            sEnemy->SetIsVisible(false);
+            sEnemy->SetCollisionMask(0);
         }
-        auto* attack = authored.FindAttack("runtime_authored_attack");
+        auto* attack = sAuthored.FindAttack("runtime_authored_attack");
         attack->sequence.events.front().projectile.collisionEnabled = hitEnabled;
         const auto profilePath = EnemyAttackProfile::GetDefaultPath("FireSlime");
         std::string error;
-        if (!authored.SaveToFile(profilePath, &error)) {
+        if (!sAuthored.SaveToFile(profilePath, &error)) {
             finish("FAIL save: " + error);
             return;
         }
@@ -146,45 +147,45 @@ inline void AfterDraw(SceneManager* manager, const std::string& path) {
         created->ApplyManagedScale({2, 2, 2});
         created->SetGrounded(true);
         created->UpdateWorldMatrix(true);
-        enemy = created.get();
+        sEnemy = created.get();
         scene->AddObject(std::move(created));
-        hpBefore = player->GetHp();
-        damageEvents = 0;
-        sawBullet = sawAction = ended = false;
-        frames = 0;
-        ++phase;
-        log << "SAVED REOPENED SPAWNED collision=" << hitEnabled << " hp=" << hpBefore << std::endl;
+        sHpBefore = player->GetHp();
+        sDamageEvents = 0;
+        sSawBullet = sSawAction = sEnded = false;
+        sFrames = 0;
+        ++sPhase;
+        log << "SAVED REOPENED SPAWNED collision=" << hitEnabled << " hp=" << sHpBefore << std::endl;
         return;
     }
-    ++frames;
-    const auto* sequence = dynamic_cast<const ISequencePreviewEnemy*>(enemy);
+    ++sFrames;
+    const auto* sequence = dynamic_cast<const ISequencePreviewEnemy*>(sEnemy);
     const char* stateLabel = sequence ? sequence->GetSequenceStateLabel() : nullptr;
     const std::string state = stateLabel ? stateLabel : "";
     if (state.find("実行中") != std::string::npos)
-        sawAction = true;
-    if (sawAction && state.find("終了") != std::string::npos)
-        ended = true;
+        sSawAction = true;
+    if (sSawAction && state.find("終了") != std::string::npos)
+        sEnded = true;
     for (const auto& bullet : BulletManager::GetInstance()->GetBullets())
         if (bullet->GetName() == "RuntimeAuthoredProjectile")
-            sawBullet = true;
-    if (frames % 120 == 0)
-        log << "FRAME " << frames << " hp=" << player->GetHp() << " state=" << state << " bullet=" << sawBullet << std::endl;
-    if (!ended || frames < 420)
+            sSawBullet = true;
+    if (sFrames % 120 == 0)
+        log << "FRAME " << sFrames << " hp=" << player->GetHp() << " state=" << state << " bullet=" << sSawBullet << std::endl;
+    if (!sEnded || sFrames < 420)
         return;
-    if (!sawBullet || !sawAction) {
+    if (!sSawBullet || !sSawAction) {
         finish("FAIL: runtime did not execute authored attack");
         return;
     }
-    const float lost = hpBefore - player->GetHp();
-    log << "RESULT collision=" << (phase == 3) << " hpLost=" << lost << " damageEvents=" << damageEvents << std::endl;
-    if (phase == 3) {
-        if (std::abs(lost - 2.0f) > 0.01f || damageEvents != 1) {
+    const float lost = sHpBefore - player->GetHp();
+    log << "RESULT collision=" << (sPhase == 3) << " hpLost=" << lost << " damageEvents=" << sDamageEvents << std::endl;
+    if (sPhase == 3) {
+        if (std::abs(lost - 2.0f) > 0.01f || sDamageEvents != 1) {
             finish("FAIL: runtime projectile damage mismatch");
             return;
         }
-        phase = 4;
+        sPhase = 4;
     } else {
-        if (lost != 0 || damageEvents != 0) {
+        if (lost != 0 || sDamageEvents != 0) {
             finish("FAIL: disabled collider caused damage");
             return;
         }

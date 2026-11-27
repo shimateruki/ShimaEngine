@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "fa008e6ab28b400e898e9d65043e8e9b",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/sprite/ui/control_guide/video_posters/26-slime-attack.png",
+  "version": 1
+}

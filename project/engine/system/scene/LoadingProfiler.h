@@ -7,8 +7,9 @@
 #include <string>
 #include <utility>
 
-// 16msを超えたロード処理だけを記録する。環境変数を指定した検証実行ではファイルにも残す。
+// 16ms以上かかったロード処理だけを記録する。環境変数で出力先を指定した場合はファイルにも残す。
 inline void LogSlowLoadingOperation(const std::string& operation, double elapsedMs) {
+    // 16ms未満の処理は頻度が高いため、デバッガーとファイルの両方で記録を省く。
     if (elapsedMs < 16.0) {
         return;
     }
@@ -22,17 +23,17 @@ inline void LogSlowLoadingOperation(const std::string& operation, double elapsed
     if (length == 0 || length >= sizeof(path)) {
         return;
     }
-    static std::mutex logMutex;
+    static std::mutex sLogMutex;
     // 先読み用のスレッドが同時に記録しても、同じ出力ファイルの行が交ざらないよう追記を直列にする。
-    std::lock_guard<std::mutex> lock(logMutex);
+    std::lock_guard<std::mutex> lock(sLogMutex);
     std::ofstream log(path, std::ios::app);
     log << line;
 }
 
 // 起動開始から初回表示までの時間を、既存のロード計測ログへ記録する。
 inline std::chrono::steady_clock::time_point& StartupProfileStartTime() {
-    static auto startTime = std::chrono::steady_clock::now();
-    return startTime;
+    static auto sStartTime = std::chrono::steady_clock::now();
+    return sStartTime;
 }
 
 // 起動時間の計測基準を現在時刻へ戻す。

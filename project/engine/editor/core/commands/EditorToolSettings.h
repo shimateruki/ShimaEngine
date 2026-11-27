@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #ifdef USE_IMGUI
 #include <functional>
 #include <map>
@@ -11,7 +12,7 @@
 class EditorToolSettings {
 public:
     // 補助表示の分類。保存時は従来どおり項目のIDだけを使う。
-    enum class VisibilityGroup { CollisionEvents, SceneEditing, Camera, AnimationEffects, Diagnostics };
+    enum class VisibilityGroup { kCollisionEvents, kSceneEditing, kCamera, kAnimationEffects, kDiagnostics };
 
     static EditorToolSettings& Get();
 
@@ -59,7 +60,7 @@ private:
     // 関連：EditorToolSettings（この型を使う機能の本体）
     struct Tool {
         std::string id, name, category;
-        int key = 0;
+        std::int32_t key = 0;
         bool ctrl = false, shift = false, alt = false;
     };
 

@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include <cstdint>
 #include "Object3D.h"
 #include <numbers>
 #include "DirectXCommon.h"
@@ -31,7 +32,7 @@ void Object3D::UpdateAttachedEffects(float deltaTime) {
     effectAnchor_.translate = GetWorldPosition();
     effectAnchor_.scale = { 1.0f, 1.0f, 1.0f };
 
-    // ルート（大元）のY軸回転を取得
+    // 最上位まで親をたどり、階層のうちルートの水平回転だけを取得する。
     float rootRotY = transform_.rotate.y;
     Object3D* rootObj = this;
 
@@ -39,6 +40,7 @@ void Object3D::UpdateAttachedEffects(float deltaTime) {
         rootObj = rootObj->GetParent();
     }
 
+    // ルートの参照を取得できたときは、本体のローカル回転ではなくルートのヨーを使う。
     if (rootObj) {
         rootRotY = rootObj->GetRotation().y;
     }
@@ -49,12 +51,14 @@ void Object3D::UpdateAttachedEffects(float deltaTime) {
     // 変更された枠だけを作り直し、二つの枠の状態を独立して保持する。
     const auto refreshSlot = [this](const std::string& path, std::string& loadedPath,
                                     std::vector<std::unique_ptr<Object3D>>& effects) {
+        // 空でない素材が同じパスですでに生成されていれば、既存の再生状態を保つ。
         if (!path.empty() && !effects.empty() && loadedPath == path) {
             return;
         }
 
         effects.clear();
         loadedPath.clear();
+        // 今回の設定が空になった枠は、前の表示物を消した状態で終了する。
         if (path.empty()) {
             return;
         }
@@ -62,27 +66,31 @@ void Object3D::UpdateAttachedEffects(float deltaTime) {
         // ファイルを開けない場合は枠を空に保ち、次の更新で再試行する。
         std::ifstream file(path);
 
+        // 設定ファイルを開けた場合に限り、立体表示のモードを取得して必要枚数を作る。
         if (file.is_open()) {
             json j;
             file >> j;
             file.close();
 
             // 立体化の設定から面数を決め、各面をアンカー基準で配置する。
-            int volumeMode = j.contains("VolumeMode") ? (int)j["VolumeMode"] : 0;
-            int numSpawns = (volumeMode == 2) ? 3 : (volumeMode == 1 ? 2 : 1);
+            std::int32_t volumeMode = j.contains("VolumeMode") ? (std::int32_t)j["VolumeMode"] : 0;
+            std::int32_t numSpawns = (volumeMode == 2) ? 3 : (volumeMode == 1 ? 2 : 1);
 
-            for (int i = 0; i < numSpawns; ++i) {
+            for (std::int32_t i = 0; i < numSpawns; ++i) {
                 auto effect = std::make_unique<EffectObject3D>();
                 effect->Initialize(common_);
                 effect->SetName(path + "_" + std::to_string(i));
 
+                // 個別の面でエフェクトの読込に成功した場合だけ、姿勢の補正とアンカーへの接続を行う。
                 if (effect->LoadFromJson(path)) {
                     engine::Vector3 localRot = effect->GetRotation();
                     engine::Vector3 localPos = effect->GetTranslate();
 
+                    // 交差表示の2枚目にだけX軸回りの90度を加え、1枚目と直交させる。
                     if (volumeMode == 1 && i == 1) {
                         localRot.x += (std::numbers::pi_v<float> * 0.5f); // 90度クロス
                     }
+                    // 奥行きのある3枚表示では、回転から求めた正面に沿って各面をずらす。
                     else if (volumeMode == 2) {
                         float gap = 0.02f;
                         engine::Vector3 localZ;
@@ -91,11 +99,13 @@ void Object3D::UpdateAttachedEffects(float deltaTime) {
                         localZ.y = -sinf(localRot.x);
                         localZ.z = cosf(localRot.y) * cosf(localRot.x);
 
+                        // 2枚目は中央から正面側へ0.02単位ずらす。
                         if (i == 1) {
                             localPos.x += localZ.x * gap;
                             localPos.y += localZ.y * gap;
                             localPos.z += localZ.z * gap;
                         }
+                        // 3枚目は同じ距離だけ背面側へずらし、中央の両側を覆う。
                         if (i == 2) {
                             localPos.x -= localZ.x * gap;
                             localPos.y -= localZ.y * gap;
@@ -133,6 +143,7 @@ void Object3D::UpdateAttachedEffects(float deltaTime) {
 }
 
 void Object3D::DrawAttachedEffects(ID3D12Resource* pointLightResource, ID3D12Resource* spotLightResource) {
+    // 本体の描画が抑止されている場合は、付属する両方のエフェクト枠も描かない。
     if (!GetIsRenderVisible())
         return;
 

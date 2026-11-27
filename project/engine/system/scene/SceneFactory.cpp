@@ -5,6 +5,7 @@ std::unique_ptr<BaseScene> SceneFactory::CreateScene(const std::string& sceneNam
     // 未登録キーを別のシーンへ置き換えず、呼び出し側に失敗を返す。
     const auto found = creators_.find(sceneName);
 
+    // シーン名が未登録か生成関数が空の場合は、生成できるシーンがないことを返す。
     if (found == creators_.end() || !found->second) {
         return nullptr;
     }
@@ -19,7 +20,7 @@ std::vector<std::string> SceneFactory::GetRegisteredSceneNames() const {
 
 // 同名登録は生成関数だけ差し替え、一覧上の位置は変えません。
 bool SceneFactory::RegisterScene(const std::string& sceneName, SceneCreator creator) {
-    // 同名シーンの生成処理は差し替えられるが、一覧上の登録順は増やさない。
+    // 名前が空、または生成関数が空の要求は登録しない。
     if (sceneName.empty() || !creator) {
         return false;
     }
@@ -27,6 +28,7 @@ bool SceneFactory::RegisterScene(const std::string& sceneName, SceneCreator crea
     const bool isNewRegistration = creators_.find(sceneName) == creators_.end();
     creators_[sceneName] = std::move(creator);
 
+    // 初めて登録する名前だけ、エディターの表示に使う登録順一覧へ加える。
     if (isNewRegistration) {
         registrationOrder_.push_back(sceneName);
     }

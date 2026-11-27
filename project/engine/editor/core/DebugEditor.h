@@ -42,7 +42,7 @@ class SelectedActorSession;
 #include "SceneSerializer.h"
 #include "TextSpriteGenerator.h"
 
-namespace engine { class Object3D; }
+namespace engine { class Object3D; class InputManager; }
 class DebrisEffectEditor;
 namespace engine { class DirectXCommon; }
 class SceneManager;
@@ -66,7 +66,6 @@ class DebugEditor : public IEditable {
 
 public:
     // 操作開始時の JSON と対象の借用参照。対象が現在シーンに残っていることを登録時に確認する。
-    // 関連：DebugEditor（この型を使う機能の本体）
     struct ObjectStateSnapshot {
         engine::Object3D* object = nullptr;
         nlohmann::json beforeState;
@@ -106,7 +105,7 @@ public:
     void SetProjectWindowVisible(bool visible) { projectWindowVisible_ = visible; }
 
     /// <summary>指定カテゴリのシーン内容を保存する。</summary>
-    void SaveScene(SaveMode mode = SaveMode::All);
+    void SaveScene(SaveMode mode = SaveMode::kAll);
 
     /// <summary>選択中のオブジェクトだけを保存する。</summary>
     void SaveSingleObject();
@@ -254,7 +253,7 @@ public:
     /// 編集停止中だけ、配置と親子を保って登録済みの実クラスへ交換します。Undoにも同じ経路を使います。
     bool ChangeObjectType(engine::Object3D* object, EditorObjectFactoryRegistry::Kind kind, const std::string& type);
 
-    /// <summary>Editorから複数オブジェクトを追加し、Undo履歴へまとめて登録する。</summary>
+    /// <summary>複数オブジェクトを追加する。作成履歴は個体ごとに登録し、最後に先頭を選択する。</summary>
     void AddEditorObjects(std::vector<std::unique_ptr<engine::Object3D>> objects, const std::string& label);
 
     /// <summary>指定Prefabだけを編集する一時セッションを開始する。</summary>
@@ -283,7 +282,7 @@ public:
     /// <summary>複数オブジェクトの変更前状態を一組として保存する。</summary>
     std::vector<ObjectStateSnapshot> CaptureObjectStates(const std::vector<engine::Object3D*>& objects) const;
 
-    /// <summary>単一オブジェクトの編集をUndo履歴へ登録する。</summary>
+    /// <summary>単一編集の互換入口。変更前の値を持つ場合はbeforeStateを取る版を使う。</summary>
     void RegisterObjectEdited(engine::Object3D* object, const std::string& label);
 
     /// <summary>保存済みの変更前状態を使って単一編集をUndo履歴へ登録する。</summary>
@@ -326,16 +325,17 @@ public:
     /// <summary>ウィンドウ上のGame View矩形を設定する。</summary>
     void SetGameViewScreenRect(float left, float top, float right, float bottom) {
         // 設定メニューなどへ渡す画面矩形は整数ピクセルにそろえる。幅または高さのない矩形は公開しない。
-        gameViewScreenRectLeft_ = static_cast<int>(left);
-        gameViewScreenRectTop_ = static_cast<int>(top);
-        gameViewScreenRectRight_ = static_cast<int>(right);
-        gameViewScreenRectBottom_ = static_cast<int>(bottom);
+        gameViewScreenRectLeft_ = static_cast<std::int32_t>(left);
+        gameViewScreenRectTop_ = static_cast<std::int32_t>(top);
+        gameViewScreenRectRight_ = static_cast<std::int32_t>(right);
+        gameViewScreenRectBottom_ = static_cast<std::int32_t>(bottom);
         hasGameViewScreenRect_ = gameViewScreenRectRight_ > gameViewScreenRectLeft_ && gameViewScreenRectBottom_ > gameViewScreenRectTop_;
     }
 
     /// <summary>有効なGame View矩形を整数座標で返す。</summary>
-    /// <returns>矩形がまだ設定されていない場合はfalse。</returns>
-    bool GetGameViewScreenRect(int& left, int& top, int& right, int& bottom) const {
+    /// <returns>整数化した矩形に正の幅・高さが無い場合はfalse。出力引数は変更しない。</returns>
+    bool GetGameViewScreenRect(std::int32_t& left, std::int32_t& top, std::int32_t& right, std::int32_t& bottom) const {
+        // 矩形をまだ取得していないか幅・高さがない場合は、呼び出し元へ使える座標を返さない。
         if (!hasGameViewScreenRect_) {
             return false;
         }
@@ -364,6 +364,7 @@ public:
     void SetSceneFilename(const std::string& filepath) {
         std::string name = filepath;
         size_t pos = name.find_last_of("/\\");
+        // 区切りを持つパスであれば、最後の区切りより後ろだけを保存名に使う。
         if (pos != std::string::npos)
             name = name.substr(pos + 1);
         strcpy_s(currentSceneFilename_, sizeof(currentSceneFilename_), name.c_str());
@@ -398,8 +399,7 @@ public:
         LightEditor* lightEditor,
         MeshEffectEditor* meshEffectEditor,
         DebrisEffectEditor* debrisEffectEditor,
-        TrailEmitterEditor* trailEmitterEditor)
-    {
+        TrailEmitterEditor* trailEmitterEditor) {
         // 実体は GameEditorController が所有する。ここでは編集画面から各ツールへ渡す参照だけを保持する。
         postEffectEditor_ = postEffectEditor;
         spriteDebugEditor_ = spriteDebugEditor;
@@ -424,9 +424,9 @@ public:
     const std::vector<engine::Object3D*>& GetSelectedObjects() const { return selectedObjects_; }
 
     /// <summary>選択枠表示モードの数値を取得・設定する。</summary>
-    int GetSelectionOverlayMode() const;
+    std::int32_t GetSelectionOverlayMode() const;
 
-    void SetSelectionOverlayMode(int mode);
+    void SetSelectionOverlayMode(std::int32_t mode);
 
     /// <summary>指定オブジェクトが現在の選択に含まれるか返す。</summary>
     bool IsObjectSelected(const engine::Object3D* object) const;
@@ -507,7 +507,7 @@ public:
 
     TrailEmitterEditor* GetTrailEmitterEditor() const { return trailEmitterEditor_; }
 
-    /// <summary>DebugEditorが所有する各ツールウィンドウへの参照を返す。</summary>
+    /// <summary>共有のプレビューステージと編集中のセッション、所有するサブウィンドウを参照する。</summary>
 
 
     EffectPreviewStage* GetEffectPreviewStage() { return EffectPreviewStage::GetInstance(); }
@@ -541,23 +541,22 @@ public:
     bool* GetDrawEventIdsPtr() { return &drawEventIds_; }
 
 private:
-        // モデルやプリセット生成時の配置結果をまとめ、生成後の選択やUndo登録に使います。
-// 関連：DebugEditor（この型を使う機能の本体）
+        // 配置結果の座標と面情報はワールド基準。接触なしの仮位置はhasSurfaceで区別する。
 struct PlacementResult {
-        engine::Vector3 position = engine::Vector3::ZERO;
-        engine::Vector3 contactPosition = engine::Vector3::ZERO;
+        engine::Vector3 position = engine::Vector3::kZero;
+        engine::Vector3 contactPosition = engine::Vector3::kZero;
         engine::Vector3 normal = { 0.0f, 1.0f, 0.0f };
         bool found = false;
         bool hasSurface = false;
     };
 
-    enum class PresetRootName { DisplayName, PathLeaf };
+    enum class PresetRootName { kDisplayName, kPathLeaf };
 
     /// <summary>AABBの各軸の最小値と最大値が有効か判定する。</summary>
-    static bool IsValidAabb(const Aabb& aabb);
+    static bool IsValidAabb(const engine::Aabb& aabb);
 
     /// <summary>AABBの中心座標を返す。</summary>
-    static engine::Vector3 GetAabbCenter(const Aabb& aabb);
+    static engine::Vector3 GetAabbCenter(const engine::Aabb& aabb);
 
     /// <summary>シーンと予約済み名の双方で重複しないプリセットObject名を作る。</summary>
     static std::string MakeUniquePresetObjectName(BaseScene* scene, const std::string& baseName,
@@ -570,8 +569,8 @@ struct PlacementResult {
     /// <summary>Game Viewのマウス位置からワールド空間のRayを作る。</summary>
     engine::Ray ScreenPointToRay(const engine::Vector2& mousePos);
 
-    /// <summary>可視モデルの面へRayを当て、最も手前の接点・法線・交差率を返す。</summary>
-    /// <remarks>選択時だけロック対象を除外。配置ではignoreとその子を除外する。</remarks>
+    /// <summary>可視モデルの面への最短交差を探し、ワールド接点・法線と線分上の比率を返す。</summary>
+    /// <remarks>選択ではロック対象を除き、変形モデルなどは境界箱を使う。配置ではignoreとその子を除く。</remarks>
     bool RaycastSceneSurface(const engine::Ray& ray, engine::RayResult& result,
         engine::Object3D** hitObject = nullptr, const engine::Object3D* ignore = nullptr, bool forSelection = false,
         const std::unordered_set<std::string>* ignoredRootGuids = nullptr);
@@ -592,6 +591,17 @@ struct PlacementResult {
 
     /// <summary>計算済みの配置結果をObjectの位置と必要な向きへ反映する。</summary>
     void ApplyGameViewPlacement(engine::Object3D* object, const PlacementResult& placement, bool alignToSurface);
+
+#ifdef USE_IMGUI
+    /// <summary>ギズモの操作点と選択Objectの姿勢を更新する。</summary>
+    void UpdateTransformGizmo(engine::InputManager* input, bool editingCameraRegion);
+
+    /// <summary>ドラッグ開始時の姿勢とUndo情報を一度だけ控える。</summary>
+    void BeginGizmoDrag(const Transform& transform);
+
+    /// <summary>ドラッグを確定し、Undoと有効な自動キーへ結果を登録する。</summary>
+    void FinishGizmoDrag();
+#endif
 
     /// <summary>カーソル移動に合わせて配置プレビューを更新する。</summary>
     void UpdatePreviewPlacement();
@@ -624,7 +634,7 @@ struct PlacementResult {
     void RestorePreviewVisual(engine::Object3D* object);
 
     /// <summary>プレビューObjectの輪郭を指定インスタンス上限内で描画する。</summary>
-    void DrawPreviewWire(ID3D12GraphicsCommandList* commandList, int& instanceCount, int maxDrawLimit);
+    void DrawPreviewWire(ID3D12GraphicsCommandList* commandList, std::int32_t& instanceCount, std::int32_t maxDrawLimit);
 
     /// <summary>配置候補位置を示すマーカーを描画する。</summary>
     void DrawPreviewMarker();
@@ -703,6 +713,7 @@ struct PlacementResult {
     /// <summary>JSONに保存した状態を指定Objectへ反映する。</summary>
     void ApplyObjectState(engine::Object3D* object, const nlohmann::json& state);
 
+    // 指定された置換先を使うか保存された型を復元し、元の実体と交換して既存の子を付け替える。
     engine::Object3D* ReplaceObjectFromState(engine::Object3D* object, const nlohmann::json& state,
         std::unique_ptr<engine::Object3D> replacement = {});
 
@@ -738,26 +749,26 @@ private:
 
     // 選択Objectはシーンが所有する。複数選択と単一選択を別々に保持する。
     enum class SelectionOverlayMode {
-        Compact = 0,
-        Detailed,
-        Hidden
+        kCompact = 0,
+        kDetailed,
+        kHidden
     };
 
     engine::Object3D* selectedObject_ = nullptr;
     std::vector<engine::Object3D*> selectedObjects_;
 
     // 選択枠の見せ方と、複数Object移動前のUndo用スナップショット。
-    SelectionOverlayMode selectionOverlayMode_ = SelectionOverlayMode::Compact;
+    SelectionOverlayMode selectionOverlayMode_ = SelectionOverlayMode::kCompact;
     std::vector<ObjectStateSnapshot> groupTransformStartStates_;
 
     // 矩形選択のドラッグ中/確定待ちと画面上の対角座標。
     bool isSelectionRectDragging_ = false;
     bool isSelectionRectReady_ = false;
-    engine::Vector2 selectionRectStart_ = engine::Vector2::ZERO;
-    engine::Vector2 selectionRectEnd_ = engine::Vector2::ZERO;
+    engine::Vector2 selectionRectStart_ = engine::Vector2::kZero;
+    engine::Vector2 selectionRectEnd_ = engine::Vector2::kZero;
 
     // 配置確定前のObjectとその子をEditorが一時所有する。
-    std::unique_ptr<engine::Object3D> previewObject_ = nullptr;
+    std::unique_ptr<engine::Object3D> previewObject_;
     std::vector<std::unique_ptr<engine::Object3D>> previewChildObjects_;
 
     // ブラシ配置の複数プレビューは確定まで別配列で所有する。
@@ -773,11 +784,11 @@ private:
     std::string brushPresetName_;
     float brushSpacing_ = 2.0f;
     bool hasLastBrushStamp_ = false;
-    engine::Vector3 lastBrushStampPosition_ = engine::Vector3::ZERO;
+    engine::Vector3 lastBrushStampPosition_ = engine::Vector3::kZero;
 
-    // プレビューで一時変更した元Objectの見た目・クラス・モデルを取消時に復元する。
-    engine::Vector4 previewObjectOriginalColor_ = engine::Colors::White;
-    BlendMode previewObjectOriginalBlendMode_ = BlendMode::Normal;
+    // プレビューを確定して登録する前に、元の見た目と当たり判定へ戻すための状態。
+    engine::Vector4 previewObjectOriginalColor_ = engine::colors::kWhite;
+    BlendMode previewObjectOriginalBlendMode_ = BlendMode::kNormal;
     int32_t previewObjectOriginalMaterialType_ = 0;
     int32_t previewObjectOriginalSelectedLighting_ = 2;
     int32_t previewObjectOriginalEnableLighting_ = 1;
@@ -789,16 +800,15 @@ private:
     bool previewObjectUsesFallbackModel_ = false;
 
     // 配置面への接触位置。有効でない間は計算値を利用しない。
-    engine::Vector3 previewPlacementContactPosition_ = engine::Vector3::ZERO;
+    engine::Vector3 previewPlacementContactPosition_ = engine::Vector3::kZero;
     bool hasPreviewPlacementContact_ = false;
     std::string previewCreateCommandLabel_ = "Place Preview Object";
 
     // 生成プレビュー中だけ一時的に差し替える表示状態を保持する。
-    // 関連：DebugEditor（この型を使う機能の本体）
     struct PreviewVisualState {
         std::string className;
-        engine::Vector4 color = engine::Colors::White;
-        BlendMode blendMode = BlendMode::Normal;
+        engine::Vector4 color = engine::colors::kWhite;
+        BlendMode blendMode = BlendMode::kNormal;
         int32_t materialType = 0;
         int32_t selectedLighting = 2;
         int32_t enableLighting = 1;
@@ -838,24 +848,24 @@ private:
     // 選択候補のモデル/Sceneファイル一覧と、現在のプレビュー対象。
     std::vector<std::string> modelNames_;
     std::vector<std::string> sceneFiles_;
-    int selectedModelIndex_ = 0;
+    std::int32_t selectedModelIndex_ = 0;
     std::string currentPreviewModelName_ = "";
     char presetNameBuffer_[64] = "";
 
     // Game View内のマウス位置・矩形。画面座標とView内座標を分けて持つ。
-    engine::Vector2 gameViewMousePos_ = engine::Vector2::ZERO;
+    engine::Vector2 gameViewMousePos_ = engine::Vector2::kZero;
     engine::Vector2 gameViewSize_ = { 1266, 530 };
-    engine::Vector2 gameViewOffset_ = engine::Vector2::ZERO;
-    int gameViewScreenRectLeft_ = 0;
-    int gameViewScreenRectTop_ = 0;
-    int gameViewScreenRectRight_ = 0;
-    int gameViewScreenRectBottom_ = 0;
+    engine::Vector2 gameViewOffset_ = engine::Vector2::kZero;
+    std::int32_t gameViewScreenRectLeft_ = 0;
+    std::int32_t gameViewScreenRectTop_ = 0;
+    std::int32_t gameViewScreenRectRight_ = 0;
+    std::int32_t gameViewScreenRectBottom_ = 0;
     bool hasGameViewScreenRect_ = false;
     bool isGameViewHovered_ = false;
 
     // 右クリック生成メニューのView内位置と画面位置、および表示予約。
-    engine::Vector2 gameViewCreateMenuMousePos_ = engine::Vector2::ZERO;
-    engine::Vector2 gameViewCreateMenuScreenPos_ = engine::Vector2::ZERO;
+    engine::Vector2 gameViewCreateMenuMousePos_ = engine::Vector2::kZero;
+    engine::Vector2 gameViewCreateMenuScreenPos_ = engine::Vector2::kZero;
     bool requestGameViewCreateMenu_ = false;
 
     // Play開始位置の通知先。位置とラベルを渡すが所有権は移さない。
@@ -868,22 +878,21 @@ private:
     bool dirtyCamera_ = false;
 
     // 保存ダイアログを閉じた後に実行する対象と、単体保存かどうか。
-    SaveMode pendingSaveMode_ = SaveMode::All;
+    SaveMode pendingSaveMode_ = SaveMode::kAll;
     bool pendingSaveIsSingleObject_ = false;
     std::string pendingSceneAssetOpenAfterSave_;
 
     // Undo/Redoで扱う編集操作の種類。
     enum class EditorCommandType {
-        ObjectCreated,
-        ObjectDeleted,
-        ObjectEdited,
-        ObjectReplaced
+        kObjectCreated,
+        kObjectDeleted,
+        kObjectEdited,
+        kObjectReplaced
     };
 
     // Object 編集の前後 JSON と名前。Undo は before、Redo は after を使って編集状態を戻す。
-    // 関連：DebugEditor（この型を使う機能の本体）
     struct EditorCommand {
-        EditorCommandType type = EditorCommandType::ObjectEdited;
+        EditorCommandType type = EditorCommandType::kObjectEdited;
         std::string label;
         std::string beforeName;
         std::string afterName;
@@ -908,11 +917,11 @@ private:
     // Gizmoのグリッド吸着幅と回転・拡大の中心方式。
     bool isGridSnapEnabled_ = false;
     float snapValue_ = 1.0f;
-    int gizmoPivotMode_ = 0; // 0: 原点, 1: モデル中心, 2: コリジョン中心
+    std::int32_t gizmoPivotMode_ = 0; // 0: 原点, 1: モデル中心, 2: コリジョン中心
 
     // 前フレームのプレビュー状態と、プレビュー前のカメラモード。
     bool wasPreviewActive_ = false;
-    int previousCameraMode_ = 0;
+    std::int32_t previousCameraMode_ = 0;
 
     // 保存通知の残り表示秒数と文章。DDS通知は既読位置だけを持つ。
     float saveNotificationTimer_ = 0.0f;

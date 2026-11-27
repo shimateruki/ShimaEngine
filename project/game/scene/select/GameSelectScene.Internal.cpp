@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include <cstdint>
 #include "game/scene/select/GameSelectScene.Internal.h"
 #include "Easing.h"
 #include "Object3D.h"
@@ -7,7 +8,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace StageSelectDetail {
+namespace stageSelectDetail {
 // ステージ選択演出の補間率を0～1へ制限します。
 float SelectClamp01(float value) {
     // ゲート演出の曲線を定義域の外へ延ばさない。
@@ -25,6 +26,7 @@ engine::Vector3 SelectLookAtRotation(const engine::Vector3& eye, const engine::V
     engine::Vector3 direction{target.x - eye.x, target.y - eye.y, target.z - eye.z};
     const float lengthSq = direction.x * direction.x + direction.y * direction.y + direction.z * direction.z;
 
+    // 目と注視点から安定した方向を作れない場合は、回転を全軸0で返す。
     if (lengthSq <= 0.000001f) {
         return {0.0f, 0.0f, 0.0f};
     }
@@ -45,10 +47,12 @@ engine::Vector3 SelectNormalizeGateDirectionXZ(const engine::Vector3& value, con
     engine::Vector3 direction{value.x, 0.0f, value.z};
     float lengthSq = direction.x * direction.x + direction.z * direction.z;
 
+    // 水平への投影がほぼゼロなら、指定された代替方向を水平に投影する。
     if (lengthSq <= 0.000001f) {
         direction = {fallback.x, 0.0f, fallback.z};
         lengthSq = direction.x * direction.x + direction.z * direction.z;
 
+        // 代替方向も水平成分を持たない場合は、ワールドの+Zを使う。
         if (lengthSq <= 0.000001f) {
             return {0.0f, 0.0f, 1.0f};
         }
@@ -76,15 +80,17 @@ float SelectResolveGateReturnGroundY(const engine::Vector3& probePosition, const
     bool foundGround = false;
     float resolvedGroundY = fallbackGroundY;
 
-    // 予定位置の中心と周囲を調べ、ゲート自身を除いた床のうち最も高い位置を採用します。
+    // 中心と周囲の各点から、地面属性を対象に下向きレイを飛ばす。
     for (const engine::Vector3& offset : sampleOffsets) {
         const engine::Vector3 rayStart = {probePosition.x + offset.x, rayStartY, probePosition.z + offset.z};
-        const RaycastHit hit = CollisionManager::GetInstance()->Raycast(rayStart, {0.0f, -1.0f, 0.0f},
-                                                                        kGateReturnGroundProbeDistance, CollisionCategories::Get("ground"));
+        const engine::RaycastHit hit = engine::CollisionManager::GetInstance()->Raycast(rayStart, {0.0f, -1.0f, 0.0f},
+                                                                        kGateReturnGroundProbeDistance, engine::collisionCategories::Get("ground"));
+        // 床が見つからないか、最初の接触が除外対象に当たったプローブは候補にしない。
         if (!hit.isHit || hit.hitObject == ignoredObject) {
             continue;
         }
 
+        // 採用できた最初の接触か、現在の候補より高い床なら、帰還時の接地高さを更新する。
         if (!foundGround || hit.hitPoint.y > resolvedGroundY) {
             resolvedGroundY = hit.hitPoint.y;
             foundGround = true;
@@ -98,12 +104,14 @@ engine::Vector3 SelectGateEntryDirection(engine::Object3D* gateObject, const eng
     // 配置されたゲートの回転から入場方向を得て、欠けた場合は指定方向へ戻す。
     const engine::Vector3 fallback = SelectNormalizeGateDirectionXZ(fallbackDirection, {0.0f, 0.0f, 1.0f});
 
+    // ゲートが見つからなければ、正規化済みの代替方向を返す。
     if (!gateObject) {
         return fallback;
     }
 
     const Transform* transform = gateObject->GetTransform();
 
+    // ゲートに変換情報を取得できない場合も、代替方向を使う。
     if (!transform) {
         return fallback;
     }
@@ -121,6 +129,7 @@ engine::Vector3 SelectGateEntryDirection(engine::Object3D* gateObject, const eng
         // 逆向きの軸も候補なので、内積の絶対値で同じ直線を向く軸を選ぶ。符号は選んだ後で合わせる。
         const float dot = std::fabs(candidate.x * fallback.x + candidate.z * fallback.z);
 
+        // 現在の候補よりも予定経路と平行に近い水平軸だけ、採用する軸を更新する。
         if (dot > bestDot) {
             bestDot = dot;
             gateAxis = candidate;
@@ -130,6 +139,7 @@ engine::Vector3 SelectGateEntryDirection(engine::Object3D* gateObject, const eng
     // 対応する軸が逆向きの場合は符号をそろえ、ゲートを通る向きを保ちます。
     const float dot = gateAxis.x * fallback.x + gateAxis.z * fallback.z;
 
+    // 内積が負の場合は選んだ軸が反対を向くため、水平成分を反転する。
     if (dot < 0.0f) {
         gateAxis.x *= -1.0f;
         gateAxis.z *= -1.0f;
@@ -177,6 +187,7 @@ engine::Vector3 SelectNormalizeXZ(const engine::Vector3& value, const engine::Ve
     // 高さを除いた方向がほぼゼロなら、呼び出し側の代替方向を保つ。
     const float lengthSq = value.x * value.x + value.z * value.z;
 
+    // XZの長さの二乗が0.0001以下の場合は、方向を計算せず入力の代替値を返す。
     if (lengthSq <= 0.0001f) {
         return fallback;
     }
@@ -197,7 +208,7 @@ engine::Vector3 SelectLerp(const engine::Vector3& a, const engine::Vector3& b, f
     return {a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t};
 }
 
-engine::Vector4 GetStageIslandColor(int stageIndex, bool unlocked, bool selected, bool unlocking, float pulse) {
+engine::Vector4 GetStageIslandColor(std::int32_t stageIndex, bool unlocked, bool selected, bool unlocking, float pulse) {
     // 島の解放・選択状態を色へ反映し、未解放は暗く抑える。
     if (!unlocked && !unlocking) {
         return {0.16f, 0.17f, 0.20f, 0.78f};
@@ -247,6 +258,7 @@ float GetStageIslandEmissive(bool unlocked, bool selected, bool unlocking, float
         return 1.8f + pulse * 1.2f;
     }
 
+    // 解放演出中でも解放済みでもない島は、弱い発光に固定する。
     if (!unlocked) {
         return 0.18f;
     }
@@ -260,14 +272,17 @@ engine::Vector4 GetStageGateModelColor(bool unlocked, bool selected, bool cleare
         return {0.20f, 0.20f, 0.24f, 0.82f};
     }
 
+    // 解放中は、ほかの進行状態より脈動する金色を優先する。
     if (unlocking) {
         return {1.0f, 0.82f + pulse * 0.10f, 0.28f, 1.0f};
     }
 
+    // 解放の演出中でなく選択中の場合は、明るい黄色で示す。
     if (selected) {
         return {1.0f, 0.92f, 0.42f, 1.0f};
     }
 
+    // 選択されていないクリア済みゲートは、淡い緑色で示す。
     if (cleared) {
         return {0.72f, 1.0f, 0.78f, 1.0f};
     }
@@ -282,10 +297,12 @@ float GetStageGateModelEmissive(bool unlocked, bool selected, bool cleared, bool
         return 2.7f + pulse * 1.2f;
     }
 
+    // 演出中以外の未解放ゲートは通常より暗く表示する。
     if (!unlocked) {
         return 0.25f;
     }
 
+    // 選択中の解放済みゲートは、通常時より強い発光を脈動させる。
     if (selected) {
         return 1.9f + pulse * 0.55f;
     }
@@ -293,9 +310,9 @@ float GetStageGateModelEmissive(bool unlocked, bool selected, bool cleared, bool
     return cleared ? 1.35f : 1.0f;
 }
 
-std::string MakeStageClearCrownName(int stageIndex) {
+std::string MakeStageClearCrownName(std::int32_t stageIndex) {
     // ステージごとの王冠を名前で探せるよう、配置時と同じ接頭辞を使う。
     return std::string(kStageClearCrownPrefix) + std::to_string(stageIndex);
 }
 
-} // namespace StageSelectDetail
+} // namespace stageSelectDetail

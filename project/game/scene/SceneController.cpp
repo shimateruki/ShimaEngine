@@ -9,8 +9,8 @@ class DefaultSceneController final : public ISceneController {};
 
 SceneControllerFactory* SceneControllerFactory::GetInstance() {
     // シーン名と制御クラスの登録表を一つのインスタンスで共有する。
-    static SceneControllerFactory instance;
-    return &instance;
+    static SceneControllerFactory sInstance;
+    return &sInstance;
 }
 
 SceneControllerFactory::SceneControllerFactory() {
@@ -38,9 +38,10 @@ bool SceneControllerFactory::RegisterController(const std::string& name, Creator
 }
 
 std::unique_ptr<ISceneController> SceneControllerFactory::Create(const std::string& name) const {
-    // 未登録または無効な生成関数はnullptrで通知する。
+    // 登録表から指定名の生成処理を探す。
     const auto found = creators_.find(name);
 
+    // 登録がないか生成関数が空であれば、呼び出し側が失敗を判定できるようnullptrを返す。
     if (found == creators_.end() || !found->second) {
         return nullptr;
     }

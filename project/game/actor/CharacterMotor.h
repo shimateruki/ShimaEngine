@@ -5,7 +5,7 @@
 #include <cstdint>
 
 namespace engine { class Object3D; }
-struct CollisionInfo;
+namespace engine { struct CollisionInfo; }
 
 /// Character共通の接地・Sweep・坂・段差設定です。
 /// 高度な補正は明示的に有効化し、既存キャラクターの挙動を自動では変えません。
@@ -27,6 +27,8 @@ struct CharacterMotorResult {
     bool blocked = false;
     bool steppedUp = false;
     engine::Vector3 groundNormal = {0.0f, 1.0f, 0.0f};
+    engine::Object3D* horizontalHitObject = nullptr; // 段差越えができず水平掃引を遮った相手。
+    engine::Vector3 horizontalHitNormal{}; // 遮蔽物から自分へ向く法線。
     engine::Object3D* groundObject = nullptr; // 最後に接地したObjectの借用参照。接地解決ごとに更新する。
 };
 
@@ -56,7 +58,7 @@ class CharacterMotor {
     void Move(engine::Object3D& owner, engine::Vector3& position, engine::Vector3& velocity, bool& grounded, float deltaTime);
 
     /// <summary>接触情報から位置、速度、接地状態を補正する。</summary>
-    void ResolveCollision(engine::Vector3& position, engine::Vector3& velocity, bool& grounded, const CollisionInfo& info,
+    void ResolveCollision(engine::Vector3& position, engine::Vector3& velocity, bool& grounded, const engine::CollisionInfo& info,
                           std::uint32_t attribute);
 
   private:

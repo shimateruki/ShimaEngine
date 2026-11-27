@@ -1,5 +1,6 @@
 ﻿#pragma once
 
+#include <cstdint>
 #include "BaseGimmick.h"
 
 #include <array>
@@ -10,7 +11,7 @@
 class Player;
 
 // 一台に一能力を置くコピー台です。旧シーンの複数コア設定も読み込めます。
-// 関連：BaseGimmickの配置・衝突基盤を使い、固有の状態と表示をこのクラスで更新する。調整項目はInitializeでProperty登録する。
+// 台座の接触から選択したコアを探し、Playerへ能力を渡す。能力別の見た目はPlayerCopyTypeCatalogから取得する。
 // 主な入口：Initialize / Update / OnCollision / OnTrigger
 class GimmickCopyMemoryStation final : public BaseGimmick {
   public:
@@ -27,7 +28,7 @@ class GimmickCopyMemoryStation final : public BaseGimmick {
     /// 記憶台と各コアの表示を描画する。
     void Draw(ID3D12Resource* pointLightResource, ID3D12Resource* spotLightResource) override;
 
-    /// プレイヤーが触れたコアを判定する。
+    // 有効なプレイ中にコアと接触したら能力を付与する。押し戻しをしないため常にfalseを返す。
     bool OnCollision(engine::Object3D* other) override;
 
     /// 外部トリガーで記憶台を起動する。
@@ -59,31 +60,34 @@ class GimmickCopyMemoryStation final : public BaseGimmick {
     /// Play 中に使用するコアと選択状態を準備する。
     void BeginPlayState();
 
-    /// Editor に戻るときコアの表示を配置状態へ戻す。
+    // 編集用の開始設定へ戻し、直前の取得パルスと接触履歴を消す。
     void ResetEditorState();
 
     /// コアの浮遊位置と発光を更新する。
     void UpdateCoreVisuals(float deltaTime);
 
-    /// 指定コアの周囲エフェクトを近接度へ同期する。
+    // indexのコアについて、接近度0〜1と見た目の倍率を使い、共有する固定数の光点と輪を更新する。
     void UpdateCoreEffects(size_t index, float deltaTime, float approach, float scale);
 
     /// コアに敵種別と対応する見た目を設定する。
     void ConfigureCore(size_t index, const std::string& enemyType);
 
-    /// 表示するコアが一種類だけか返す。
+    // 登録済みの有効な能力が一つだけ設定されていればtrue。
     bool IsSingleCore() const;
 
+    // indexに対応する台座ローカルの位置。単一コアは中央。
     engine::Vector3 GetCoreLocalPosition(size_t index) const;
 
+    // 台座の行列でローカル位置を変換したワールド座標。
     engine::Vector3 GetCoreWorldPosition(size_t index) const;
 
+    // indexの保存済み能力名。範囲外か未設定なら空文字。
     std::string GetConfiguredType(size_t index) const;
 
-    /// プレイヤー位置に触れているコア番号を返す。
-    int FindTouchedCore(const engine::Vector3& playerPosition) const;
+    // プレイヤーに水平距離が最も近い有効なコアの番号を返す。接触範囲内になければ-1。
+    std::int32_t FindTouchedCore(const engine::Vector3& playerPosition) const;
 
-    /// 指定コアのコピー能力をプレイヤーへ付与する。
+    // 有効なプレイヤーへ能力を付与し、成功時だけ再取得待ちとパルスを開始する。
     void ActivateCore(Player& player, size_t index);
 
     std::array<std::unique_ptr<engine::Object3D>, kCoreCount> coreVisuals_{};
@@ -91,9 +95,11 @@ class GimmickCopyMemoryStation final : public BaseGimmick {
     std::array<float, kCoreCount> corePulseTimers_{};
     std::array<engine::Vector3, kCoreCount> transferTargets_{};
     std::array<std::unique_ptr<engine::Object3D>, kCoreCount * 4> effects_{};
+    // 浮遊と光点の周期に用いる経過秒数。600秒で巻き戻る。
     float visualTimer_ = 0.0f;
+    // 次のコア取得までの残り秒数。
     float selectionCooldown_ = 0.0f;
-    int latchedCore_ = -1; // 前回接触したコア番号。-1は未接触。
+    std::int32_t latchedCore_ = -1; // 前回接触したコア番号。-1は未接触。
     bool initializedForPlay_ = false;
     bool runtimeEnabled_ = true;
     bool collisionObserved_ = false; // 直近の衝突通知でプレイヤー接触を検出したか。

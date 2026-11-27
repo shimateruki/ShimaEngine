@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "SceneSerializer.h"
 #include "json.hpp"
@@ -11,9 +12,9 @@
 class SceneSavePreview {
 public:
     enum class Action {
-        None,
-        Confirm,
-        Cancel
+        kNone,
+        kConfirm,
+        kCancel
     };
 
     /// <summary>
@@ -43,20 +44,20 @@ public:
 
 private:
     enum class ChangeKind {
-        Added,
-        Removed,
-        Modified,
-        Unchanged,
-        FileAdded,
-        FileModified,
-        FileUnchanged,
-        FileInvalid
+        kAdded,
+        kRemoved,
+        kModified,
+        kUnchanged,
+        kFileAdded,
+        kFileModified,
+        kFileUnchanged,
+        kFileInvalid
     };
 
     /// 追加・削除・変更されたObject単位の差分内容を保持する。
     // 関連：SceneSavePreview（この型を使う機能の本体）
     struct ObjectChange {
-        ChangeKind kind = ChangeKind::Unchanged;
+        ChangeKind kind = ChangeKind::kUnchanged;
         std::string name;
         std::string category;
         std::vector<std::string> details;
@@ -69,10 +70,10 @@ private:
         bool oldFileExists = false;
         bool oldJsonValid = true;
         bool hasObjectList = false;
-        int addedCount = 0;
-        int removedCount = 0;
-        int modifiedCount = 0;
-        int unchangedCount = 0;
+        std::int32_t addedCount = 0;
+        std::int32_t removedCount = 0;
+        std::int32_t modifiedCount = 0;
+        std::int32_t unchangedCount = 0;
         std::vector<std::string> fileDetails;
         std::vector<ObjectChange> objects;
     };
@@ -80,14 +81,14 @@ private:
     /// ファイル単位とオブジェクト単位の件数を表示用に集計します。
     // 関連：SceneSavePreview（この型を使う機能の本体）
     struct Summary {
-        int fileCount = 0;
-        int addedFiles = 0;
-        int modifiedFiles = 0;
-        int invalidFiles = 0;
-        int addedObjects = 0;
-        int removedObjects = 0;
-        int modifiedObjects = 0;
-        int unchangedObjects = 0;
+        std::int32_t fileCount = 0;
+        std::int32_t addedFiles = 0;
+        std::int32_t modifiedFiles = 0;
+        std::int32_t invalidFiles = 0;
+        std::int32_t addedObjects = 0;
+        std::int32_t removedObjects = 0;
+        std::int32_t modifiedObjects = 0;
+        std::int32_t unchangedObjects = 0;
 
         bool HasChanges() const {
             return addedFiles > 0 || modifiedFiles > 0 || invalidFiles > 0 ||
@@ -116,7 +117,7 @@ private:
     static std::string JsonValueToText(const nlohmann::json& value);
 
     /// JSONの差分を再帰的に集め、詳細表示用の短い説明リストへ変換する。
-    static void CollectJsonDiffs(const nlohmann::json& before, const nlohmann::json& after, const std::string& path, std::vector<std::string>& outDetails, int maxDetails);
+    static void CollectJsonDiffs(const nlohmann::json& before, const nlohmann::json& after, const std::string& path, std::vector<std::string>& outDetails, std::int32_t maxDetails);
 
 #ifdef USE_IMGUI
 

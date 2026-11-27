@@ -12,7 +12,7 @@ namespace engine { class Sprite; }
 // 主な入口：Bind / Update / Draw / Reset
 class PlayerHealthHud {
 public:
-    enum class Style { Simple, Animated };
+    enum class Style { kSimple, kAnimated };
 
     // Spriteは破棄せず参照と演出状態を解除する。シーン側のSpriteを片付ける前に呼ぶ。
     void Reset();
@@ -23,7 +23,7 @@ public:
     // Spriteの配置・サイズ・色を基準値として取り込む。各ポインタは借用で、未使用パーツはnullptr可。
     void Bind(engine::Sprite* icon, engine::Sprite* damage, engine::Sprite* fill,
               engine::Sprite* highlight, engine::Sprite* frame, const Player* player,
-              Style style = Style::Simple);
+              Style style = Style::kSimple);
     // 経過秒数でHPと形態アイコンを更新する。Playerがnullptrなら全パーツを非表示にする。
     void Update(const Player* player, float deltaTime);
     // 演出値への直接参照。Reset/Bindで内容が初期化されるため、その後の値を持ち越さない。
@@ -44,7 +44,7 @@ private:
     void UpdateAnimated(const Player* player, float hpRate, bool visible);
     static const char* Portrait(const Player* player);
 
-    Style style_ = Style::Simple;
+    Style style_ = Style::kSimple;
     Part icon_, damage_, fill_, highlight_, frame_;
     engine::HealthBarState state_;
     const char* portrait_ = nullptr;

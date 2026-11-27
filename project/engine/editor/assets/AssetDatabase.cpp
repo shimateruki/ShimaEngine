@@ -21,12 +21,12 @@
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
-using namespace AssetDatabaseInternal;
+using namespace assetDatabaseInternal;
 
 AssetDatabase* AssetDatabase::GetInstance() {
     // インデックスの所有者を一つにし、各Editorから同じGUID対応を参照します。
-    static AssetDatabase instance;
-    return &instance;
+    static AssetDatabase sInstance;
+    return &sInstance;
 }
 
 bool AssetDatabase::Initialize(const std::string& resourcesRoot, bool createMissingMeta) {
@@ -34,12 +34,14 @@ bool AssetDatabase::Initialize(const std::string& resourcesRoot, bool createMiss
     std::error_code error;
     projectRoot_ = fs::current_path(error);
 
+    // 作業ディレクトリを取得できなければ、索引の基準パスを確定できない。
     if (error) {
         return false;
     }
 
     resourcesRoot_ = fs::absolute(PathFromUtf8(resourcesRoot), error).lexically_normal();
 
+    // 素材ルートを絶対パスにできない場合や、存在するディレクトリでない場合は失敗を返す。
     if (error || !fs::exists(resourcesRoot_, error) || !fs::is_directory(resourcesRoot_, error)) {
         return false;
     }
@@ -75,8 +77,9 @@ AssetDatabaseRefreshResult AssetDatabase::Refresh(bool createMissingMeta) {
     assetsByDirectory_.clear();
     subdirectoriesByDirectory_.clear();
 
+    // 初期化を済ませていなければ、既知のルートを走査せずエラー結果を記録する。
     if (!initialized_) {
-        AddIssue(AssetDatabaseIssueSeverity::Error, resourcesRootPath_, "Asset Databaseが初期化されていません。");
+        AddIssue(AssetDatabaseIssueSeverity::kError, resourcesRootPath_, "Asset Databaseが初期化されていません。");
         result.errorCount = 1;
         lastRefreshResult_ = result;
         return result;
@@ -84,8 +87,9 @@ AssetDatabaseRefreshResult AssetDatabase::Refresh(bool createMissingMeta) {
 
     std::error_code error;
 
+    // 初期化後でも素材ディレクトリがなくなっていれば、素材の読み込みに進まない。
     if (!fs::exists(resourcesRoot_, error) || !fs::is_directory(resourcesRoot_, error)) {
-        AddIssue(AssetDatabaseIssueSeverity::Error, resourcesRootPath_, "Resourcesフォルダが見つかりません。");
+        AddIssue(AssetDatabaseIssueSeverity::kError, resourcesRootPath_, "Resourcesフォルダが見つかりません。");
         result.errorCount = 1;
         lastRefreshResult_ = result;
         return result;
@@ -101,14 +105,17 @@ AssetDatabaseRefreshResult AssetDatabase::Refresh(bool createMissingMeta) {
         MetaLoadResult meta = LoadOrCreateMeta(sourcePath, createMissingMeta, guidOwners);
         ++result.reparsedAssetCount;
 
+        // メタデータを読み込み・生成できず、有効なレコードが得られなかった素材は飛ばす。
         if (!meta.success) {
             continue;
         }
 
+        // メタファイルを新規に作成した結果は、作成件数へ反映する。
         if (meta.created) {
             ++result.createdMetaCount;
         }
 
+        // 既存のメタファイルを更新した結果は、更新件数へ反映する。
         if (meta.updated) {
             ++result.updatedMetaCount;
         }
@@ -127,7 +134,7 @@ AssetDatabaseRefreshResult AssetDatabase::Refresh(bool createMissingMeta) {
         issues_.begin(),
         issues_.end(),
         [](const AssetDatabaseIssue& issue) {
-            return issue.severity == AssetDatabaseIssueSeverity::Error;
+            return issue.severity == AssetDatabaseIssueSeverity::kError;
         }));
     ++generation_;
     lastRefreshResult_ = result;
@@ -135,6 +142,7 @@ AssetDatabaseRefreshResult AssetDatabase::Refresh(bool createMissingMeta) {
     persistentIndexCacheAvailable_ = true;
     SavePersistentIndexCache();
 
+    // 同期更新前から監視器を使っている場合は、古い変更通知を持ち越さないよう監視を開始し直す。
     if (filesystemWatcher_) {
         RestartFilesystemWatcher();
     }
@@ -144,7 +152,7 @@ AssetDatabaseRefreshResult AssetDatabase::Refresh(bool createMissingMeta) {
 }
 
 void AssetDatabase::RequestRefresh(bool createMissingMeta) {
-    // 再走査は初期索引と同じ非同期経路へ渡し、画面更新を止めません。
+    // 初期化済みなら、初期索引と同じフレーム分割の経路に再走査を渡す。
     if (!initialized_) {
         return;
     }
@@ -153,17 +161,18 @@ void AssetDatabase::RequestRefresh(bool createMissingMeta) {
 }
 
 void AssetDatabase::RequestDdsCacheBuild() {
-    // 索引構築中に変換を始めないよう、要求をキュー状態に留めます。
-    if (!initialized_ || ddsCacheBuildState_ == DdsCacheBuildState::Running) {
+    // 索引後に行う DDS 変換を予約する。初期化前と変換の実行中は新たに予約しない。
+    if (!initialized_ || ddsCacheBuildState_ == DdsCacheBuildState::kRunning) {
         return;
     }
 
-    ddsCacheBuildState_ = DdsCacheBuildState::Queued;
+    ddsCacheBuildState_ = DdsCacheBuildState::kQueued;
     ddsCacheBuildMessage_ = "Asset Database更新後のDDS変換を待機しています。";
 }
 
 bool AssetDatabase::Update() {
     // 重い初回走査はフレームごとに分割し、変更通知と DDS 作成結果もここで統合します。
+    // 索引が未初期化の間は、変換の状態やファイル通知を更新しない。
     if (!initialized_) {
         return false;
     }
@@ -182,13 +191,14 @@ bool AssetDatabase::Update() {
         return true;
     }
 
-    if (ddsCacheBuildState_ == DdsCacheBuildState::Queued) {
+    // 下処理が済み DDS 変換が予約されている場合は、監視通知を処理するより先に起動する。
+    if (ddsCacheBuildState_ == DdsCacheBuildState::kQueued) {
         StartDdsCacheBuild();
         return true;
     }
 
     // DDS生成中に作られるファイル通知は完了後の一括更新で取り込むため、ここでは索引を開始しません。
-    if (ddsCacheBuildState_ == DdsCacheBuildState::Running) {
+    if (ddsCacheBuildState_ == DdsCacheBuildState::kRunning) {
         return ddsStateChanged;
     }
 
@@ -199,6 +209,7 @@ bool AssetDatabase::Update() {
         filesystemChangeReadyAt_ = now + kFilesystemChangeDebounce;
     }
 
+    // 通知がまだ来ていないか待機時間の途中なら、再走査せず DDS の更新結果だけを返す。
     if (!filesystemChangePending_ || now < filesystemChangeReadyAt_) {
         return ddsStateChanged;
     }
@@ -225,9 +236,11 @@ std::string AssetDatabase::ResolveAssetPath(const std::string& pathOrGuidReferen
     // GUID参照は索引へ解決し、通常のパスは未登録でも元の値を保ちます。
     std::string guid = pathOrGuidReference;
 
+    // 現在の asset: 形式は、識別子の検証前に接頭辞を外す。
     if (guid.rfind("asset:", 0) == 0) {
         guid.erase(0, 6);
     }
+    // guid: と書かれた旧表記も、同じ識別子として解決する。
     else if (guid.rfind("guid:", 0) == 0) {
         guid.erase(0, 5);
     }
@@ -261,9 +274,11 @@ std::vector<const EditorAssetRecord*> AssetDatabase::GetAssetsInDirectory(
     std::vector<const EditorAssetRecord*> result;
     const std::string normalizedDirectory = TrimTrailingSlash(NormalizeProjectPath(PathFromUtf8(directory)));
 
+    // 再帰指定がなければ、全素材を走査せず指定ディレクトリ直下の索引を引く。
     if (!recursive) {
         const auto iterator = assetsByDirectory_.find(ToLowerAscii(normalizedDirectory));
 
+        // 直下の索引に指定ディレクトリがなければ、素材一覧を空で返す。
         if (iterator == assetsByDirectory_.end()) {
             return result;
         }
@@ -280,6 +295,7 @@ std::vector<const EditorAssetRecord*> AssetDatabase::GetAssetsInDirectory(
     for (const EditorAssetRecord& asset : assets_) {
         const std::string parent = TrimTrailingSlash(PathToUtf8(PathFromUtf8(asset.sourcePath).parent_path()));
 
+        // 素材の親が指定ディレクトリ自身か配下にある場合、再帰結果へ借用参照を加える。
         if (StartsWithPath(ToLowerAscii(parent), ToLowerAscii(normalizedDirectory))) {
             result.push_back(&asset);
         }
@@ -303,7 +319,9 @@ bool AssetDatabase::RenameAsset(
     // 名前変更を移動処理に集約し、Asset本体と.metaを同じ手順で更新します。
     const fs::path requestedName = PathFromUtf8(newFileName);
 
+    // 改名には単一のファイル名だけを受け付ける。空欄や親パスを含む指定では移動しない。
     if (newFileName.empty() || requestedName.has_parent_path() || requestedName.filename() != requestedName) {
+        // エラー文の受け取り先が指定されている場合だけ、不正な指定の理由を設定する。
         if (errorMessage) {
             *errorMessage = "新しい名前にはファイル名だけを指定してください。";
         }
@@ -313,7 +331,9 @@ bool AssetDatabase::RenameAsset(
 
     const EditorAssetRecord* asset = FindByPath(sourcePath);
 
+    // 元の素材が索引にない場合は、変更前のパスを確定できない。
     if (!asset) {
+        // 受け取り先があれば、未登録の素材であることを通知する。
         if (errorMessage) {
             *errorMessage = "Asset Databaseに登録されていないAssetです。";
         }
@@ -329,10 +349,12 @@ bool AssetDatabase::MoveAsset(
     const std::string& sourcePath,
     const std::string& destinationPath,
     std::string* errorMessage) {
-    // Resources外への移動を拒否し、.metaの移動失敗時は本体を元へ戻します。
+    // Resources 外への移動を拒否する。.meta の移動に失敗した場合は、本体を元の位置へ戻す処理を試みる。
     const EditorAssetRecord* asset = FindByPath(sourcePath);
 
+    // 移動元が索引にない場合、ディスクの操作を始めない。
     if (!asset) {
+        // 結果文の指定があれば、元の素材が未登録であることを返す。
         if (errorMessage) {
             *errorMessage = "Asset Databaseに登録されていないAssetです。";
         }
@@ -347,7 +369,9 @@ bool AssetDatabase::MoveAsset(
     const fs::path sourceMetaAbsolute = ResolveAbsolutePath(sourceMetaProjectPath);
     const fs::path destinationAbsolute = ResolveAbsolutePath(destinationPath).lexically_normal();
 
+    // 移動先は Resources 配下の通常素材に限り、.meta の名前を直接指定させない。
     if (!IsPathInsideResources(destinationAbsolute) || destinationAbsolute.extension() == ".meta") {
+        // エラーを受け取る指定がある場合は、許可する移動先を案内する。
         if (errorMessage) {
             *errorMessage = "移動先はResources配下の通常Assetを指定してください。";
         }
@@ -357,7 +381,9 @@ bool AssetDatabase::MoveAsset(
 
     std::error_code error;
 
+    // 移動先がすでに存在する場合は、上書きしない。
     if (fs::exists(destinationAbsolute, error)) {
+        // 結果文の指定があれば、移動先の名前が使用中であることを返す。
         if (errorMessage) {
             *errorMessage = "移動先に同名Assetが存在します。";
         }
@@ -367,7 +393,9 @@ bool AssetDatabase::MoveAsset(
 
     fs::create_directories(destinationAbsolute.parent_path(), error);
 
+    // 移動先の親フォルダーを作成できなければ、本体を移動しない。
     if (error) {
+        // 受け取り先があれば、フォルダー作成に失敗した理由を返す。
         if (errorMessage) {
             *errorMessage = "移動先フォルダを作成できません: " + error.message();
         }
@@ -377,7 +405,9 @@ bool AssetDatabase::MoveAsset(
 
     fs::rename(sourceAbsolute, destinationAbsolute, error);
 
+    // 本体の移動に失敗した場合は、識別子のファイルも動かさない。
     if (error) {
+        // 受け取り先があれば、本体の移動に失敗した理由を返す。
         if (errorMessage) {
             *errorMessage = "Assetを移動できません: " + error.message();
         }
@@ -388,15 +418,18 @@ bool AssetDatabase::MoveAsset(
     fs::path destinationMetaAbsolute = destinationAbsolute;
     destinationMetaAbsolute += ".meta";
 
+    // 元の .meta が存在する場合に限り、名前を合わせて本体と同じ場所へ移動する。
     if (fs::exists(sourceMetaAbsolute, error)) {
         error.clear();
         fs::rename(sourceMetaAbsolute, destinationMetaAbsolute, error);
 
+        // 本体だけ移動した後に .meta の移動が失敗した場合は、本体を戻す処理を試みる。
         if (error) {
-            // 先に移動した本体を元へ戻す。索引更新は本体とメタデータの移動が揃った後だけ予約する。
+            // 移動に失敗した経路では再索引を予約しない。
             std::error_code rollbackError;
             fs::rename(destinationAbsolute, sourceAbsolute, rollbackError);
 
+            // 受け取り先があれば、.meta の移動に失敗して復元を試みた理由を返す。
             if (errorMessage) {
                 *errorMessage = "Assetは移動しましたが.metaを移動できないためロールバックしました: " + error.message();
             }
@@ -416,7 +449,9 @@ bool AssetDatabase::MoveAssetToTrash(
     // 元の相対配置を退避先へ残し、同名衝突時はGUIDで回復パスを一意にします。
     const EditorAssetRecord* asset = FindByPath(sourcePath);
 
+    // 移動元が索引にない場合は、元の相対配置や復元名を決められない。
     if (!asset) {
+        // 受け取り先があれば、元の素材が未登録であることを返す。
         if (errorMessage) {
             *errorMessage = "Asset Databaseに登録されていないAssetです。";
         }
@@ -428,7 +463,9 @@ bool AssetDatabase::MoveAssetToTrash(
     std::error_code error;
     relativeToResources = fs::relative(ResolveAbsolutePath(asset->sourcePath), resourcesRoot_, error);
 
+    // 素材ルートからの相対位置を取得できなければ、退避先の階層を作らず失敗を返す。
     if (error || relativeToResources.empty()) {
+        // エラー文が必要な呼出元へ、相対化に失敗したことを伝える。
         if (errorMessage) {
             *errorMessage = "Resourcesからの相対パスを作成できません。";
         }
@@ -438,6 +475,7 @@ bool AssetDatabase::MoveAssetToTrash(
 
     fs::path destination = resourcesRoot_ / ".trash" / "asset_database" / MakeTimestamp() / relativeToResources;
 
+    // 時間別の退避先に同名の項目があれば、素材 GUID の先頭8文字を名前に添える。
     if (fs::exists(destination, error)) {
         destination = destination.parent_path() /
             PathFromUtf8(PathToUtf8(destination.stem()) + "_" + asset->guid.substr(0, 8) + PathToUtf8(destination.extension()));
@@ -445,10 +483,12 @@ bool AssetDatabase::MoveAssetToTrash(
 
     const std::string destinationProjectPath = NormalizeProjectPath(destination);
 
+    // 通常の移動処理が失敗した場合は、復元先の記録を更新しない。
     if (!MoveAsset(asset->sourcePath, destinationProjectPath, errorMessage)) {
         return false;
     }
 
+    // 呼出元が受け取り先を指定した場合だけ、実際の退避パスを返す。
     if (recoveredPath) {
         *recoveredPath = destinationProjectPath;
     }
@@ -470,21 +510,21 @@ bool AssetDatabase::IsGuidValid(const std::string& guid) {
 const char* AssetDatabase::GetAssetTypeName(EditorAssetType type) {
     // .metaへ保存する型名を列挙値から一箇所で決定します。
     switch (type) {
-    case EditorAssetType::Model: return "Model";
+    case EditorAssetType::kModel: return "Model";
 
-    case EditorAssetType::Texture: return "Texture";
+    case EditorAssetType::kTexture: return "Texture";
 
-    case EditorAssetType::Json: return "JSON";
+    case EditorAssetType::kJson: return "JSON";
 
-    case EditorAssetType::Audio: return "Audio";
+    case EditorAssetType::kAudio: return "Audio";
 
-    case EditorAssetType::Shader: return "Shader";
+    case EditorAssetType::kShader: return "Shader";
 
-    case EditorAssetType::Font: return "Font";
+    case EditorAssetType::kFont: return "Font";
 
-    case EditorAssetType::Binary: return "Binary";
+    case EditorAssetType::kBinary: return "Binary";
 
-    case EditorAssetType::Unknown:
+    case EditorAssetType::kUnknown:
     default: return "Unknown";
     }
 }
@@ -495,15 +535,18 @@ std::string AssetDatabase::NormalizeProjectPath(const fs::path& path) const {
     fs::path absolute = path.is_absolute() ? path : projectRoot_ / path;
     absolute = fs::absolute(absolute, error).lexically_normal();
 
+    // 絶対化に失敗したときは、元の表記を字句上で整理して返す。
     if (error) {
         return PathToUtf8(path.lexically_normal());
     }
 
     const fs::path relative = fs::relative(absolute, projectRoot_, error);
 
+    // 有効な相対パスを求められた場合だけ、プロジェクト内を指すか確認する。
     if (!error && !relative.empty() && !relative.is_absolute()) {
         const std::string normalized = PathToUtf8(relative.lexically_normal());
 
+        // 親の階層へ出ない場合に限り、プロジェクト相対の表記を採用する。
         if (normalized != ".." && normalized.rfind("../", 0) != 0) {
             return normalized;
         }
@@ -523,6 +566,7 @@ bool AssetDatabase::IsPathInsideResources(const fs::path& absolutePath) const {
     std::error_code error;
     const fs::path relative = fs::relative(absolutePath.lexically_normal(), resourcesRoot_, error);
 
+    // 相対化に失敗したか、使用できる相対パスでなければ対象外。
     if (error || relative.empty() || relative.is_absolute()) {
         return false;
     }
@@ -536,6 +580,7 @@ bool AssetDatabase::ShouldSkipPath(const fs::path& path) const {
     std::error_code error;
     const fs::path relative = fs::relative(path, resourcesRoot_, error);
 
+    // 素材ルートからの位置を判定できないパスは、索引の走査から除く。
     if (error) {
         return true;
     }
@@ -543,6 +588,7 @@ bool AssetDatabase::ShouldSkipPath(const fs::path& path) const {
     for (const fs::path& component : relative) {
         const std::string name = ToLowerAscii(PathToUtf8(component));
 
+        // いずれかの階層にキャッシュ・バックアップ・退避・ツールの名前があれば、索引へ登録しない。
         if (name == ".cache" || name == ".backup" || name == ".trash" || name == "tools") {
             return true;
         }

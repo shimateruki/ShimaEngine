@@ -1,23 +1,23 @@
+#include <cstdint>
 #include "engine/graphics/effect/VfxAssetPath.h"
 #include "ParticleManager.h"
 #include <fstream>
 #include <filesystem>
 #include <iomanip>
 #include <algorithm>
-// プロジェクト内のパスに合わせて調整してください
 #include "externals/nlohmann/json.hpp"
 
 using json = nlohmann::json;
 
 ParticleManager* ParticleManager::GetInstance() {
-    static ParticleManager instance;
-    return &instance;
+    static ParticleManager sInstance;
+    return &sInstance;
 }
 
 void ParticleManager::Initialize(engine::ParticleSystem* particleSystem) {
     particleSystem_ = particleSystem;
 
-    // 起動時に全データ読み込み
+    // この粒子システムに結び付けた後、登録済みの発生プリセットを読み込む。
     LoadAllParams();
 }
 
@@ -31,6 +31,7 @@ json WriteParticleVector(const engine::Vector3& v) {
     return {{"x", v.x}, {"y", v.y}, {"z", v.z}};
 }
 
+// 位置や速度を表す三つの成分を読みます。キーや型の不備は例外として呼び出し側へ伝わります。
 engine::Vector3 ReadParticleVector(const json& data) {
     return {data.at("x").get<float>(), data.at("y").get<float>(), data.at("z").get<float>()};
 }
@@ -39,6 +40,7 @@ json WriteParticleColor(const engine::Vector4& color) {
     return {{"x", color.x}, {"y", color.y}, {"z", color.z}, {"w", color.w}};
 }
 
+// RGBAに対応する四成分を、保存時のx・y・z・wキーから読みます。
 engine::Vector4 ReadParticleColor(const json& data) {
     return {data.at("x").get<float>(), data.at("y").get<float>(),
             data.at("z").get<float>(), data.at("w").get<float>()};
@@ -52,7 +54,7 @@ json WriteFloatCurve(const VfxFloatCurve& curve) {
         result.push_back({
             { "time", key.time },
             { "value", key.value },
-            { "easing", static_cast<int>(key.easing) },
+            { "easing", static_cast<std::int32_t>(key.easing) },
         });
     }
 
@@ -67,7 +69,7 @@ json WriteColorGradient(const VfxColorGradient& gradient) {
         result.push_back({
             { "time", key.time },
             { "color", WriteParticleColor(key.color) },
-            { "easing", static_cast<int>(key.easing) },
+            { "easing", static_cast<std::int32_t>(key.easing) },
         });
     }
 
@@ -82,6 +84,7 @@ void ReadFloatCurve(const json& source, VfxFloatCurve& curve) {
     curve.keys.clear();
 
     for (const json& item : source) {
+        // 配列の中でも、キーの項目を持てるオブジェクトだけを読む。
         if (!item.is_object())
             continue;
         VfxFloatCurveKey key;
@@ -103,11 +106,13 @@ void ReadColorGradient(const json& source, VfxColorGradient& gradient) {
     gradient.keys.clear();
 
     for (const json& item : source) {
+        // 色キーの設定を持てるJSONオブジェクトだけを受け付ける。
         if (!item.is_object())
             continue;
         VfxColorGradientKey key;
         key.time = item.value("time", 0.0f);
 
+        // 色が記録されている場合だけ、キーの既定色を置き換える。
         if (item.contains("color")) {
             key.color = ReadParticleColor(item.at("color"));
         }
@@ -133,6 +138,7 @@ json WriteLod(const VfxLodSettings& lod) {
 
 // 保存JSONで指定された距離別詳細度設定を復元します。
 void ReadLod(const json& source, VfxLodSettings& lod) {
+    // 距離設定がオブジェクト形式の場合だけ、各項目を取り込む。
     if (!source.is_object())
         return;
     lod.enabled = source.value("enabled", false);
@@ -162,14 +168,13 @@ void to_json(json& j, const engine::ParticleSystem::EmitterParams& p) {
         {"initialRotationSpeed", p.initialRotationSpeed},
     {"rotationSpeedRandomness", p.rotationSpeedRandomness},
     {"hdrIntensity", p.hdrIntensity},
-    {"emitterType", (int)p.emitterType}, 
+    {"emitterType", (std::int32_t)p.emitterType}, 
     {"spawnRadius", p.spawnRadius},      
     {"coneAngle", p.coneAngle},
     {"acceleration", WriteParticleVector(p.acceleration)},
     {"textureName", p.textureName},
-        {"blendMode", (int)p.blendMode}
+        {"blendMode", (std::int32_t)p.blendMode}
 
-        // 必要に応じて他のパラメータも追加
     };
 
     json legacyCurve = json::array();
@@ -195,37 +200,51 @@ void from_json(const json& j, engine::ParticleSystem::EmitterParams& p) {
         p.textureName = j.at("textureName").get<std::string>();
     }
 
+    // 発生領域が保存されている場合だけ、各軸のばらつき幅を戻す。
     if (j.contains("spawnArea"))
         p.spawnArea = ReadParticleVector(j.at("spawnArea"));
+    // 初速が保存されている場合だけ、発生時の方向と速さを戻す。
     if (j.contains("initialVelocity"))
         p.initialVelocity = ReadParticleVector(j.at("initialVelocity"));
+    // 初速の乱数幅が保存されている場合だけ、各軸のばらつきを戻す。
     if (j.contains("velocityRandomness"))
         p.velocityRandomness = ReadParticleVector(j.at("velocityRandomness"));
+    // 単発の発生数は、省略時の1粒も含めて現在の最大粒子数以下にする。
     p.emitCount = std::clamp(j.value("emitCount", 1), 1, engine::ParticleSystem::GetMaxParticles());
+    // 毎秒の発生数が保存されている場合だけ、連続発生の頻度に反映する。
     if (j.contains("particlesPerSecond"))
         j.at("particlesPerSecond").get_to(p.particlesPerSecond);
+    // 寿命の設定がある場合だけ、粒子が消えるまでの秒数を戻す。
     if (j.contains("particleLifetime"))
         j.at("particleLifetime").get_to(p.particleLifetime);
+    // 開始色がある場合だけ、発生直後のRGBAを戻す。
     if (j.contains("startColor"))
         p.startColor = ReadParticleColor(j.at("startColor"));
+    // 終了色がある場合だけ、寿命を迎える時点のRGBAを戻す。
     if (j.contains("endColor"))
         p.endColor = ReadParticleColor(j.at("endColor"));
+    // 開始サイズがある場合だけ、発生直後の寸法を戻す。
     if (j.contains("startSize"))
         j.at("startSize").get_to(p.startSize);
+    // 終了サイズがある場合だけ、寿命を迎える時点の寸法を戻す。
     if (j.contains("endSize"))
         j.at("endSize").get_to(p.endSize);
+    // 回転速度が保存されている場合だけ、粒子の基準角速度を戻す。
     if(j.contains("initialRotationSpeed"))
         j.at("initialRotationSpeed").get_to(p.initialRotationSpeed);
+    // HDRの強さがある場合だけ、描画側で使う発光の倍率を戻す。
     if (j.contains("hdrIntensity"))
         j.at("hdrIntensity").get_to(p.hdrIntensity);
+    // 角速度のばらつきがある場合だけ、回転の乱数幅を戻す。
     if (j.contains("rotationSpeedRandomness"))
         j.at("rotationSpeedRandomness").get_to(p.rotationSpeedRandomness);
-    p.emitterType = (EmitterType)j.value("emitterType", (int)EmitterType::Box); 
+    p.emitterType = (EmitterType)j.value("emitterType", (std::int32_t)EmitterType::kBox); 
     p.spawnRadius = j.value("spawnRadius", 1.0f); 
     p.coneAngle = j.value("coneAngle", 30.0f);
+    // 加速度が指定されている場合にだけ、発生後の速度変化を適用する。
     if (j.contains("acceleration"))
         p.acceleration = ReadParticleVector(j.at("acceleration"));
-    p.blendMode = (ParticleBlendMode)j.value("blendMode", (int)ParticleBlendMode::Alpha);
+    p.blendMode = (ParticleBlendMode)j.value("blendMode", (std::int32_t)ParticleBlendMode::kAlpha);
 
     if (j.contains("legacySizeCurve") && j["legacySizeCurve"].is_array()) {
         // 古いサイズカーブは固定長なので配列境界で切って読み込む。
@@ -242,19 +261,23 @@ void from_json(const json& j, engine::ParticleSystem::EmitterParams& p) {
         const json& authoring = j["authoring"];
         p.useAuthoringCurves = authoring.value("enabled", false);
 
+        // 寿命に沿ったサイズの入力が保存されている場合は、数値カーブを復元する。
         if (authoring.contains("sizeOverLife")) {
             ReadFloatCurve(authoring["sizeOverLife"], p.sizeOverLife);
         }
 
+        // 寿命に沿った色の入力が保存されている場合は、色のグラデーションを復元する。
         if (authoring.contains("colorOverLife")) {
             ReadColorGradient(authoring["colorOverLife"], p.colorOverLife);
         }
 
+        // サイズまたは色のキーが揃わない場合は、編集カーブを有効にしない。
         if (p.sizeOverLife.keys.empty() || p.colorOverLife.keys.empty()) {
             p.useAuthoringCurves = false;
         }
     }
 
+    // LODの項目がある場合は、オブジェクト形式の検査と補正をReadLodへ任せる。
     if (j.contains("lod")) {
         ReadLod(j["lod"], p.lod);
     }
@@ -269,12 +292,12 @@ void from_json(const json& j, engine::ParticleSystem::EmitterParams& p) {
 void ParticleManager::SaveParam(const std::string& name, const engine::ParticleSystem::EmitterParams& param) {
     paramsMap_[name] = param; // メモリ上の辞書更新
 
-    // ディレクトリ確認
+    // プリセットの保存先が無ければ、書き出しの前にフォルダーを用意する。
     if (!std::filesystem::exists(kDirectoryPath)) {
         std::filesystem::create_directories(kDirectoryPath);
     }
 
-    // ファイル書き出し
+    // 名前からUTF-8の保存パスを作り、JSONとしてファイルへ書く。
     const auto utf8Path = kDirectoryPath + name + ".json";
     const std::filesystem::path filePath(std::u8string(utf8Path.begin(), utf8Path.end()));
     WriteParamFile(filePath, param);
@@ -288,16 +311,19 @@ bool ParticleManager::WriteParamFile(const std::filesystem::path& path, const en
 }
 
 void ParticleManager::LoadAllParams() {
+    // プリセットのルートが無い場合は、再帰走査を始めない。
     if (!std::filesystem::exists(kDirectoryPath))
         return;
 
     const std::filesystem::path root = std::filesystem::path(kDirectoryPath).parent_path();
     for (const auto& entry : std::filesystem::recursive_directory_iterator(root)) {
+        // 通常ファイルで拡張子が.jsonのものだけ、プリセットの候補にする。
         if (!entry.is_regular_file() || entry.path().extension() != ".json") continue;
         auto relative = entry.path().lexically_relative(root);
         // プリセットの識別名にルート以下のフォルダーも含め、別フォルダーにある同名ファイルを区別します。
         const auto key = relative.replace_extension().generic_u8string();
         engine::ParticleSystem::EmitterParams param;
+        // 設定を読めたファイルだけを、フォルダー階層を含むキーで登録する。
         if (ReadParamFile(entry.path(), param)) paramsMap_[std::string(key.begin(), key.end())] = std::move(param);
     }
 }
@@ -307,11 +333,13 @@ void ParticleManager::LoadParam(const std::string& name) {
     const auto utf8Path = kDirectoryPath + name + ".json";
     const std::filesystem::path filePath(std::u8string(utf8Path.begin(), utf8Path.end()));
     engine::ParticleSystem::EmitterParams param;
+    // 読込に成功した場合だけ、指定名の設定を差し替える。
     if (ReadParamFile(filePath, param)) paramsMap_[name] = std::move(param);
 }
 
 bool ParticleManager::ReadParamFile(const std::filesystem::path& path, engine::ParticleSystem::EmitterParams& out) {
     std::ifstream file(path);
+    // 指定したファイルを開けなければ、出力値を変更せず失敗を返す。
     if (!file) return false;
     json j;
     file >> j;
@@ -323,22 +351,24 @@ bool ParticleManager::ReadParamFile(const std::filesystem::path& path, engine::P
 }
 
 void ParticleManager::Emit(const std::string& name, const engine::Vector3& position, float& timer) {
-    // 登録されていない名前なら何もしない
-    const auto preset = VfxAssetPath::FindPreset(paramsMap_, name);
+    // 設定した名前を標準の名前解決規則で探す。
+    const auto preset = vfxAssetPath::FindPreset(paramsMap_, name);
+    // 対応するプリセットが無い場合は、発生条件を取得できないため戻る。
     if (preset == paramsMap_.end())
         return;
 
     // パラメータ取得
     const auto& params = preset->second;
 
+    // 発生頻度が正でない場合は、間隔を求めず粒子を出さない。
     if (params.particlesPerSecond <= 0.0f) {
         return;
     }
 
-    // 生成レート計算 (1秒間に何個出すか -> 1個出すのに何秒かかるか)
+    // 毎秒の発生数の逆数を、一粒を出す間隔の秒数として使う。
     float rate = 1.0f / params.particlesPerSecond;
 
-    // タイマーを進める (60FPS固定と仮定。可変ならdeltaTimeを引数でもらうべき)
+    // この経路では呼び出し一回を1/60秒として、発生待ちの秒数を進める。
     timer += 1.0f / 60.0f;
 
     // particlesPerSecondは実粒子数/秒なので、この経路では1粒ずつ生成します。
@@ -346,7 +376,6 @@ void ParticleManager::Emit(const std::string& name, const engine::Vector3& posit
     engine::ParticleSystem::EmitterParams singleParticleParams = params;
     singleParticleParams.emitCount = 1;
 
-    // 生成タイミングになったらループで放出
     // 一回の更新で複数の発生間隔を跨いだ場合はその回数分だけ生成し、端数秒を次の更新へ残します。
     while (timer >= rate) {
         timer -= rate;

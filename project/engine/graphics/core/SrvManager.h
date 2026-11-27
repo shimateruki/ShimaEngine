@@ -5,14 +5,16 @@
 #include <mutex>
 #include <wrl.h>
 
-namespace engine { class DirectXCommon; }
+namespace engine {
+
+class DirectXCommon;
 
 // 担当：シェーダー可視の記述子ヒープとスロットの払い出しを管理する。
 // 関連：DirectXCommon（デバイス）、TextureManager / Model / 粒子描画（利用）
 // 主な入口：Initialize / Allocate / CreateSrvForResource / SetDescriptorHeaps
 class SrvManager {
 public:
-    // 先頭の 2 スロットは ImGui が使用します。
+    // 通常の払い出しは先頭の2スロットを飛ばして開始します。ImGuiも Allocate() から取得します。
     static const size_t kMaxSrvCount = 2018;
 
     /// <summary>エンジンで共有する管理インスタンスを取得します。</summary>
@@ -76,5 +78,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvDescriptorHeap_ = nullptr;
     uint32_t descriptorSize_ = 0; // デバイスから取得した 1 スロットのバイト数。
     mutable std::mutex mutex_;    // 並列のスロット確保と SRV 作成を直列化します。
-    uint32_t nextIndex_ = 2;       // 0、1 は ImGui 用です。
+    uint32_t nextIndex_ = 2;       // 通常の払い出しを始める位置です。
 };
+
+} // namespace engine

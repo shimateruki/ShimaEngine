@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "CrownMeleeSettings.h"
 
 // 既存の技設定を保持し、覇王コピー全体の見栄えだけを独立して調整します。
@@ -26,6 +27,7 @@ struct CrownPresentationSettings {
     // 設定JSONを読み込む。ファイルを開けない場合や解析に失敗した場合は現在の値を保つ。
     void Load() {
         try {
+            // 設定ファイルを開けない場合は、現在の調整値を維持して読み込みを終える。
             std::ifstream in(kConfigPath); if (!in) return;
             nlohmann::json j; in >> j;
             // 欠けているキーを既定値で補い、一時変数の読み込みと補正を終えてから適用する。
@@ -55,15 +57,18 @@ struct CrownPresentationSettings {
         j["ringScale"] = safe.ringScale;
         std::error_code error;
         std::filesystem::create_directories(std::filesystem::path(kConfigPath).parent_path(), error);
+        // 保存先の親フォルダーを用意できなければ、ファイルを開かず失敗にする。
         if (error) return false;
+        // 出力ファイルを開けた場合だけJSONを書き、ストリームが正常かを返す。
         std::ofstream out(kConfigPath); if (!out) return false; out << j.dump(2); return out.good();
     }
     static CrownPresentationSettings& Get() {
         // 初回参照で読み込み、エディターと能力が同じ調整値を参照する。
-        static CrownPresentationSettings value = [] { CrownPresentationSettings s; s.Load(); return s; }(); return value;
+        static CrownPresentationSettings sValue = [] { CrownPresentationSettings s; s.Load(); return s; }(); return sValue;
     }
 #ifdef USE_IMGUI
     void DrawEditor() {
+        // 設定の見出しを閉じている間は、個別の入力欄や保存ボタンを表示しない。
         if (!ImGui::CollapsingHeader("覇王・全技の迫力設定", ImGuiTreeNodeFlags_DefaultOpen)) return;
         ImGui::DragFloat("通常・溜め槍の大きさ", &lanceScale, 0.01f, 0.8f, 1.8f);
         ImGui::DragFloat("槍ゲートの倍率", &lanceGateScale, 0.01f, 0.8f, 2.0f);
@@ -73,9 +78,11 @@ struct CrownPresentationSettings {
         ImGui::DragFloat("命中粒子の大きさ", &particleScale, 0.01f, 0.5f, 1.8f);
         ImGui::DragFloat("全技の残光の幅", &trailScale, 0.01f, 0.6f, 1.8f);
         ImGui::DragFloat("衝撃波の大きさ", &ringScale, 0.01f, 0.5f, 1.5f);
-        Sanitize(); static int result = 0;
-        if (ImGui::Button("覇王の迫力設定を保存")) result = Save() ? 1 : -1;
-        if (result) ImGui::TextUnformatted(result > 0 ? "保存しました" : "保存に失敗しました");
+        Sanitize(); static std::int32_t sResult = 0;
+        // 保存ボタンを押した場合だけ、補正済みの値を書き込んで結果を保持する。
+        if (ImGui::Button("覇王の迫力設定を保存")) sResult = Save() ? 1 : -1;
+        // 前回の保存結果がある場合だけ、成功または失敗のメッセージを表示する。
+        if (sResult) ImGui::TextUnformatted(sResult > 0 ? "保存しました" : "保存に失敗しました");
         ImGui::TextWrapped("次の発動から反映。粒子の細かな形と寿命は player_crown_melee_ / player_crown_portal_ のプリセットで調整できます。");
     }
 #endif

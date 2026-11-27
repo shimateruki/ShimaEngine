@@ -1,9 +1,10 @@
 #pragma once
+#include <cstdint>
 
 #include "BaseGimmick.h"
 
-// プレイヤーの進入を検知し、中ボス・封鎖壁・撃破後の開放を一つの状態で管理します。
-// 関連：BaseGimmickの配置・衝突基盤を使い、固有の状態と表示をこのクラスで更新する。調整項目はInitializeでProperty登録する。
+// 入場でボス戦を封鎖し、撃破時に壁を開くか高冠戦の報酬を出す。
+// 衝突通知はBaseGimmick、ボス・壁・報酬の状態通知はBaseScene、登場タイムラインはGamePlaySceneを使う。
 // 主な入口：Initialize / Update / OnCollision / OnTrigger
 class GimmickArenaEncounter : public BaseGimmick {
   public:
@@ -11,19 +12,19 @@ class GimmickArenaEncounter : public BaseGimmick {
     static constexpr const char* kTypeId = "ArenaEncounter";
     static constexpr const char* kModelPath = "Primitives/cube";
 
-    /// ボス、封鎖壁、報酬との紐付けを初期化する。
+    // 入場範囲の判定と、ボス・壁・報酬をイベントIDで指定するための設定を用意する。
     void Initialize(engine::Object3DCommon* common, const std::string& modelName) override;
 
     /// 進入、封鎖、戦闘、撃破後の状態を進める。
     void Update(float deltaTime) override;
 
-    /// 遭遇装置のモデルを描画する。
+    // プレイしていないときに進入範囲を表示する。
     void Draw(ID3D12Resource* pointLightResource, ID3D12Resource* spotLightResource) override;
 
-    /// プレイヤーの進入を検知して戦闘開始を判断する。
+    // 待機中の範囲にプレイヤーが触れ、遭遇開始を許可されていれば開始してtrueを返す。
     bool OnCollision(engine::Object3D* other) override;
 
-    /// 外部トリガーから遭遇開始を要求する。
+    // 撃破通知を受ける。封鎖・戦闘中でボスの撃破が確定している場合に完了処理へ進む。
     void OnTrigger() override;
 
     /// 配置用の遭遇装置複製を作る。
@@ -37,46 +38,53 @@ class GimmickArenaEncounter : public BaseGimmick {
 
   private:
     enum class State {
-        Waiting,
-        Sealing,
-        Fighting,
-        Cleared,
+        kWaiting,
+        kSealing,
+        kFighting,
+        kCleared,
     };
 
     /// Play 開始時のボスと障壁を待機状態へ設定する。
     void InitializeForPlay();
 
-    /// Editor に戻るとき配置と表示を復元する。
+    // 待機段階と編集用の範囲表示へ戻し、プレイヤー検知を再度有効にする。
     void ResetForEditor();
 
-    /// ボスを起動して戦闘中へ移る。
+    // 入場検知を止めて壁を有効にし、登場演出か待ち時間によるボス起動へ移る。
     void BeginEncounter();
 
-    /// ボス撃破後に障壁を解除し報酬を有効にする。
+    // 撃破を記録し、中ボス戦は壁の解除、高冠戦は報酬の有効化と受け取り演出へ進む。
     void CompleteEncounter();
 
-    /// 紐付けたボスが撃破済みか返す。
+    // 死亡かHP0以下で撃破とする。高冠戦の最終撃破演出が保留中なら確定を待つ。
     bool IsBossDefeated() const;
 
     /// ボス、障壁、報酬の実体を個別に有効化する。
     void SetBossActive(bool active);
 
+    // Target IDの次から、設定された数だけ壁の状態を送る。
     void SetBarriersActive(bool active);
 
+    // 壁の連番直後のIDに報酬の有効状態を送る。
     void SetRewardActive(bool active);
 
     /// ボス出現のカメラ演出を開始する。
     bool StartBossPresentation();
 
+    // 通常の遅延起動に使う秒数。設定の下限は0.05秒。
     float GetBossRevealDelay() const;
 
-    int GetBarrierCount() const;
+    // 隔離壁の個数。1〜16の範囲に収める。
+    std::int32_t GetBarrierCount() const;
 
+    // 配置のモード2が高冠戦に対応する。
     bool IsHighCrownMode() const;
 
+    // 接続先の敵タイプがMagmaSlimeの場合にtrueを返す。
     bool IsMagmaMode() const;
 
-    State state_ = State::Waiting;
+    State state_ = State::kWaiting;
+    // 封鎖開始からの経過秒数。段階が変わるたびに0へ戻す。
     float stateTimer_ = 0.0f;
     bool initializedForPlay_ = false;
     bool introTimelineActive_ = false;

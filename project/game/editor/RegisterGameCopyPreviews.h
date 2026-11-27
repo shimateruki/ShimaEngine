@@ -7,7 +7,7 @@
 #include "game/actor/player/copy/CrownMeleeSettings.h"
 #include <cassert>
 
-namespace GameCopyPreviewDetail {
+namespace gameCopyPreviewDetail {
 // 入力を実際の能力へ渡します。攻撃本体・能力状態の更新処理は作り直しません。
 inline std::vector<CopyAbilityPreviewAction> CommonActions() {
     // コピー開始の確認では未コピーで登場させ、指定時刻に能力を付与する。
@@ -58,15 +58,15 @@ inline CopyAbilityPreviewDescriptor Make(const char* type, const char* label,
     entry.actions=CommonActions();
     return entry;
 }
-} // namespace GameCopyPreviewDetail
+} // namespace gameCopyPreviewDetail
 
 inline void RegisterGameCopyPreviews() {
     // 基本操作を共有し、形態固有の追加操作と確認用の時刻だけを登録する。
-    static const bool registered=[] {
-        using namespace GameCopyPreviewDetail;
+    static const bool kRegistered=[] {
+        using namespace gameCopyPreviewDetail;
         auto pink=Make("Slime","ピンク","Slime",
             "左: 追加クリックで3段打撃 / 右: 身を縮めるガード / E: 跳ね上がり突進");
-        // ピンクのコンボは追加の押下時刻を二つ設け、低いフレームレートでも跨いだ押下を取りこぼさない。
+        // ピンクのコンボは0.90秒と1.55秒を追加の押下時刻にする。各フレームは時刻をまたいだかを調べ、一つの押下フラグを返す。
         CopyAbilityPreviewAction combo{"pink_combo", "ピンク: 3段コンボ"};
         combo.buildInput=[](const CopyAbilityPreviewFrame& frame) {
             PlayerCopyAbilityInput input{};
@@ -74,6 +74,9 @@ inline void RegisterGameCopyPreviews() {
             return input;
         };
         pink.actions.push_back(std::move(combo));
+        pink.profileActions = {
+            {"player_pink_bounce_recovery", "special"}
+        };
         // 攻撃を一時停止して、ガードや各段の打点を個別に確認できる位置を登録する。
         pink.bookmarks={
             {"ガード中を確認","secondary",0.95f}, {"Eの跳躍を確認","special",0.88f},
@@ -85,12 +88,35 @@ inline void RegisterGameCopyPreviews() {
         pink.bookmarkHelp="追加クリックで次の段へ。3段コンボは実入力を3回送って確認します。打点を確認で停止できます。命中専用演出はダミーへのダメージ成立時のみです。";
         std::vector<CopyAbilityPreviewDescriptor> entries;
         entries.push_back(std::move(pink));
-        entries.push_back(Make("FireSlime","炎","FireSlime","左長押し: 炎ブレス / 右: 炎ダッシュ / E: 火球"));
-        entries.push_back(Make("ThunderSlime","雷","ThunderSlime",
-            "左長押し: 周囲に帯電 / 離す: 電撃弾（1秒で最大） / 右: 雷移動 / E: 雷の直線攻撃"));
-        entries.push_back(Make("WindSlime","風","WindSlime",
-            "左長押し: 竜巻攻撃（最大1.6秒） / 右: 風跳び（地上発動・頂点から緩降下） / E: 小型竜巻"));
-        entries.push_back(Make("Bomber","ボム","Bomber","左: 設置ボム / 右: 爆風ジャンプ / E: ボム投擲"));
+        auto fire = Make("FireSlime","炎","FireSlime","左長押し: 炎ブレス / 右: 炎ダッシュ / E: 火球");
+        fire.profileActions = {
+            {"player_fire_breath", "primary_hold"},
+            {"player_fire_dash_recovery", "secondary"}
+        };
+        entries.push_back(std::move(fire));
+        auto thunder = Make("ThunderSlime","雷","ThunderSlime",
+            "左長押し: 周囲に帯電 / 離す: 電撃弾（1秒で最大） / 右: 雷移動 / E: 雷の直線攻撃");
+        thunder.profileActions = {
+            {"player_thunder_charge", "primary_hold"},
+            {"player_thunder_discharge", "primary_hold"},
+            {"player_line_lightning", "special"}
+        };
+        entries.push_back(std::move(thunder));
+        auto wind = Make("WindSlime","風","WindSlime",
+            "左長押し: 竜巻攻撃（最大1.6秒） / 右: 風跳び（地上発動・頂点から緩降下） / E: 小型竜巻");
+        wind.profileActions = {
+            {"player_wind_tornado", "primary_hold"},
+            {"player_wind_tornado_recovery", "primary_hold"},
+            {"player_wind_vortex", "special"}
+        };
+        entries.push_back(std::move(wind));
+        auto bomb = Make("Bomber","ボム","Bomber","左: 設置ボム / 右: 爆風ジャンプ / E: ボム投擲");
+        bomb.profileActions = {
+            {"player_bomb_place", "primary"},
+            {"player_bomb_throw", "special"},
+            {"player_bomb_blast_jump", "secondary"}
+        };
+        entries.push_back(std::move(bomb));
         auto crown = Make("Crown", "覇王", "FalseKingSlime",
             "左を溜めて離す: ゲート槍1→3→5本 / 最大溜め: 中央槍強化 / 右: ゲート回避 / Eを追加: 近接3段");
         // 覇王のコンボは現在の近接設定を参照し、次段を予約できる時刻にE入力を送る。
@@ -106,11 +132,15 @@ inline void RegisterGameCopyPreviews() {
             return input;
         };
         crown.actions.push_back(std::move(crownCombo));
+        crown.profileActions = {
+            {"player_crown_lance_charge", "primary_hold"},
+            {"player_crown_lance_recovery", "primary_hold"}
+        };
         crown.bookmarkHelp = "Eを押すたびに次段を1回予約。右クリックは各段の後隙から回避できます。近接設定とBody Clipを調整できます。";
         entries.push_back(std::move(crown));
         // 一覧をまとめて登録し、初回の結果を保持する。
         return CopyAbilityPreviewRegistry::Register(std::move(entries));
     }();
-    assert(registered && "copy preview registration failed");
-    (void)registered;
+    assert(kRegistered && "copy preview registration failed");
+    (void)kRegistered;
 }

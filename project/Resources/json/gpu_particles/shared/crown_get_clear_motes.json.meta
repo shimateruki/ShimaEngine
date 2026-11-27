@@ -1,0 +1,8 @@
+{
+  "assetType": "JSON",
+  "guid": "e87f84d4f02c04d989602c1f34f4d158",
+  "importSettings": {},
+  "importer": "JsonImporter",
+  "source": "Resources/json/gpu_particles/shared/crown_get_clear_motes.json",
+  "version": 1
+}

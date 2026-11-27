@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "engine/editor/assets/JsonAssetBrowser.h"
 #include "EffectObject3D.h"
 #include "IEditable.h"
@@ -57,19 +58,19 @@ private:
     std::unique_ptr<EffectObject3D> previewEffect_;
     std::vector<std::string> textureFileList_;
     engine::Object3D* targetObject_ = nullptr; // エフェクトの追従対象。借用参照。
-    int currentTextureIndex_ = 0;
+    std::int32_t currentTextureIndex_ = 0;
     char textureSearch_[3][128] = {};
     char modelSearch_[128] = {};
 
     // 基本Transform。
-    engine::Vector3 editPosition_ = engine::Vector3::ZERO;
-    engine::Vector3 editRotation_ = engine::Vector3::ZERO;
+    engine::Vector3 editPosition_ = engine::Vector3::kZero;
+    engine::Vector3 editRotation_ = engine::Vector3::kZero;
     engine::Vector3 editScale_ = { 1.0f, 1.0f, 1.0f };
 
     // 表示素材と見た目。
     char editModelName_[128] = "Primitives/plane";
     char editTexturePath_[256] = "";
-    engine::Vector4 editColor_ = engine::Colors::White;
+    engine::Vector4 editColor_ = engine::colors::kWhite;
     engine::Vector2 editScrollSpeed_ = { 0.0f, -1.0f };
     float editIntensity_ = 2.0f;
 
@@ -90,12 +91,12 @@ private:
     float editEdgeFadeStrength_ = 1.5f;
 
     char editNoiseTexturePath_[256] = "";
-    int currentNoiseTextureIndex_ = 0;
+    std::int32_t currentNoiseTextureIndex_ = 0;
 
     char editRampTexturePath_[256] = "";
-    int currentRampTextureIndex_ = -1; // 選択ランプ画像。-1は未選択。
+    std::int32_t currentRampTextureIndex_ = -1; // 選択ランプ画像。-1は未選択。
 
-    int currentBlendModeIndex_ = 2;
+    std::int32_t currentBlendModeIndex_ = 2;
 
     bool editEnableReveal_ = true;
     bool editUseTextureColor_ = false;
@@ -106,17 +107,17 @@ private:
     float editRingEnergyStrength_ = 0.0f;
     float editRingSpinSpeed_ = 0.0f;
 
-    int editRevealMode_ = 1;
+    std::int32_t editRevealMode_ = 1;
 
 
-    int editEasingType_ = 0;
-    int editProceduralType_ = 0;
-    int editVolumeMode_ = 0;
+    std::int32_t editEasingType_ = 0;
+    std::int32_t editProceduralType_ = 0;
+    std::int32_t editVolumeMode_ = 0;
 
     std::vector<std::unique_ptr<EffectObject3D>> extraPreviewEffects_;
     bool forcePlayRequest_ = false; // 次の更新でプレビューを再開始する予約。
 
-    int lastStagePlayRequestSerial_ = 0; // 前回処理したプレビュー再生要求の番号。
-    int lastStageStopRequestSerial_ = 0; // 前回処理したプレビュー停止要求の番号。
-    int lastStageSeekRequestSerial_ = 0; // 前回処理したプレビューシーク要求の番号。
+    std::int32_t lastStagePlayRequestSerial_ = 0; // 前回処理したプレビュー再生要求の番号。
+    std::int32_t lastStageStopRequestSerial_ = 0; // 前回処理したプレビュー停止要求の番号。
+    std::int32_t lastStageSeekRequestSerial_ = 0; // 前回処理したプレビューシーク要求の番号。
 };

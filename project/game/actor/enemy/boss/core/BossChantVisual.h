@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "EffectObject3D.h"
 #include "Easing.h"
@@ -25,6 +26,7 @@ struct BossChantStyle {
     std::string releasePreset;
 
     engine::Vector4 accentColor = {0.42f, 0.78f, 1.0f, 1.0f};
+    engine::Vector3 sigilTint = {1.0f, 1.0f, 1.0f}; // 紋章本体と足元の紋章に掛けるRGB。白は元の色を保ちます。
     float radius = 2.4f;
 
     float fadeStart = 0.30f;
@@ -41,9 +43,11 @@ struct BossChantFrame {
     float casterHeight = 1.5f;
     engine::Vector3 forward = {0.0f, 0.0f, 1.0f};
 
+    // 予備動作の進行率は0〜1。解放開始からの経過は秒。
     float windupProgress = 0.0f;
     float activeElapsed = 0.0f;
 
+    // 演出時刻と、この更新で進める経過時間。どちらも秒。
     float time = 0.0f;
     float deltaTime = 0.0f;
 
@@ -61,8 +65,9 @@ class BossChantVisual {
     /// <param name="style">魔法陣のパス、色、半径、粒子プリセット。</param>
     /// <returns>必須の魔法陣を生成できた場合は true。</returns>
     bool Start(engine::Object3DCommon* common, BossChantStyle style) {
-        // 必須の魔法陣三層を先に検証し、任意の光の層だけ欠けても演出を続ける。
+        // 前回の描画層を破棄してから各素材を生成する。必須三層の成否は生成の後にまとめて確認する。
         Reset();
+        // 共通描画部または紋章の設定パスがなければ、生成を始めない。
         if (!common || style.sigilEffectPath.empty()) {
             return false;
         }
@@ -76,29 +81,35 @@ class BossChantVisual {
         risingLight_ = CreateEffect(common, style_.risingLightEffectPath, "BossChantRisingLight");
         risingLightCounter_ = CreateEffect(common, style_.risingLightEffectPath, "BossChantRisingLightCounter");
 
+        // 紋章本体・残光・床のいずれかを作れなければ、途中で生成した任意層も片付ける。
         if (!sigil_ || !glow_ || !floor_) {
             Reset();
             return false;
         }
+        // 紋章本体から材質を読める場合、三つの紋章層に共通する透明度と光量の基準を保存する。
         if (const EffectObject3D::EffectMaterial* material = sigil_->GetMaterialData()) {
             presetAlpha_ = material->color.w;
             presetIntensity_ = material->intensity;
         }
+        // 床の光が生成済みで材質を読める場合だけ、床光独自の基準値を記録する。
         if (groundLight_ && groundLight_->GetMaterialData()) {
             const EffectObject3D::EffectMaterial* material = groundLight_->GetMaterialData();
             groundLightAlpha_ = material->color.w;
             groundLightIntensity_ = material->intensity;
         }
+        // 中心光が生成済みで材質を読める場合は、その基準値を記録する。
         if (groundCore_ && groundCore_->GetMaterialData()) {
             const EffectObject3D::EffectMaterial* material = groundCore_->GetMaterialData();
             groundCoreAlpha_ = material->color.w;
             groundCoreIntensity_ = material->intensity;
         }
+        // 上昇光の材質が得られる場合は、逆回転する上昇光にも共用する基準値を記録する。
         if (risingLight_ && risingLight_->GetMaterialData()) {
             const EffectObject3D::EffectMaterial* material = risingLight_->GetMaterialData();
             risingLightAlpha_ = material->color.w;
             risingLightIntensity_ = material->intensity;
         }
+        // 足元リボンの材質が得られる場合に、その基準の透明度と明るさを記録する。
         if (footRibbon_ && footRibbon_->GetMaterialData()) {
             const EffectObject3D::EffectMaterial* material = footRibbon_->GetMaterialData();
             footRibbonAlpha_ = material->color.w;
@@ -109,14 +120,15 @@ class BossChantVisual {
         sigil_->SetColor({1.0f, 1.0f, 1.0f, 0.0f});
         glow_->SetColor({1.0f, 1.0f, 1.0f, 0.0f});
         floor_->SetColor({1.0f, 1.0f, 1.0f, 0.0f});
-        glow_->SetBlendMode(BlendMode::Add);
+        glow_->SetBlendMode(BlendMode::kAdd);
         glow_->SetUseTextureColor(false);
         for (EffectObject3D* effect : {groundLight_.get(), groundCore_.get(), footRibbon_.get(), risingLight_.get(),
                                        risingLightCounter_.get()}) {
+            // 生成できなかった任意の層には、初期のブレンドと色を設定しない。
             if (!effect) {
                 continue;
             }
-            effect->SetBlendMode(BlendMode::Add);
+            effect->SetBlendMode(BlendMode::kAdd);
             effect->SetColor({1.0f, 1.0f, 1.0f, 0.0f});
         }
 
@@ -126,11 +138,12 @@ class BossChantVisual {
     }
 
     // 攻撃プレビューの遮蔽確認用に、表示中の描画層だけ数えます。
-    int GetVisibleLayerCount() const {
-        int count = 0;
+    std::int32_t GetVisibleLayerCount() const {
+        std::int32_t count = 0;
         for (const EffectObject3D* effect :
              {sigil_.get(), glow_.get(), floor_.get(), groundLight_.get(), groundCore_.get(), footRibbon_.get(),
               risingLight_.get(), risingLightCounter_.get()}) {
+            // 実際に生成済みで可視になっている層だけを、プレビューの件数に含める。
             if (effect && effect->GetIsVisible()) {
                 ++count;
             }
@@ -166,16 +179,18 @@ class BossChantVisual {
     /// <summary>詠唱進行率から魔法陣・足元の光・収束粒子を更新します。</summary>
     /// <param name="frame">術者位置、詠唱進行率、攻撃開始後の経過時間。</param>
     void Update(const BossChantFrame& frame) {
-        // 詠唱も解放もしていないフレームでは全層を隠し、前回の光を残さない。
+        // 必須の紋章が無ければ Start() が成立していないため、他の層へ触れない。
         if (!sigil_) {
             return;
         }
+        // 詠唱も解放もしていないフレームでは全層を隠し、前回の光を残さない。
         if (!frame.casting && !frame.releasing) {
             sigil_->SetIsVisible(false);
             glow_->SetIsVisible(false);
             floor_->SetIsVisible(false);
             for (EffectObject3D* effect : {groundLight_.get(), groundCore_.get(), footRibbon_.get(), risingLight_.get(),
                                            risingLightCounter_.get()}) {
+                // 生成済みの任意層だけを非表示にする。
                 if (effect) {
                     effect->SetIsVisible(false);
                 }
@@ -184,6 +199,7 @@ class BossChantVisual {
             return;
         }
 
+        // 詠唱中は予備動作の進行率、解放中は完了済みの進行率1を使う。形成・収束・消失は別々の曲線。
         const float progress = frame.casting ? std::clamp(frame.windupProgress, 0.0f, 1.0f) : 1.0f;
         const float assembly = style_.completeAtRelease ? progress
             : SmoothStep(std::clamp((progress - 0.04f) / 0.64f, 0.0f, 1.0f));
@@ -202,7 +218,9 @@ class BossChantVisual {
         const float casterRadius = (std::max)(frame.casterRadius, radius * 0.75f);
         const float casterHeight = (std::max)(frame.casterHeight, casterRadius * 1.2f);
 
+        // 解放へ切り替わった最初の更新で、解放粒子の指定があれば紋章の中心から発生を試みる。
         if (frame.releasing && !wasReleasing_ && !style_.releasePreset.empty()) {
+            // 粒子管理が初期化済みの場合だけ発生要求を送る。
             if (GpuParticleManager* particles = GpuParticleManager::GetInstance();
                 particles && particles->IsInitialized()) {
                 particles->EmitDirected(style_.releasePreset, frame.sigilCenter, forward, 1.0f);
@@ -210,6 +228,7 @@ class BossChantVisual {
         }
         wasReleasing_ = frame.releasing;
 
+        // 前方の紋章を形成率で開き、収束と解放の強さを透明度・光量へ反映する。
         sigil_->Update(frame.deltaTime);
         sigil_->SetRevealProgress(assembly);
         sigil_->SetIsVisible(fade > 0.01f && assembly > 0.001f);
@@ -217,11 +236,12 @@ class BossChantVisual {
         sigil_->SetRotation(uprightRotation);
         const float sigilRadius = radius * 0.62f;
         sigil_->SetScale({sigilRadius * pulse, 1.0f, sigilRadius * pulse});
-        sigil_->SetColor({1.0f, 1.0f, 1.0f, (0.22f + assembly * 0.43f + charge * 0.15f) * fade * presetAlpha_});
+        sigil_->SetColor({style_.sigilTint.x, style_.sigilTint.y, style_.sigilTint.z, (0.22f + assembly * 0.43f + charge * 0.15f) * fade * presetAlpha_});
         sigil_->SetIntensity(presetIntensity_ * (1.0f + charge * 0.26f + releaseFlash * 0.33f));
         sigil_->UpdateLocalMatrix();
         sigil_->UpdateWorldMatrix();
 
+        // 加算の残光は紋章より遅れて表示し、少し前にずらして発光を重ねる。
         glow_->Update(frame.deltaTime);
         glow_->SetRevealProgress(assembly);
         glow_->SetIsVisible(fade > 0.01f && assembly > 0.24f);
@@ -244,7 +264,7 @@ class BossChantVisual {
         floor_->SetRotation({0.0f, frame.time * 0.24f, 0.0f});
         const float floorRadius = casterRadius * (1.25f + assembly * 0.10f);
         floor_->SetScale({floorRadius, 1.0f, floorRadius});
-        floor_->SetColor({1.0f, 1.0f, 1.0f, (0.12f + assembly * 0.19f + releaseFlash * 0.12f) * fade * presetAlpha_});
+        floor_->SetColor({style_.sigilTint.x, style_.sigilTint.y, style_.sigilTint.z, (0.12f + assembly * 0.19f + releaseFlash * 0.12f) * fade * presetAlpha_});
         floor_->SetIntensity(presetIntensity_ * (0.82f + charge * 0.21f));
         floor_->UpdateLocalMatrix();
         floor_->UpdateWorldMatrix();
@@ -287,8 +307,10 @@ class BossChantVisual {
                          {risingRadius * 0.97f, risingHeightScale * 0.92f, risingRadius * 0.97f}, style_.accentColor,
                          (0.10f + charge * 0.04f) * aura * fade * risingLightAlpha_, risingLightIntensity_ * 0.65f);
 
+        // 詠唱中で紋章の形成率が0.12を超えている間だけ、収束粒子の発生時計を進める。
         if (frame.casting && assembly > 0.12f) {
             moteTimer_ -= frame.deltaTime;
+            // 発生の待ち時間が尽きた場合、収束の強さに応じて次の発生までの秒数を短くする。
             if (moteTimer_ <= 0.0f) {
                 EmitGatheringMotes(frame, side, casterRadius, casterHeight, charge);
                 moteTimer_ = 0.15f - charge * 0.045f;
@@ -308,12 +330,15 @@ class BossChantVisual {
         DrawEffect(glow_.get(), pointLightResource, spotLightResource);
     }
 
+    // プレビューなど明示のカメラで、足元から前方の紋章まで本編と同じ順で描く。
     void DrawForCamera(engine::Camera* camera, ID3D12Resource* pointLightResource,
-                       ID3D12Resource* spotLightResource, int previewBufferIndex) {
+                       ID3D12Resource* spotLightResource, std::int32_t previewBufferIndex) {
+        // 描画対象のカメラを指定されなければ、通常ビューへ代用描画しない。
         if (!camera) return;
         // 本編と同じ層順で、Editorの表示カメラへ詠唱を描画する。
         for (EffectObject3D* effect : {floor_.get(), groundLight_.get(), groundCore_.get(), footRibbon_.get(),
                                        risingLight_.get(), risingLightCounter_.get(), sigil_.get(), glow_.get()}) {
+            // 生成済みで表示中の層にだけ、指定のカメラとプレビュー用バッファーを渡す。
             if (effect && effect->GetIsVisible()) {
                 effect->DrawForCamera(camera, pointLightResource, spotLightResource, previewBufferIndex);
             }
@@ -343,6 +368,7 @@ class BossChantVisual {
                                                         const std::string& name) {
         auto effect = std::make_unique<EffectObject3D>();
         effect->Initialize(common);
+        // 素材の読込に失敗した場合は、初期化途中のエフェクトを返さない。
         if (!effect->LoadFromJson(path)) {
             return nullptr;
         }
@@ -353,6 +379,7 @@ class BossChantVisual {
 
     static void DrawEffect(EffectObject3D* effect, ID3D12Resource* pointLightResource,
                            ID3D12Resource* spotLightResource) {
+        // 表示中の層だけ現在の標準カメラの定数を更新して描く。
         if (effect && effect->GetIsVisible()) {
             effect->RefreshRenderCameraData();
             effect->Draw(pointLightResource, spotLightResource);
@@ -365,6 +392,7 @@ class BossChantVisual {
     static void UpdateLightLayer(EffectObject3D* effect, float deltaTime, const engine::Vector3& position,
                                  const engine::Vector3& rotation, const engine::Vector3& scale, engine::Vector4 color, float alpha,
                                  float intensity) {
+        // 任意の層が未生成なら、姿勢と材質の更新を省く。
         if (!effect) {
             return;
         }
@@ -384,6 +412,7 @@ class BossChantVisual {
     void EmitGatheringMotes(const BossChantFrame& frame, const engine::Vector3& side, float casterRadius, float casterHeight,
                             float charge) {
         GpuParticleManager* particles = GpuParticleManager::GetInstance();
+        // 管理が未初期化か主となる粒子が未設定なら、付随する光粒も含めて発生を見送る。
         if (!particles || !particles->IsInitialized() || style_.motePreset.empty()) {
             return;
         }
@@ -407,6 +436,7 @@ class BossChantVisual {
         const engine::Vector3 upperTangent = side * -std::sin(secondOrbit) + forward * std::cos(secondOrbit);
         particles->EmitDirected(style_.motePreset, upperPosition, upperTangent + engine::Vector3{0.0f, 0.45f, 0.0f},
                                 1.1f + charge * 0.3f);
+        // 細かい光粒の設定があれば、上昇する収束粒子に重ねる。
         if (!style_.glintPreset.empty()) {
             particles->EmitDirected(style_.glintPreset, upperPosition, upperTangent + engine::Vector3{0.0f, 0.55f, 0.0f}, 1.0f);
         }
@@ -418,6 +448,7 @@ class BossChantVisual {
                                 side * -std::sin(orbit + 2.1f) + forward * std::cos(orbit + 2.1f) +
                                     engine::Vector3{0.0f, 0.55f, 0.0f},
                                 1.1f + charge * 0.35f);
+        // 地表側にも追加の光粒を出す設定なら、この位置では上方向へ発生させる。
         if (!style_.glintPreset.empty()) {
             particles->EmitDirected(style_.glintPreset, floorPosition, engine::Vector3{0.0f, 1.0f, 0.0f}, 0.9f);
         }

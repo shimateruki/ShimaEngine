@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #ifdef USE_IMGUI
 #include "game/scene/tutorial/TutorialScene.h"
 #include "game/system/tutorial/TutorialDirector.h"
@@ -9,18 +10,18 @@
 #include <cmath>
 
 // 専用プロセスだけで実シーン・実テクスチャを使い、入力方式の往復切替を検証します。
-namespace TutorialPromptRuntimeProbe {
+namespace tutorialPromptRuntimeProbe {
 using json = nlohmann::json;
 inline bool Enabled() { return GetEnvironmentVariableA("CG2_TUTORIAL_PROMPT_TEST", nullptr, 0) > 0; }
 inline void AfterDraw(SceneManager* manager, const std::string& path) {
     static std::ofstream log(path, std::ios::trunc);
-    static bool requested = false, done = false;
-    static ULONGLONG started = GetTickCount64();
-    if (done) return;
-    auto finish = [&](const char* message) { log << message << std::endl; done = true; WinApp::CloseNow(); };
-    if (GetTickCount64() - started > 180000) { finish("FAIL: tutorial loading timeout"); return; }
+    static bool sRequested = false, sDone = false;
+    static ULONGLONG sStarted = GetTickCount64();
+    if (sDone) return;
+    auto finish = [&](const char* message) { log << message << std::endl; sDone = true; WinApp::CloseNow(); };
+    if (GetTickCount64() - sStarted > 180000) { finish("FAIL: tutorial loading timeout"); return; }
     if (manager->IsTransitioning()) return;
-    if (!requested) { manager->ChangeScene("TUTORIAL"); requested = true; return; }
+    if (!sRequested) { manager->ChangeScene("TUTORIAL"); sRequested = true; return; }
     auto* scene = dynamic_cast<TutorialScene*>(manager->GetCurrentScene());
     if (!scene || !scene->GetPlayer()) return;
     auto* input = engine::InputManager::GetInstance();
@@ -32,7 +33,7 @@ inline void AfterDraw(SceneManager* manager, const std::string& path) {
     auto* label = scene->GetSpriteByName("tutorial_prompt_label");
     auto* icon = scene->GetSpriteByName("tutorial_prompt_icon_0");
     bool ok = label && icon;
-    int checked = 0;
+    std::int32_t checked = 0;
     for (const auto& step : flow["steps"]) {
         if (!ok || !step.value("showPrompt", true) || !step.contains("promptLabel")) continue;
         engine::InputManager::ReplayState state{};
@@ -50,7 +51,7 @@ inline void AfterDraw(SceneManager* manager, const std::string& path) {
         if (step.contains("promptIconsGamepad"))
             ok = ok && icon->GetTextureName() == step["promptIconsGamepad"][0].get<std::string>();
         const auto size = label->GetSize();
-        const auto& metadata = TextureManager::GetInstance()->GetMetadata(label->GetTextureHandle());
+        const auto& metadata = engine::TextureManager::GetInstance()->GetMetadata(label->GetTextureHandle());
         ok = ok && label->IsVisible() && size.x > 0 && size.x <= 470.01f && size.y > 0 && size.y <= 76.01f;
         ok = ok && std::abs(size.x / size.y - float(metadata.width) / float(metadata.height)) < 0.01f;
         state.gamepadMode = false;

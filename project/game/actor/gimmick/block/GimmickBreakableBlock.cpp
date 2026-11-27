@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "GimmickBreakableBlock.h"
 #include "ObjectPropertyDefinition.h"
 #include "CollisionConfig.h"
@@ -26,18 +27,18 @@ void GimmickBreakableBlock::Initialize(engine::Object3DCommon* common, const std
         SetEmissive(1.0f);
     }
 
-    // 地形（足場）として振る舞うため、属性を ground に設定
-    SetCollisionAttribute(CollisionCategories::Get("ground"));
-    SetCollisionMask(CollisionCategories::GetDefaultGameplayMask()); // すべてのオブジェクトと衝突して押し戻す
+    // 地面属性と標準のゲームプレイ用マスクで足場にする。
+    SetCollisionAttribute(engine::collisionCategories::Get("ground"));
+    SetCollisionMask(engine::collisionCategories::GetDefaultGameplayMask());
 
-    // OBBコライダーでモデルの大きさに自動フィットさせる
-    SetColliderType(ColliderType::Obb);
+    // ブロックの接触は回転を持てるOBBとして扱う。
+    SetColliderType(engine::ColliderType::kObb);
 
     isBroken_ = false;
     SetClassName("Gimmick");
     SetGimmickType("BreakableBlock");
 
-    // 編集項目の宣言です。動作処理と旧paramの保存キーは変更しません。
+    // 配置するブロックごとに、どの衝撃を破壊条件にするか選べるようにする。
     using Self = GimmickBreakableBlock;
     engine::ObjectPropertyDefinition<Self> properties(*this, kTypeId, "破壊ブロック",
         "爆風や体当たりで壊れる条件を指定します。");
@@ -48,8 +49,8 @@ void GimmickBreakableBlock::Initialize(engine::Object3DCommon* common, const std
 }
 
 void GimmickBreakableBlock::Update(float deltaTime) {
+    // 破壊済みの物体には通常の更新を行わず、表示・衝突を外した死亡状態を保つ。
     if (isBroken_) {
-        // 破壊されたら速やかに当たり判定を消滅させ、次のフレームで消滅
         SetCollisionAttribute(0);
         SetCollisionMask(0);
         SetIsVisible(false);
@@ -61,11 +62,12 @@ void GimmickBreakableBlock::Update(float deltaTime) {
 }
 
 bool GimmickBreakableBlock::OnCollision(engine::Object3D* other) {
+    // 既に破壊済みなら、同じ接触で破壊を重ねない。
     if (isBroken_)
         return false;
 
-    // 専用モードは爆風を無視し、プレイヤー本体の衝突でのみ破壊を判定します。
     const auto& parameters = GetParameters();
+    // 加速パネル専用の設定では、爆風経路からの破壊を判定しない。
     if (parameters && parameters->actionMode == kDashPanelOnly) {
         return BaseGimmick::OnCollision(other);
     }
@@ -73,38 +75,41 @@ bool GimmickBreakableBlock::OnCollision(engine::Object3D* other) {
     const uint32_t attribute = other->GetCollisionAttribute();
     const auto* bomb = dynamic_cast<const EnemyBomb*>(other);
 
-    // プレイヤーが生成したボムの爆風だけを破壊条件にする。
+    // プレイヤー所有の爆弾が起爆済みで、攻撃属性の球判定になった場合だけ爆風で壊す。
     if (bomb && bomb->IsPlayerOwned() && bomb->IsExploded() &&
-        (attribute & CollisionCategories::Get("player_attack")) &&
-        other->GetColliderType() == ColliderType::Sphere) {
+        (attribute & engine::collisionCategories::Get("player_attack")) &&
+        other->GetColliderType() == engine::ColliderType::kSphere) {
 
         Break();
         return true;
     }
 
-    // 地形としての押し戻し処理を実行
+    // 破壊条件を満たさない接触は、基底の衝突通知へ渡す。
     return BaseGimmick::OnCollision(other);
 }
 
 bool GimmickBreakableBlock::TryBreakByPlayerImpact(const Player* player) {
-    // 破壊済みなら再実行せず、Playerの衝突条件を満たした一回だけ破壊する。
+    // 破壊済み、プレイヤー不在、設定未登録の場合は、接触を理由とする破壊を行わない。
     if (isBroken_ || !player || !GetParameters().has_value()) {
         return false;
     }
 
     // 配置時の破壊条件ごとにプレイヤーのどの技を有効とするか判定します。爆風は OnCollision() が確認します。
-    const int actionMode = GetParameters()->actionMode;
+    const std::int32_t actionMode = GetParameters()->actionMode;
 
+    // パネル加速限定では、接触時の加速状態を確認する。
     if (actionMode == kDashPanelOnly) {
         // パネルの加速状態を確認し、通常の移動や別の技による衝突は受け付けません。
         if (!player->IsDashPanelBoostActive()) {
             return false;
         }
+    // ピンクの着地衝撃に対応する設定では、能力側の着地衝撃フラグを確認する。
     } else if (actionMode == 7) {
         // ピンクのバウンドで地面へ向かう衝撃だけを受け付けます。
         if (!player->IsPinkBounceSlamImpactActive()) {
             return false;
         }
+    // 汎用衝撃に対応する設定では、プレイヤー側の破壊フラグを確認する。
     } else if (actionMode == 6) {
         // プレイヤー側が汎用の破壊フラグを有効にしている間だけ受け付けます。
         if (!player->IsImpactBreakActive()) {
@@ -119,6 +124,7 @@ bool GimmickBreakableBlock::TryBreakByPlayerImpact(const Player* player) {
     return true;
 }
 
+// 同じフレームの後続判定で通過できるよう衝突を外し、材質に応じた破片を出します。
 void GimmickBreakableBlock::Break() {
     isBroken_ = true;
 
@@ -137,13 +143,15 @@ void GimmickBreakableBlock::Break() {
 
         // 巨大な門だけは破片の着地高さをモデルの下端に合わせます。
         if (isGiantGate) {
-            const Aabb bounds = GetModelWorldAabb();
+            const engine::Aabb bounds = GetModelWorldAabb();
             const float groundY = std::isfinite(bounds.min.y) ? bounds.min.y : myPos.y - 4.2f;
             DebrisEffectManager::GetInstance()->SpawnOnGround("shared/star_garden_gate_glass_shatter", myPos, groundY);
+        // 巨大な門以外は、通常サイズのガラス片をワールド位置から出す。
         } else {
             DebrisEffectManager::GetInstance()->Spawn("shared/star_garden_glass_shatter", myPos);
         }
 
+        // GPU粒子を呼べる場合は、ガラス片に閃光と飛散を重ねる。
         if (GpuParticleManager::GetInstance()) {
             GpuParticleManager::GetInstance()->Emit("shared/star_garden_glass_shards", myPos);
             GpuParticleManager::GetInstance()->Emit("shared/hit_bomb_flash_core", myPos);
@@ -153,7 +161,7 @@ void GimmickBreakableBlock::Break() {
         return;
     }
 
-    // 石ブロックは従来どおり小規模な爆発と火花で破壊する。
+    // 石の破壊では、メッシュ演出を呼べる場合に小規模な爆発を出す。
     if (MeshEffectManager::GetInstance()) {
         MeshEffectManager::GetInstance()->SpawnEffectAt("Resources/json/effect/shared/effect_bakuhatu.json", myPos,
                                                         {0.0f, 0.0f, 0.0f}, {0.5f, 0.5f, 0.5f});
@@ -161,6 +169,7 @@ void GimmickBreakableBlock::Break() {
 
     DebrisEffectManager::GetInstance()->Spawn("shared/bomb_hit_fragment_burst", myPos);
 
+    // GPU粒子を呼べる場合は、石片に火花を重ねる。
     if (GpuParticleManager::GetInstance()) {
         GpuParticleManager::GetInstance()->Emit("shared/star_sparkleGet", myPos);
     }

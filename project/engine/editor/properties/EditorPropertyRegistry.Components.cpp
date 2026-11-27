@@ -15,14 +15,14 @@ void EditorPropertyRegistry::RegisterBuiltInComponents() {
 
     // 常設の基本情報を先に置き、Camera では使えない描画・衝突機能を条件付きで登録します。
     registerInspectorHiddenComponent({ "SceneObject", "Scene Object", "名前、GUID、Tag、LayerなどObject自体の情報です。", 0, true, false,
-        always, always, EditorComponentInspectorMode::Custom });
+        always, always, EditorComponentInspectorMode::kCustom });
     RegisterComponent({ "Transform", "Transform", "位置・回転・スケールと親子Transformを管理します。", 10, true, false, always,
         [](const engine::Object3D& object) { return object.HasBuiltInComponent(engine::Object3D::kTransformComponentType); },
-        EditorComponentInspectorMode::Custom });
+        EditorComponentInspectorMode::kCustom });
     RegisterComponent({ "MeshRenderer", "Mesh Renderer", "モデル、マテリアル、影を管理します。", 20, false, false,
         [](const engine::Object3D& object) { return !object.IsCameraObject(); },
         [](const engine::Object3D& object) { return object.HasBuiltInComponent(engine::Object3D::kMeshRendererComponentType); },
-        EditorComponentInspectorMode::Custom });
+        EditorComponentInspectorMode::kCustom });
 
     // Collider は形状の有無だけでなく、旧データの属性・Presence Marker でも存在を判定します。
     // 追加時は通常の床向け設定を与え、削除時は判定に関わる状態をまとめて解除します。
@@ -30,13 +30,14 @@ void EditorPropertyRegistry::RegisterBuiltInComponents() {
         [](const engine::Object3D& object) { return !object.IsCameraObject(); },
         [](const engine::Object3D& object) {
             return object.HasComponentPresenceMarker("Collider") ||
-                object.GetColliderType() != ColliderType::None ||
+                object.GetColliderType() != engine::ColliderType::kNone ||
                 object.GetCollisionAttribute() != 0 || object.GetCollisionMask() != 0;
         },
-        EditorComponentInspectorMode::Custom,
+        EditorComponentInspectorMode::kCustom,
         [](engine::Object3D& object) {
             engine::Object3D::ColliderConfig config = object.GetColliderConfig();
-            config.type = ColliderType::Aabb;
+            config.type = engine::ColliderType::kAabb;
+            // いずれかの寸法の絶対値が0.001未満なら、有効な箱を作れるよう三軸とも既定値にそろえる。
             if (std::fabs(config.size.x) < 0.001f || std::fabs(config.size.y) < 0.001f ||
                 std::fabs(config.size.z) < 0.001f) {
                 config.size = { 1.0f, 1.0f, 1.0f };
@@ -44,7 +45,7 @@ void EditorPropertyRegistry::RegisterBuiltInComponents() {
 
             object.SetColliderConfig(config);
             // 追加直後から床として使えるよう、ground 属性と全対象を通すマスクを設定する。
-            object.SetCollisionAttribute(CollisionCategories::Get("ground"));
+            object.SetCollisionAttribute(engine::collisionCategories::Get("ground"));
             object.SetCollisionMask(0xFFFFFFFFu);
             object.SetStatic(true);
             object.SetComponentPresenceMarker("Collider", true);
@@ -53,7 +54,7 @@ void EditorPropertyRegistry::RegisterBuiltInComponents() {
         [](engine::Object3D& object) {
             engine::Object3D::ColliderConfig config = object.GetColliderConfig();
             // 既存の寸法を保持したまま形状を無効にし、属性とマスクも消して旧形式から当たり判定が復帰する条件を残さない。
-            config.type = ColliderType::None;
+            config.type = engine::ColliderType::kNone;
             object.SetColliderConfig(config);
             object.SetCollisionAttribute(0);
             object.SetCollisionMask(0);
@@ -69,14 +70,15 @@ void EditorPropertyRegistry::RegisterBuiltInComponents() {
         "Playerを検知するTrigger Colliderとして追加または再設定します。",
         [](engine::Object3D& object) {
             engine::Object3D::ColliderConfig config = object.GetColliderConfig();
-            config.type = ColliderType::Aabb;
+            config.type = engine::ColliderType::kAabb;
+            // いずれかの寸法の絶対値が0.001未満なら、プレイヤーを検出できる既定の箱へ切り替える。
             if (std::fabs(config.size.x) < 0.001f || std::fabs(config.size.y) < 0.001f ||
                 std::fabs(config.size.z) < 0.001f) {
                 config.size = { 1.0f, 1.0f, 1.0f };
             }
             object.SetColliderConfig(config);
-            object.SetCollisionAttribute(CollisionCategories::Get("trigger"));
-            object.SetCollisionMask(CollisionCategories::Get("player"));
+            object.SetCollisionAttribute(engine::collisionCategories::Get("trigger"));
+            object.SetCollisionMask(engine::collisionCategories::Get("player"));
             object.SetStatic(false);
             object.SetComponentPresenceMarker("Collider", true);
             return true;
@@ -89,7 +91,7 @@ void EditorPropertyRegistry::RegisterBuiltInComponents() {
         [](const engine::Object3D& object) {
             return object.HasParticleEmitterComponent();
         },
-        EditorComponentInspectorMode::Custom,
+        EditorComponentInspectorMode::kCustom,
         [](engine::Object3D& object) {
             object.EnsureParticleEmitterComponent();
             return true;
@@ -101,7 +103,7 @@ void EditorPropertyRegistry::RegisterBuiltInComponents() {
         [](const engine::Object3D& object) {
             return object.HasMeshEffectComponent();
         },
-        EditorComponentInspectorMode::Custom,
+        EditorComponentInspectorMode::kCustom,
         [](engine::Object3D& object) {
             object.EnsureMeshEffectComponent();
             return true;
@@ -117,7 +119,7 @@ void EditorPropertyRegistry::RegisterBuiltInComponents() {
             return object.HasComponentPresenceMarker("Animator") ||
                 !object.GetAnimationName().empty() || !object.GetAnimatorControllerPath().empty();
         },
-        EditorComponentInspectorMode::Custom,
+        EditorComponentInspectorMode::kCustom,
         [](engine::Object3D& object) {
             object.SetComponentPresenceMarker("Animator", true);
             return true;
@@ -130,12 +132,12 @@ void EditorPropertyRegistry::RegisterBuiltInComponents() {
             return true;
         } });
 
-    // 移動と参照を担うコンポーネントを続けて登録します。Automatic は共通プロパティ描画を使用します。
+    // 経路再生、イベント接続、経路探索を追加する。イベント接続と経路探索は共通プロパティ描画を使う。
     RegisterComponent({ "PathMover", "Path Mover", "Ghost Recorderで記録したPath移動を管理します。", 80, false, true, always,
         [](const engine::Object3D& object) {
             return object.HasPathMoverComponent();
         },
-        EditorComponentInspectorMode::Custom,
+        EditorComponentInspectorMode::kCustom,
         [](engine::Object3D& object) {
             object.EnsurePathMoverComponent();
             return true;
@@ -147,7 +149,7 @@ void EditorPropertyRegistry::RegisterBuiltInComponents() {
         [](const engine::Object3D& object) {
             return object.HasGameplayLinkComponent();
         },
-        EditorComponentInspectorMode::Automatic,
+        EditorComponentInspectorMode::kAutomatic,
         [](engine::Object3D& object) {
             object.EnsureGameplayLinkComponent();
             return true;
@@ -158,7 +160,7 @@ void EditorPropertyRegistry::RegisterBuiltInComponents() {
     RegisterComponent({ "NavAgent", "Nav Agent", "Physics QueryとA*で障害物を避ける移動方向を計算します。", 95, false, true,
         [](const engine::Object3D& object) { return !object.IsCameraObject(); },
         [](const engine::Object3D& object) { return object.HasNavAgentComponent(); },
-        EditorComponentInspectorMode::Automatic,
+        EditorComponentInspectorMode::kAutomatic,
         [](engine::Object3D& object) {
             object.EnsureNavAgentComponent();
             return true;
@@ -171,10 +173,10 @@ void EditorPropertyRegistry::RegisterBuiltInComponents() {
     registerInspectorHiddenComponent({ "Camera", "Camera", "Scene CameraのLens、追従、Blendを管理します。", 100, false, false,
         [](const engine::Object3D& object) { return object.IsCameraObject(); },
         [](const engine::Object3D& object) { return object.IsCameraObject(); },
-        EditorComponentInspectorMode::Custom });
+        EditorComponentInspectorMode::kCustom });
     registerInspectorHiddenComponent({ "Gameplay", "Gameplay", "敵、ギミック、Item固有の配置Parameterです。", 110, false, false, always,
         [](const engine::Object3D& object) { return object.GetParameters().has_value(); },
-        EditorComponentInspectorMode::Custom });
+        EditorComponentInspectorMode::kCustom });
     registerInspectorHiddenComponent({ "EditorState", "Editor State", "Editorだけが使用する表示・Lock状態です。", 1000, true, false,
-        never, never, EditorComponentInspectorMode::Custom });
+        never, never, EditorComponentInspectorMode::kCustom });
 }

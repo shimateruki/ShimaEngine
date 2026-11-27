@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "EngineManualWindow.h"
 
 #include "IconsFontAwesome5.h"
@@ -11,14 +12,12 @@
 namespace {
 
 enum class ManualSpecial {
-    None,
-    Shortcuts,
-    Materials,
+    kNone,
+    kShortcuts,
+    kMaterials,
 };
 
 // 用途・開き方・手順・保存先・注意事項を、一つのヘルプページとして表示する定義。
-// 担当：マニュアル一ページの分類・目的・操作手順と保存案内。
-// 関連：EngineManualWindowの内部処理だけで使う補助型。
 struct ManualPage {
     const char* category;
     const char* title;
@@ -29,7 +28,7 @@ struct ManualPage {
     const char* saveGuide;
     std::vector<const char*> checks;
     const char* caution;
-    ManualSpecial special = ManualSpecial::None;
+    ManualSpecial special = ManualSpecial::kNone;
 };
 
 // 手引き内の節見出しを区切り線付きで描画します。
@@ -44,7 +43,7 @@ void Paragraph(const char* text) {
     ImGui::TextWrapped("%s", text);
 }
 
-// 箇条書きと番号付き手順を共通の見た目で描画します。
+// 確認項目のマーカーを付け、本文を表示幅に合わせて折り返す。
 void ManualBullet(const char* text) {
     ImGui::Bullet();
     ImGui::SameLine();
@@ -52,7 +51,7 @@ void ManualBullet(const char* text) {
 }
 
 // 手順番号と説明文を同じ行に描画します。
-void ManualStep(int index, const char* text) {
+void ManualStep(std::int32_t index, const char* text) {
     ImGui::TextColored(ImVec4(1.0f, 0.82f, 0.28f, 1.0f), "%d.", index);
     ImGui::SameLine();
     ImGui::TextWrapped("%s", text);
@@ -79,7 +78,7 @@ void AddShortcutRow(const char* key, const char* action) {
 
 // Editor操作のショートカット一覧を二列表で表示します。
 void DrawShortcutTable() {
-    // 手引きのショートカット一覧は操作と説明を同じ列幅で表示する。
+    // 表を開始できなければこの欄を省く。操作キーは固定幅、説明は残りの領域に表示する。
     if (!ImGui::BeginTable("EngineManualShortcutTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
         return;
     }
@@ -121,7 +120,7 @@ void AddMaterialRow(const char* type, const char* name, const char* use) {
 
 // Material Typeの番号と用途を三列表で表示します。
 void DrawMaterialTable() {
-    // Inspectorで選べるMaterial Typeと用途を一つの表で確認できるようにする。
+    // 表を開始できた場合にだけ、手引きで案内している材質番号・名前・用途を並べる。
     if (!ImGui::BeginTable("EngineManualMaterialTable", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
         return;
     }
@@ -163,7 +162,7 @@ void DrawMaterialTable() {
 
 const std::vector<ManualPage>& GetManualPages() {
     // 手引き本文をページ単位で管理し、検索と表示で同じ定義を使います。
-    static const std::vector<ManualPage> pages = {
+    static const std::vector<ManualPage> kPages = {
         {
             "00 基本",
             "はじめに / 安全な作業手順",
@@ -223,7 +222,7 @@ const std::vector<ManualPage>& GetManualPages() {
                 "Undo後の状態が意図どおりかGame ViewとInspectorの両方で確認する。",
             },
             "Ctrl+Z/YはEditor内の操作履歴です。保存後のJSONをバージョン単位で復元する機能ではありません。",
-            ManualSpecial::Shortcuts,
+            ManualSpecial::kShortcuts,
         },
         {
             "00 基本",
@@ -386,7 +385,7 @@ const std::vector<ManualPage>& GetManualPages() {
                 "Event IDとTarget IDに重複・未接続がない。",
             },
             "クラスや保存カテゴリを誤るとゲーム側の生成・更新対象から外れます。見た目だけで判断せず、保存JSONと実行結果も確認してください。",
-            ManualSpecial::Materials,
+            ManualSpecial::kMaterials,
         },
         {
             "01 シーン編集",
@@ -1082,7 +1081,7 @@ const std::vector<ManualPage>& GetManualPages() {
         },
     };
 
-    return pages;
+    return kPages;
 }
 
 std::string ToLowerAscii(std::string value) {
@@ -1090,7 +1089,6 @@ std::string ToLowerAscii(std::string value) {
     for (char& c : value) {
         const unsigned char byte = static_cast<unsigned char>(c);
 
-        // UTF-8の日本語のバイト列をそのまま保持し、ASCIIの英字だけを小文字へそろえます。
         if (byte < 0x80) {
             c = static_cast<char>(std::tolower(byte));
         }
@@ -1101,6 +1099,7 @@ std::string ToLowerAscii(std::string value) {
 
 // 大文字小文字を無視して手引きの項目文に検索語が含まれるかを調べます。
 bool ContainsSearchText(const char* text, const std::string& query) {
+    // 空の検索語はすべてに一致する。検索語があり項目文が無い場合は一致しない。
     if (!text || query.empty()) {
         return query.empty();
     }
@@ -1114,6 +1113,7 @@ bool MatchesPage(const ManualPage& page, const std::string& query) {
         return true;
     }
 
+    // 分類・名称・別名・用途・開き方・保存先・注意のいずれかで一致すれば、残りの項目は調べない。
     if (ContainsSearchText(page.category, query) ||
         ContainsSearchText(page.title, query) ||
         ContainsSearchText(page.aliases, query) ||
@@ -1124,6 +1124,7 @@ bool MatchesPage(const ManualPage& page, const std::string& query) {
         return true;
     }
 
+    // 主要項目に一致しない場合も、操作手順と確認項目を一つずつ検索する。
     for (const char* step : page.steps) {
         if (ContainsSearchText(step, query)) {
             return true;
@@ -1141,7 +1142,6 @@ bool MatchesPage(const ManualPage& page, const std::string& query) {
 
 // 手引きページの見出し、操作手順、保存先、確認項目を共通構成で描画します。
 void DrawManualPage(const ManualPage& page) {
-    // ページの共通構成を固定し、操作一覧や素材表だけ種類に応じて差し込む。
     ImGui::TextColored(ImVec4(0.35f, 0.9f, 1.0f, 1.0f), "%s", page.title);
     ImGui::SameLine();
     ImGui::TextDisabled("  %s", page.category);
@@ -1154,14 +1154,15 @@ void DrawManualPage(const ManualPage& page) {
     SectionTitle("基本手順");
 
     for (size_t i = 0; i < page.steps.size(); ++i) {
-        ManualStep(static_cast<int>(i + 1), page.steps[i]);
+        ManualStep(static_cast<std::int32_t>(i + 1), page.steps[i]);
     }
 
-    if (page.special == ManualSpecial::Shortcuts) {
+    // 操作一覧と材質一覧は、対応するページだけ基本手順に差し込む。
+    if (page.special == ManualSpecial::kShortcuts) {
         SectionTitle("操作一覧");
         DrawShortcutTable();
     }
-    else if (page.special == ManualSpecial::Materials) {
+    else if (page.special == ManualSpecial::kMaterials) {
         SectionTitle("Material Type一覧");
         DrawMaterialTable();
     }
@@ -1187,18 +1188,21 @@ void DrawManualPage(const ManualPage& page) {
 void EngineManualWindow::Draw() {
     // 選択ページと検索結果は UI 状態で、手引き本文は変更しません。
 #ifdef USE_IMGUI
+    // 閉じている間はImGuiのウィンドウを作らない。
     if (!isOpen_) {
         return;
     }
 
     const auto& pages = GetManualPages();
 
-    if (selectedIndex_ < 0 || selectedIndex_ >= static_cast<int>(pages.size())) {
+    // 選択値が定義済みページの範囲を外れた場合は、先頭を表示する。
+    if (selectedIndex_ < 0 || selectedIndex_ >= static_cast<std::int32_t>(pages.size())) {
         selectedIndex_ = 0;
     }
 
     ImGui::SetNextWindowSize(ImVec2(1180.0f, 760.0f), ImGuiCond_FirstUseEver);
 
+    // 描画できないフレームでもBeginに対応するEndを呼んでから戻る。
     if (!ImGui::Begin(ICON_FA_BOOK " エンジン説明書 (Engine Manual)", &isOpen_)) {
         ImGui::End();
         return;
@@ -1210,12 +1214,13 @@ void EngineManualWindow::Draw() {
     ImGui::InputTextWithHint("##EngineManualSearch", "名前・用途・保存先", searchBuffer_, sizeof(searchBuffer_));
     ImGui::SameLine();
 
+    // 消去ボタンで検索語を空にし、同じフレームの絞り込みを解除する。
     if (ImGui::SmallButton(ICON_FA_TIMES "##ClearManualSearch")) {
         searchBuffer_[0] = '\0';
     }
 
     const std::string query = ToLowerAscii(searchBuffer_);
-    int visibleCount = 0;
+    std::int32_t visibleCount = 0;
 
     for (const ManualPage& page : pages) {
         if (MatchesPage(page, query)) {
@@ -1225,7 +1230,7 @@ void EngineManualWindow::Draw() {
 
     // 今のページが検索から外れたときだけ最初の一致ページへ移動します。0件なら本文の選択を保持します。
     if (!query.empty() && visibleCount > 0 && !MatchesPage(pages[selectedIndex_], query)) {
-        for (int i = 0; i < static_cast<int>(pages.size()); ++i) {
+        for (std::int32_t i = 0; i < static_cast<std::int32_t>(pages.size()); ++i) {
             if (MatchesPage(pages[i], query)) {
                 selectedIndex_ = i;
                 break;
@@ -1233,14 +1238,15 @@ void EngineManualWindow::Draw() {
         }
     }
 
-    ImGui::TextDisabled("%d / %d ページ", visibleCount, static_cast<int>(pages.size()));
+    ImGui::TextDisabled("%d / %d ページ", visibleCount, static_cast<std::int32_t>(pages.size()));
     ImGui::Separator();
 
     std::string lastCategory;
 
-    for (int i = 0; i < static_cast<int>(pages.size()); ++i) {
+    for (std::int32_t i = 0; i < static_cast<std::int32_t>(pages.size()); ++i) {
         const ManualPage& page = pages[i];
 
+        // 検索に一致したページだけを表示し、一致ページの分類が変わるときに分類見出しを出す。
         if (!MatchesPage(page, query)) {
             continue;
         }
@@ -1256,6 +1262,7 @@ void EngineManualWindow::Draw() {
 
         ImGui::PushID(i);
 
+        // ページ名が選ばれた場合は、右側の本文を描くページ番号を更新する。
         if (ImGui::Selectable(page.title, selectedIndex_ == i)) {
             selectedIndex_ = i;
         }
@@ -1263,6 +1270,7 @@ void EngineManualWindow::Draw() {
         ImGui::PopID();
     }
 
+    // 検索に一致しない場合も右側の選択は保ち、左側で検索方法を案内する。
     if (visibleCount == 0) {
         ImGui::Spacing();
         ImGui::TextWrapped("該当する説明がありません。日本語名、英語名、用途、保存先の一部で検索してください。");

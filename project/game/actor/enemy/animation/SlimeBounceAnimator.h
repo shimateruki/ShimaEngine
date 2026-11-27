@@ -8,7 +8,7 @@
 #include <cmath>
 
 // スライム系の通常移動に使う、共通のぷにぷに伸縮。
-namespace SlimeBounceAnimator {
+namespace slimeBounceAnimator {
 
 // Paramsは、スライムの待機、移動、空中、チャージ時の伸縮量を調整する設定です。
 struct Params {
@@ -27,19 +27,22 @@ inline float PlanarSpeed(const engine::Vector3& velocity) {
 }
 
 
+// 接地中の通常スライムが次に跳べるかを進め、跳躍開始フレームだけtrueを返します。
 inline bool StepGroundHop(float& hopTimer, const engine::Vector3& velocity, bool grounded, float deltaTime, float interval,
                           float speedThreshold) {
-    // 停止中は次の跳躍を少し手前で待機させ、動き出してすぐ弾むようにする。
+    // 空中では跳躍を重ねず、次の地上跳躍の時刻も進めない。
     if (!grounded) {
         return false;
     }
 
+    // 水平速度がしきい値以下なら、周期の72%で待機させ、移動を再開してから間もなく跳べるようにする。
     if (PlanarSpeed(velocity) <= speedThreshold) {
         hopTimer = interval * 0.72f;
         return false;
     }
 
     hopTimer += deltaTime;
+    // 移動を続けても一周期に届くまでは、次の跳躍を開始しない。
     if (hopTimer < interval) {
         return false;
     }
@@ -48,6 +51,7 @@ inline bool StepGroundHop(float& hopTimer, const engine::Vector3& velocity, bool
     return true;
 }
 
+// 周期の最後にある予備動作区間を、0から1の滑らかな進行率へ変換します。
 inline float BossHopAnticipation(float hopTimer, float interval, float anticipationDuration) {
     const float duration = (std::max)(anticipationDuration, 0.01f);
     const float progress = std::clamp((hopTimer - (interval - duration)) / duration, 0.0f, 1.0f);
@@ -58,19 +62,22 @@ inline float BossHopAnticipation(float hopTimer, float interval, float anticipat
 // ボスの移動意図を保ちながら、跳ぶ直前だけ足を止めて力をためます。
 inline bool StepBossGroundHop(float& hopTimer, engine::Vector3& velocity, float intentSpeed, bool grounded, float deltaTime,
                               float interval, float anticipationDuration, float speedThreshold) {
-    // 移動意図がある間だけタイマーを進め、跳ぶ直前は水平速度を落として予備動作を作る。
+    // ボスも空中では次の地上跳躍を始めず、時刻を進めない。
     if (!grounded) {
         return false;
     }
+    // 移動指示がしきい値以下か、水平の実速度がほぼゼロなら、予備動作の開始位置で時間を止める。
     if (intentSpeed <= speedThreshold || PlanarSpeed(velocity) <= 0.001f) {
         hopTimer = (std::max)(0.0f, interval - anticipationDuration);
         return false;
     }
     hopTimer += (std::max)(deltaTime, 0.0f);
+    // 周期を満たしたフレームでタイマーを0に戻し、呼び出し元に跳躍開始を知らせる。
     if (hopTimer >= interval) {
         hopTimer = 0.0f;
         return true;
     }
+    // 周期が残っている間は、予備動作の進行に合わせて水平速度だけを落とす。
     const float anticipation = BossHopAnticipation(hopTimer, interval, anticipationDuration);
     const float movementScale = 1.0f - anticipation * 0.88f;
     velocity.x *= movementScale;
@@ -86,8 +93,8 @@ inline engine::Vector3 MakeScale(const engine::Vector3& baseScale, const engine:
         std::clamp(PlanarSpeed(velocity) / (std::max)(params.speedForFullBounce, 0.01f), 0.0f, 1.0f);
     const float idlePulse = std::sin(timer * 3.1f) * params.idleAmplitude;
 
-    // 空中は移動用の周期を重ねず、上下速度の大きさに合わせた縦の伸びだけを使います。
     engine::Vector3 scale = baseScale;
+    // 空中では縦方向の速度の大きさで伸びを決め、地上の伸縮は重ねない。
     if (!grounded) {
         const float fallRate = std::clamp(std::abs(velocity.y) / 22.0f, 0.0f, 1.0f);
         const float stretch = params.airborneStretch * (0.45f + fallRate * 0.55f);
@@ -115,6 +122,7 @@ inline engine::Vector3 MakeScale(const engine::Vector3& baseScale, const engine:
 }
 
 
+// 溜め率と強度に応じて身体をつぶし、X軸とZ軸に逆位相の小さな揺れを重ねます。
 inline engine::Vector3 MakeChargeSquash(const engine::Vector3& baseScale, float chargeRate, float timer, float strength = 1.0f) {
     chargeRate = std::clamp(chargeRate, 0.0f, 1.0f);
     const float pulse = std::sin(timer * 18.0f) * 0.04f * chargeRate * strength;
@@ -142,6 +150,7 @@ inline void ApplyTravelPose(engine::Vector3& scale, engine::Vector3& rotation, c
 inline void ApplyGroundHopPose(engine::Vector3& scale, const engine::Vector3& baseScale, bool grounded, float hopTimer,
                                float hopInterval, float anticipationDuration, float landingTimer,
                                float landingDuration) {
+    // 空中姿勢に地面を踏む前後のつぶれを重ねないよう、接地時だけ適用する。
     if (!grounded) {
         return;
     }
@@ -161,6 +170,7 @@ inline void StepDampedSpring(engine::Vector3& value, engine::Vector3& velocity, 
                              float dampingRatio) {
     // 大きいフレーム間隔を制限し、各軸を同じ暗黙積分式で安定して追従させる。
     const float safeDelta = std::clamp(deltaTime, 0.0f, 0.05f);
+    // 安全な刻み幅が0なら、位置と速度を更新しない。
     if (safeDelta <= 0.0f) {
         return;
     }
@@ -186,4 +196,4 @@ inline void StepDampedSpring(engine::Vector3& value, engine::Vector3& velocity, 
     stepComponent(value.z, velocity.z, target.z);
 }
 
-} // namespace SlimeBounceAnimator
+} // namespace slimeBounceAnimator

@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "128eab322bb361280f6f344781d1b8d4",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/sprite/ui/result/clear/japanese/result_star_slate.png",
+  "version": 1
+}

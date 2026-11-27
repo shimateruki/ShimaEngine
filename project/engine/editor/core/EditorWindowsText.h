@@ -6,7 +6,7 @@
 
 #include <string>
 
-namespace EditorWindowsText {
+namespace editorWindowsText {
 
 /// <summary>Windows APIへ渡すUTF-8文字列をUTF-16へ変換します。</summary>
 /// <param name="text">終端文字を含まないUTF-8文字列。</param>
@@ -18,4 +18,4 @@ std::wstring Utf8ToWide(const std::string& text);
 /// <returns>変換後の文字列。変換できない場合は空文字列。</returns>
 std::string WideToUtf8(const std::wstring& text);
 
-} // namespace EditorWindowsText
+} // namespace editorWindowsText

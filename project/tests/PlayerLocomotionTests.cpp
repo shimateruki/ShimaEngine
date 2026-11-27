@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "game/actor/player/movement/PlayerLocomotion.h"
 #include <iostream>
 #include <limits>
@@ -6,7 +7,7 @@
 static void Require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
 static bool Near(float a, float b) { return std::abs(a - b) < 0.0002f; }
 static engine::Vector3 Simulate(const PlayerLocomotionSettings& settings, engine::Vector3 velocity,
-                              const engine::Vector3& target, float seconds, int fps, bool grounded = true) {
+                              const engine::Vector3& target, float seconds, std::int32_t fps, bool grounded = true) {
     float elapsed = 0.0f;
     while (seconds - elapsed > 0.000001f) {
         const float step = (std::min)(1.0f / fps, seconds - elapsed);
@@ -25,7 +26,7 @@ int main() {
         const auto reverse = settings.Apply({10, -7, 0}, {-10, 0, 0}, 10, true, 1.0f / 60);
         Require(reverse.x > 0 && reverse.x < 10, "reverse input changed direction instantly");
         Require(Near(Simulate(settings, {10, 0, 0}, {-10, 0, 0}, 0.5f, 60).x, -10), "reverse did not reach new maximum");
-        for (int fps : {30, 60, 120, 144}) {
+        for (std::int32_t fps : {30, 60, 120, 144}) {
             const auto accelerating = Simulate(settings, {}, {10, 0, 0}, 0.15f, fps);
             const auto reversing = Simulate(settings, {10, 0, 0}, {-10, 0, 0}, 0.15f, fps);
             Require(Near(accelerating.x, 10.0f * 0.15f / 0.4f), "acceleration depends on frame rate");

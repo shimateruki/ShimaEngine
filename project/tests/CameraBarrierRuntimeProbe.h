@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #ifdef USE_IMGUI
 #include "SceneManager.h"
 #include "Player.h"
@@ -10,7 +11,7 @@
 #include <stdexcept>
 
 // 専用プロセスで実際の追従カメラとプレイヤー接触を検証する。
-namespace CameraBarrierRuntimeProbe {
+namespace cameraBarrierRuntimeProbe {
 inline bool Enabled() { return GetEnvironmentVariableA("CG2_CAMERA_BARRIER_TEST", nullptr, 0) > 0; }
 inline void Require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
 inline void Run(BaseScene* scene, bool isSelect, std::ostream& log) {
@@ -19,32 +20,33 @@ inline void Run(BaseScene* scene, bool isSelect, std::ostream& log) {
     target->SetClassName("Player"); target->SetTranslate({0, 1000, 0}); target->UpdateWorldMatrix(true);
     auto wall = std::make_unique<engine::Object3D>(); wall->Initialize(common);
     wall->SetTranslate({0, 1002, -4});
-    engine::Object3D::ColliderConfig box; box.type = ColliderType::Aabb; box.size = {4, 4, 0.5f};
-    wall->SetColliderConfig(box); wall->SetCollisionAttribute(CollisionCategories::Get("ground"));
+    engine::Object3D::ColliderConfig box; box.type = engine::ColliderType::kAabb; box.size = {4, 4, 0.5f};
+    wall->SetColliderConfig(box); wall->SetCollisionAttribute(engine::collisionCategories::Get("ground"));
     wall->SetCollisionMask(~0u); wall->UpdateWorldMatrix(true);
     auto rear = std::make_unique<engine::Object3D>(); rear->Initialize(common);
     rear->SetTranslate({0, 1002, -8}); rear->SetColliderConfig(box);
-    rear->SetCollisionAttribute(CollisionCategories::Get("ground")); rear->SetCollisionMask(~0u); rear->UpdateWorldMatrix(true);
-    auto* collisions = CollisionManager::GetInstance(); collisions->AddObject(wall.get());
+    rear->SetCollisionAttribute(engine::collisionCategories::Get("ground")); rear->SetCollisionMask(~0u); rear->UpdateWorldMatrix(true);
+    auto* collisions = engine::CollisionManager::GetInstance(); collisions->AddObject(wall.get());
+    /// <summary>遮蔽検証で使う二つの障害物を、破棄前に衝突管理から登録解除する。</summary>
     struct Unregister {
-        CollisionManager* collisions; engine::Object3D* wall; engine::Object3D* rear;
+        engine::CollisionManager* collisions; engine::Object3D* wall; engine::Object3D* rear;
         ~Unregister() { collisions->RemoveObject(wall); collisions->RemoveObject(rear); }
     } unregister{collisions, wall.get(), rear.get()};
     auto eyeZ = [&] {
         engine::Camera camera; camera.Initialize(); camera.SetFollowTarget(target.get());
-        camera.SetFollowMode(engine::Camera::FollowMode::Aimable); camera.ConfigAimable(12, 2, {0, 0, 0});
+        camera.SetFollowMode(engine::Camera::FollowMode::kAimable); camera.ConfigAimable(12, 2, {0, 0, 0});
         camera.SetAimCameraSuppressed(true); camera.Update(1.0f/60);
         return camera.GetEye().z;
     };
     auto blocked = [&](float z) { Require(std::abs(z - (wall->GetAabb().max.z + CameraVisibilitySettings{}.collisionRadius + 0.2f)) < 0.01f, "ordinary wall camera correction changed"); };
     auto unchangedRay = [&] {
-        const auto hit = collisions->Raycast({0, 1002, 0}, {0, 0, -1}, 12, CollisionCategories::Get("ground"));
+        const auto hit = collisions->Raycast({0, 1002, 0}, {0, 0, -1}, 12, engine::collisionCategories::Get("ground"));
         Require(hit.isHit && hit.hitObject == wall.get(), "general ray lost barrier collision");
     };
     auto actor = std::make_unique<Player>();
     actor->Initialize(common, engine::InputManager::GetInstance(), scene->GetParticleSystem(), scene->GetSpriteCommon());
-    actor->SetEditorInternal(true); actor->SetCollisionAttribute(CollisionCategories::Get("player")); actor->SetCollisionMask(~0u);
-    engine::Object3D::ColliderConfig actorBox; actorBox.type = ColliderType::Aabb; actorBox.size = {0.5f, 0.5f, 0.5f};
+    actor->SetEditorInternal(true); actor->SetCollisionAttribute(engine::collisionCategories::Get("player")); actor->SetCollisionMask(~0u);
+    engine::Object3D::ColliderConfig actorBox; actorBox.type = engine::ColliderType::kAabb; actorBox.size = {0.5f, 0.5f, 0.5f};
     actor->SetColliderConfig(actorBox); actor->SetScale({1,1,1});
     auto playerBlocked = [&] {
         actor->SetTranslate({0, 1002, -3.5f}); actor->UpdateWorldMatrix(true); actor->SetVelocity({0,0,-8});
@@ -74,20 +76,20 @@ inline void Run(BaseScene* scene, bool isSelect, std::ostream& log) {
 }
 inline void AfterDraw(SceneManager* manager, const std::string& path) {
     static std::ofstream log(path, std::ios::trunc);
-    static int phase = 0, frames = 0;
-    static bool done = false;
-    static ULONGLONG started = GetTickCount64();
-    if (done || !manager) return;
-    auto finish = [&](const std::string& message) { log << message << std::endl; done = true; WinApp::CloseNow(); };
+    static std::int32_t sPhase = 0, sFrames = 0;
+    static bool sDone = false;
+    static ULONGLONG sStarted = GetTickCount64();
+    if (sDone || !manager) return;
+    auto finish = [&](const std::string& message) { log << message << std::endl; sDone = true; WinApp::CloseNow(); };
     try {
-        Require(GetTickCount64()-started < 240000, "camera barrier probe timeout");
+        Require(GetTickCount64()-sStarted < 240000, "camera barrier probe timeout");
         if (manager->IsTransitioning()) return;
-        if (phase == 0) { manager->ChangeScene("SELECT"); phase = 1; return; }
-        const bool isSelect = phase == 1;
-        if (manager->GetCurrentSceneName() != (isSelect ? "SELECT" : "GAMEPLAY") || ++frames < 3) return;
+        if (sPhase == 0) { manager->ChangeScene("SELECT"); sPhase = 1; return; }
+        const bool isSelect = sPhase == 1;
+        if (manager->GetCurrentSceneName() != (isSelect ? "SELECT" : "GAMEPLAY") || ++sFrames < 3) return;
         manager->SetIsPlaying(false);
         Run(manager->GetCurrentScene(), isSelect, log);
-        if (isSelect) { manager->ChangeScene("GAMEPLAY"); phase = 2; frames = 0; return; }
+        if (isSelect) { manager->ChangeScene("GAMEPLAY"); sPhase = 2; sFrames = 0; return; }
         finish("PASS: only camera bypasses prism barriers and SELECT invisible colliders; player blocking retained");
     } catch (const std::exception& error) { finish(std::string("FAIL: ") + error.what()); }
 }

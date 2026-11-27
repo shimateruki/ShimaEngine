@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "AbstractSceneFactory.h"
 #include "Framework.h"
@@ -91,8 +92,8 @@ private:
 	void RecordFixedFpsProfile();
 
 private:
-	std::unique_ptr<SceneManager> sceneManager_ = nullptr; // 現在シーンと遷移処理を所有する。
-	std::unique_ptr<AbstractSceneFactory> sceneFactory_ = nullptr; // シーン名と生成関数の登録表を所有する。
+	std::unique_ptr<SceneManager> sceneManager_; // 現在シーンと遷移処理を所有する。
+	std::unique_ptr<AbstractSceneFactory> sceneFactory_; // シーン名と生成関数の登録表を所有する。
 
 	std::chrono::high_resolution_clock::time_point lastTime_; // 前回フレームの時刻。
 	std::chrono::high_resolution_clock::time_point prePostDrawTime_; // 描画区間の時間計測基準。
@@ -107,7 +108,7 @@ private:
 	float sceneUpdateTimeMs_ = 0.0f;
 	float sceneDrawTimeMs_ = 0.0f; // シーン描画のCPU時間（ミリ秒）。
 	float updateTimeHistory_[120] = {}; // 更新時間の直近120件（ミリ秒）。
-	int timeHistoryIndex_ = 0; // 計測履歴へ次に書き込む位置。
+	std::int32_t timeHistoryIndex_ = 0; // 計測履歴へ次に書き込む位置。
 
 	float drawTimeMs_ = 0.0f; // 描画処理全体のCPU時間（ミリ秒）。
 	float cpuCmdTimeMs_ = 0.0f; // CPUコマンド処理の計測値（ミリ秒）。

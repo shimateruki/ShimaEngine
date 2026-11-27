@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include <string>
 
@@ -44,10 +45,10 @@ private:
     char renameSceneId_[96] = "";
     char renameSceneDisplayName_[128] = "";
 
-    int createSceneTemplate_ = 0;
-    int createRuntimeSceneIndex_ = 0;
+    std::int32_t createSceneTemplate_ = 0;
+    std::int32_t createRuntimeSceneIndex_ = 0;
 
-    int runtimeSettingsControllerIndex_ = 0;
+    std::int32_t runtimeSettingsControllerIndex_ = 0;
 
     char runtimeBgmPath_[260] = "";
     char runtimeLightPath_[260] = "";

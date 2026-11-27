@@ -1,4 +1,3 @@
-// GameRule.h
 #pragma once
 #include <memory>
 #include <array>
@@ -20,7 +19,7 @@ class GameRule {
     /// <summary>ゲームルールの初期状態を作る。</summary>
     GameRule();
 
-    /// <summary>購読したイベントを解除し、状態異常を片付ける。</summary>
+    /// <summary>接触・被弾・死亡イベントの購読を解除する。</summary>
     ~GameRule();
 
     GameRule(const GameRule&) = delete;
@@ -28,7 +27,8 @@ class GameRule {
     GameRule& operator=(const GameRule&) = delete;
 
     /// <summary>監視対象シーンを借用し、接触・ダメージ・死亡イベントを購読する。</summary>
-    /// <remarks>購読中はGameRuleとシーンの両方が有効である必要がある。</remarks>
+    /// <remarks>購読中は GameRule とシーンの両方が有効である必要がある。</remarks>
+    // editorOnly は隔離プレビュー用。接触からの進行処理は止め、被弾はプレビュー内の対象だけに適用する。
     void Initialize(BaseScene* scene, bool editorOnly = false);
 
     /// <summary>チェックポイント演出と継続型状態異常を更新する。</summary>
@@ -41,13 +41,13 @@ class GameRule {
   private:
     std::array<EventManager::SubscriptionId, 3> eventSubscriptions_{};
 
-    // 接触イベントでは個別のEventTypeを優先し、汎用TargetIDはその後に使う。
+    // 接触先のイベント種別に応じて、ギミックや進行処理へ引き渡す。
     void OnPlayerContact(const PlayerHitEvent& event);
 
-    // HP減算が成立した時点で、打撃演出・状態異常・ノックバックに進む。
+    // 攻撃の成立と威力を決め、HP・状態異常・被弾反応に反映する。
     void OnDamage(const DamageEvent& event);
 
-    // 実戦での死亡だけを進行中のセーブの残機に反映する。
+    // 実プレイで死亡したプレイヤーの残機を減らす。
     void OnPlayerDeath(const PlayerDeathEvent& event);
 
     /// <summary>指定対象へダメージを適用し、HP減少と撃破を判定する。</summary>
@@ -66,7 +66,7 @@ class GameRule {
     // 状態異常の残り秒と継続ダメージ・演出の独立した時計。target はシーン内 Object の借用参照。
     struct ActiveStatusEffect {
         engine::Object3D* target = nullptr;
-        StatusEffectType type = StatusEffectType::None;
+        StatusEffectType type = StatusEffectType::kNone;
         float remainingTime = 0.0f;
         float tickTimer = 0.0f;
         float tickInterval = 0.5f;

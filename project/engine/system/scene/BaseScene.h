@@ -19,7 +19,7 @@ class DebugEditor;
 namespace engine { class Camera; }
 class BulletManager;
 class Skybox;
-class ScenePreloadData;
+struct ScenePreloadData;
 struct SceneLoadManifest;
 
 #include "engine/editor/core/IEditable.h"
@@ -36,14 +36,14 @@ public:
     /// <summary>Editor で表示するシーン設定名を返します。</summary>
     virtual std::string GetName() override { return "Scene Settings"; }
 
-    /// <summary>派生シーンの設定 UI を描画します。</summary>
+    /// <summary>シーン設定 UI の拡張点。基底は項目を描かない。</summary>
     virtual void DrawImGui() override {}
 
     /// <summary>シーン固有のオブジェクト、カメラ、UI を初期化します。</summary>
     virtual void Initialize() = 0;
 
     /// <summary>必要な共有描画基盤を宣言するだけで、生成・段階準備はSceneManagerに任せる。</summary>
-    virtual engine::RenderPreparation GetRenderPreparation() const { return engine::RenderPreparation::Full; }
+    virtual engine::RenderPreparation GetRenderPreparation() const { return engine::RenderPreparation::kFull; }
 
     /// <summary>ロード画面と並行する段階初期化を開始します。</summary>
     /// <remarks>既定実装は何もしません。次の InitializeLoadingStep() が Initialize() を一度呼びます。</remarks>
@@ -55,13 +55,13 @@ public:
     /// <summary>段階初期化の進行割合を返します。</summary>
     virtual float GetLoadingInitializeProgress() const;
 
-    /// <summary>先読み後、現行シーンへ切り替える直前にメインスレッドで呼ばれます。</summary>
+    /// <summary>現在シーンになった直後に呼ばれ、シーンのクリア色を描画側へ反映します。</summary>
     virtual void OnActivated();
 
-    /// <summary>ワーカーで先読みする Scene Asset と依存リソースを列挙します。</summary>
+    /// <summary>先読みする配置と依存リソースの一覧を作ります。読み込みはワーカー側が担当します。</summary>
     virtual SceneLoadManifest BuildAsyncLoadManifest() const;
 
-    /// <summary>シーンのゲームロジックをフレーム時間で更新します。</summary>
+    /// <summary>シーンのゲームロジックを、前回からの経過秒で進めます。</summary>
     virtual void Update(float deltaTime) = 0;
 
     /// <summary>固定刻みの物理・ゲーム処理を更新します。</summary>
@@ -129,14 +129,14 @@ public:
     /// <summary>派生シーンが所有する3Dオブジェクトを返す。基底の既定実装は空の一覧。</summary>
     // 走査で得たポインタはシーン所有。削除予約・遷移の後に参照を持ち越さない。
     virtual const std::vector<std::unique_ptr<engine::Object3D>>& GetObjects() const {
-        static const std::vector<std::unique_ptr<engine::Object3D>> empty;
-        return empty;
+        static const std::vector<std::unique_ptr<engine::Object3D>> kEmpty;
+        return kEmpty;
     }
 
     /// <summary>派生シーンが所有するSpriteを返す。基底の既定実装は空の一覧。</summary>
     virtual const std::vector<std::unique_ptr<engine::Sprite>>& GetSprites() const {
-        static const std::vector<std::unique_ptr<engine::Sprite>> empty;
-        return empty;
+        static const std::vector<std::unique_ptr<engine::Sprite>> kEmpty;
+        return kEmpty;
     }
 
     /// <summary>Spriteの所有権をシーンへ移し、編集用の非所有参照を返す。</summary>
@@ -146,9 +146,9 @@ public:
     /// <summary>Spriteの描画順を隣と入れ替える。</summary>
     /// <param name="offset">前面へ移す場合は+1、背面へ移す場合は-1。</param>
     /// <returns>対象があり、指定方向へ移動できた場合はtrue。</returns>
-    bool MoveSprite(engine::Sprite* sprite, int offset);
+    bool MoveSprite(engine::Sprite* sprite, std::int32_t offset);
 
-    /// <summary>Play状態保存向けに、シーンが所有する Sprite を列挙します。</summary>
+    /// <summary>リプレイに記録する、シーン所有の Sprite への借用参照を列挙します。</summary>
     /// <remarks>個別の unique_ptr で保持する HUD は派生シーンで追加してください。</remarks>
     virtual void CollectReplaySprites(std::vector<engine::Sprite*>& sprites);
 
@@ -208,11 +208,11 @@ public:
     /// <summary>シーンの描画対象に現在のカメラ情報を反映する。</summary>
     virtual void RefreshRenderCameraData();
 
-    /// <summary>派生シーンが所有する3D描画基盤への非所有参照を返す。</summary>
+    /// <summary>Framework が所有する共有3D描画基盤を SceneManager 経由で借りる。Sprite 専用シーンでは nullptr。</summary>
     virtual engine::Object3DCommon* GetObject3DCommon();
     engine::Object3DCommon* GetObject3DCommon() const { return const_cast<BaseScene*>(this)->GetObject3DCommon(); }
 
-    /// <summary>派生シーンが所有するSprite描画基盤への非所有参照を返す。</summary>
+    /// <summary>Framework が所有する共有 Sprite 描画基盤を SceneManager 経由で借りる。</summary>
     virtual engine::SpriteCommon* GetSpriteCommon();
     engine::SpriteCommon* GetSpriteCommon() const { return const_cast<BaseScene*>(this)->GetSpriteCommon(); }
 
@@ -226,13 +226,13 @@ public:
     virtual Skybox* GetSkybox() { return nullptr; }
 
     /// <summary>targetId に紐づくイベント受信オブジェクトへ通知します。</summary>
-    void TriggerEvent(int targetId);
+    void TriggerEvent(std::int32_t targetId);
 
     /// <summary>指定IDへ接続されたイベントの有効状態を切り替える。</summary>
-    void SetEventActive(int targetId, bool active);
+    void SetEventActive(std::int32_t targetId, bool active);
 
     /// <summary>イベントIDに対応するオブジェクトを探す。</summary>
-    virtual engine::Object3D* FindObjectByEventId(int eventId);
+    virtual engine::Object3D* FindObjectByEventId(std::int32_t eventId);
 
     /// <summary>永続GUIDでシーン内のオブジェクトを探す。</summary>
     engine::Object3D* FindObjectByPersistentGuid(const std::string& guid);
@@ -248,7 +248,7 @@ public:
     virtual void DrawUi() {}
 
     /// <summary>指定カメラから見たシーンを独立バッファへ描画する。</summary>
-    virtual void DrawCameraPreview(engine::Camera* camera, int previewBufferIndex = 0);
+    virtual void DrawCameraPreview(engine::Camera* camera, std::int32_t previewBufferIndex = 0);
 
     /// <summary>現在読み込んだ3D配置ファイル名を設定・取得する。</summary>
     void SetLoadedFilename(const std::string& name) { loadedFilename_ = name; }
@@ -273,17 +273,20 @@ protected:
     /// <summary>現在の描画先へSpriteの設定を適用する。共有基盤が未準備ならlogic_errorを送出する。</summary>
     void BeginSpriteDrawing();
 
+    /// <summary>借用した空とカメラで有効な背景を描いてから、初期化済みの通常3D描画設定を適用する。</summary>
+    void BeginWorldObjectDrawing(Skybox* skybox, const engine::Camera* camera);
+
     /// <summary>GPU粒子のプリセットを全件または事前読込結果から準備する範囲。</summary>
-    enum class GpuParticlePresetScope { All, PreparedScene };
+    enum class GpuParticlePresetScope { kAll, kPreparedScene };
 
     /// <summary>DirectXの接続とプリセット読込をエンジン側で行う。Editorでは常に全件を使用する。</summary>
-    void PrepareGpuParticles(GpuParticlePresetScope scope = GpuParticlePresetScope::All);
+    void PrepareGpuParticles(GpuParticlePresetScope scope = GpuParticlePresetScope::kAll);
 
     /// <summary>派生シーンの可変Sprite所有コンテナを返す。基底ではnullptr。</summary>
     virtual std::vector<std::unique_ptr<engine::Sprite>>* GetMutableSprites() { return nullptr; }
 
     /// <summary>通常の不透明パスから分けて描く材質か判定する。</summary>
-    bool IsSpecialMaterialType(int materialType) const;
+    bool IsSpecialMaterialType(std::int32_t materialType) const;
 
     /// <summary>一人称視点で視点Actorまたはその子として隠す対象か判定する。</summary>
     bool IsHiddenByFirstPerson(engine::Object3D* object, engine::Object3D* viewActor, bool isFirstPerson) const;
@@ -291,9 +294,8 @@ protected:
     // カメラが視点主体の胸元から3ワールド単位未満に入ったかを返す。
     bool IsCameraNearViewActor(const engine::Camera* camera, const engine::Object3D* viewActor) const;
 
-    // 敵の予兆を不透明モデルの後、パーティクルや特殊材質の前に描画します。
 
-    /// <summary>対象一覧からローカルフォグを描画し、描画したか返す。</summary>
+    /// <summary>描画可能な局所フォグを深度参照パスへ送り、パスを実行した場合に true を返す。</summary>
     bool DrawLocalFogObjects(const std::vector<std::unique_ptr<engine::Object3D>>& objects, engine::Object3D* viewActor = nullptr, bool isFirstPerson = false);
 
     /// <summary>水やポータルなどの特殊材質を描き、背景色コピーの有無を返す。</summary>

@@ -27,11 +27,11 @@ class EnemySlime : public BaseEnemy {
 
     // 徘徊から溜め、上昇、急降下、着地へ進む攻撃状態です。
     enum class MoveState {
-        Wander,
-        Charge,
-        Rise,
-        Dive,
-        Recover,
+        kWander,
+        kCharge,
+        kRise,
+        kDive,
+        kRecover,
     };
 
     // 移動・攻撃の切り替えと、対象への平面方向を計算します。
@@ -106,7 +106,7 @@ class EnemySlime : public BaseEnemy {
 
   private:
     // 各攻撃フェーズの時刻と、現在の飛行方向を保持します。
-    MoveState moveState_ = MoveState::Wander;
+    MoveState moveState_ = MoveState::kWander;
 
     float jumpTimer_ = 0.0f; // 跳躍の段階切替に使う経過秒数。
     float idleTimer_ = 0.0f; // 待機中の見た目に使う経過秒数。
@@ -129,10 +129,10 @@ class EnemySlime : public BaseEnemy {
 
     engine::Vector3 baseScale_ = {2.0f, 2.0f, 2.0f};
     engine::Vector3 visualScale_ = {1.0f, 1.0f, 1.0f};
-    engine::Vector3 visualScaleVelocity_ = engine::Vector3::ZERO;
+    engine::Vector3 visualScaleVelocity_ = engine::Vector3::kZero;
 
-    engine::Vector3 visualRotation_ = engine::Vector3::ZERO;
-    engine::Vector3 visualRotationVelocity_ = engine::Vector3::ZERO;
+    engine::Vector3 visualRotation_ = engine::Vector3::kZero;
+    engine::Vector3 visualRotationVelocity_ = engine::Vector3::kZero;
 
     bool hasBaseScale_ = false;
     bool attackWarningTriggered_ = false;

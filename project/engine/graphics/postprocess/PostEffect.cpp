@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "PostEffect.h"
 #include "SrvManager.h"
 #include"WinApp.h"
@@ -12,15 +13,14 @@
 #include <cmath>
 
 namespace {
-// 効果解除時にも前フレームの値が残らないよう、表示を変えない設定で全項目を初期化します。
+// 効果を解除するための既定値を作ります。経過時間と作業色空間に応じたトーンマップ設定は維持します。
 PostEffect::Params MakeNeutralPostEffectParams(float time) {
-    // 表示色を変えない値で全効果を初期化し、個別エフェクトの解除時に残留値を作らない。
     PostEffect::Params params{};
     params.time = time;
     params.threshold = 1.0f;
     params.bloomIntensity = 0.0f;
     params.spread = 1.0f;
-    params.enableToneMapping = engine::ColorSpace::WorkflowSettings::GetInstance().IsLinearWorkflowEnabled() ? 1 : 0;
+    params.enableToneMapping = engine::colorSpace::WorkflowSettings::GetInstance().IsLinearWorkflowEnabled() ? 1 : 0;
     params.vignetteIntensity = 0.0f;
     params.chromaticAberration = 0.0f;
     params.filmGrainIntensity = 0.0f;
@@ -52,7 +52,7 @@ PostEffect::Params MakeNeutralPostEffectParams(float time) {
     params.dissolveThreshold = 0.0f;
     params.dissolveEdgeWidth = 0.02f;
     params.randomIntensity = 0.0f;
-    params.linearWorkflowEnabled = engine::ColorSpace::WorkflowSettings::GetInstance().IsLinearWorkflowEnabled() ? 1.0f : 0.0f;
+    params.linearWorkflowEnabled = engine::colorSpace::WorkflowSettings::GetInstance().IsLinearWorkflowEnabled() ? 1.0f : 0.0f;
     params.dissolveEdgeColor = { 1.0f, 0.4f, 0.3f };
     params.projectionInverse = engine::Math::MakeIdentity4x4();
     params.slimeFadeIntensity = 0.0f;
@@ -79,7 +79,7 @@ void PostEffect::Initialize(engine::DirectXCommon* dxCommon) {
 	// [0] シーン描画用 (HDR / 元サイズ)
     CreateRenderTexture(0, WinApp::GetClientWidth(), WinApp::GetClientHeight(), DXGI_FORMAT_R16G16B16A16_FLOAT);
 
-    // [1] トーンマップ後・ImGui表示用 (SDR / 元サイズ)
+    // [1] トーンマップ後のエディター表示用。ウィンドウと同じサイズの16ビット浮動小数点テクスチャを使う。
     CreateRenderTexture(1, WinApp::GetClientWidth(), WinApp::GetClientHeight(),  DXGI_FORMAT_R16G16B16A16_FLOAT);
 
     // [2] 高輝度抽出用 (HDR / 1/2サイズで少し軽くする)
@@ -96,26 +96,28 @@ void PostEffect::Initialize(engine::DirectXCommon* dxCommon) {
     ResizeCameraPreviewTextures();
 }
 
+// 環境の補間結果を取り込み、ノイズ用の経過時間をフレーム時間（秒）だけ進めます。
 void PostEffect::Update(float deltaTime) {
     // 環境補間でこの定数の色調や発光値が変わるため、描画用の値を使う前に今フレームの環境状態を反映する。
     engine::LightManager::GetInstance()->UpdateEnvironmentProfile(deltaTime);
 
-    // 時間を進める（ノイズのアニメーション用）
     paramsData_->time += deltaTime;
     // 入力を作業色空間で扱う設定をシェーダーにも渡し、色調整の経路と揃える。
     paramsData_->linearWorkflowEnabled =
-        engine::ColorSpace::WorkflowSettings::GetInstance().IsLinearWorkflowEnabled() ? 1.0f : 0.0f;
+        engine::colorSpace::WorkflowSettings::GetInstance().IsLinearWorkflowEnabled() ? 1.0f : 0.0f;
 }
 
+// 色補正用のLUTをsRGBとして読み込みます。設定できたときはtrueを返します。
 bool PostEffect::SetLUTTexturePath(const std::string& path) {
-    // Textureの読込に失敗した場合は、既存の色補正LUTを維持します。
+    // パスが空なら読み込みを試さず、設定済みのLUTを維持する。
     if (path.empty()) {
         return false;
     }
 
-    const uint32_t handle = TextureManager::GetInstance()->Load(
+    const uint32_t handle = engine::TextureManager::GetInstance()->Load(
         path,
-        TextureManager::TextureColorSpace::SRGB);
+        engine::TextureManager::TextureColorSpace::kSRGB);
+    // 有効なテクスチャハンドルが得られなかった場合も、設定済みのLUTを維持する。
     if (handle == 0) {
         return false;
     }
@@ -125,12 +127,14 @@ bool PostEffect::SetLUTTexturePath(const std::string& path) {
     return true;
 }
 
+// GPUへ渡す加工パラメーターを既定値へ戻します。
 void PostEffect::ResetToNeutral() {
-    // 時間だけ引き継ぎ、色・Bloomなどの調整値を中立状態へ戻します。
+    // 定数バッファをまだマップしていない場合は、書き込み先がないため終了する。
     if (!paramsData_) {
         return;
     }
 
+    // 時間を引き継ぎ、ノイズのアニメーション時刻がリセットされるのを防ぐ。
     const float currentTime = paramsData_->time;
     *paramsData_ = MakeNeutralPostEffectParams(currentTime);
 }
@@ -138,14 +142,16 @@ void PostEffect::ResetToNeutral() {
 void PostEffect::SetBloomQuality(BloomQuality quality) {
     // 不正な列挙値は高品質へ寄せ、パス数を定義済みの範囲に保ちます。
     switch (quality) {
-    case BloomQuality::Low:
-    case BloomQuality::Medium:
-    case BloomQuality::High:
+    // 定義済みの品質は指定どおり採用する。
+    case BloomQuality::kLow:
+    case BloomQuality::kMedium:
+    case BloomQuality::kHigh:
         bloomQuality_ = quality;
         break;
 
+    // 列挙範囲外の値を受け取った場合は、4段の高品質設定を使う。
     default:
-        bloomQuality_ = BloomQuality::High;
+        bloomQuality_ = BloomQuality::kHigh;
         break;
     }
 }
@@ -156,21 +162,25 @@ bool PostEffect::IsBloomActive() const {
     return bloomEnabled_ && paramsData_ && paramsData_->bloomIntensity > kBloomIntensityEpsilon;
 }
 
-int PostEffect::GetBloomLevelCount() const {
+std::int32_t PostEffect::GetBloomLevelCount() const {
     // 品質設定を縮小解像度の段数へ対応させます。
     switch (bloomQuality_) {
-    case BloomQuality::Low: return 1;
+    // 低品質では、縮小画像を1段だけ使う。
+    case BloomQuality::kLow: return 1;
 
-    case BloomQuality::Medium: return 2;
+    // 中品質では、縮小画像を2段使う。
+    case BloomQuality::kMedium: return 2;
 
-    case BloomQuality::High: return 4;
+    // 高品質では、縮小画像を4段使う。
+    case BloomQuality::kHigh: return 4;
 
+    // 不明な品質値は高品質と同じ段数にする。
     default: return 4;
     }
 }
 
-int PostEffect::GetExpectedPostEffectPassCount() const {
-    // Bloomの縮小・合成段と最終パスを見積もります。
+std::int32_t PostEffect::GetExpectedPostEffectPassCount() const {
+    // Bloomが無効なら、高輝度抽出や縮小を省き、最終パス1回で描く。
     if (!IsBloomActive()) {
         return 1;
     }
@@ -179,27 +189,32 @@ int PostEffect::GetExpectedPostEffectPassCount() const {
     return GetBloomLevelCount() * 2 + 2;
 }
 
+// カメラプレビューの解像度を、元の描画サイズに対する倍率で指定します。
 void PostEffect::SetCameraPreviewResolutionScale(float scale) {
-    // プレビュー専用の解像度を制限し、変更時だけRenderTextureを作り直します。
+    // 倍率を元サイズの25〜100%に制限する。
     const float clampedScale = std::clamp(scale, 0.25f, 1.0f);
 
+    // 制限後の倍率が現在値とほぼ同じなら、テクスチャの再作成を省く。
     if (std::abs(cameraPreviewResolutionScale_ - clampedScale) < 0.0001f) {
         return;
     }
 
     cameraPreviewResolutionScale_ = clampedScale;
 
+    // デバイス、描画先の枠、正の描画サイズが揃っていれば、設定した倍率を直ちに反映する。
     if (dxCommon_ && renderTextures_.size() >= 8 && renderWidth_ > 0 && renderHeight_ > 0) {
         ResizeCameraPreviewTextures();
     }
 }
 
 // 画面サイズに合わせてフル解像度と段階縮小の描画先を作り直します。
-void PostEffect::ResizeRenderTextures(int width, int height) {
+void PostEffect::ResizeRenderTextures(std::int32_t width, std::int32_t height) {
+    // DirectXの初期化または描画先8枠の確保が済んでいなければ、再作成を見送る。
     if (!dxCommon_ || renderTextures_.size() < 8) {
         return;
     }
 
+    // 最小のBloom段でも幅と高さを確保できるよう、元サイズを各16ピクセル以上にする。
     width = (std::max)(width, 16);
     height = (std::max)(height, 16);
     renderWidth_ = width;
@@ -215,22 +230,25 @@ void PostEffect::ResizeRenderTextures(int width, int height) {
     ResizeCameraPreviewTextures();
 }
 
+// 通常カメラと演出カメラのプレビュー用描画先を、現在の倍率で再作成します。
 void PostEffect::ResizeCameraPreviewTextures() {
+    // デバイス、描画先8枠、正の描画サイズが揃うまではプレビューを再作成できない。
     if (!dxCommon_ || renderTextures_.size() < 8 || renderWidth_ <= 0 || renderHeight_ <= 0) {
         return;
     }
 
-    // プレビューは表示側と同じ16:9に固定し、縦横比による映像の伸びを防ぎます。
+    // 原則として16:9に収め、両辺の最小サイズとピクセル単位の丸めも適用する。
     constexpr float kPreviewAspect = 16.0f / 9.0f;
-    int width = (std::max)(static_cast<int>(renderWidth_ * cameraPreviewResolutionScale_), 16);
-    int height = (std::max)(static_cast<int>(renderHeight_ * cameraPreviewResolutionScale_), 16);
+    std::int32_t width = (std::max)(static_cast<std::int32_t>(renderWidth_ * cameraPreviewResolutionScale_), 16);
+    std::int32_t height = (std::max)(static_cast<std::int32_t>(renderHeight_ * cameraPreviewResolutionScale_), 16);
 
-    // 候補矩形の片側だけを縮めて16:9に収め、指定した解像度の上限を超えないようにします。
+    // 16:9より横長の候補は、高さを基準に幅を縮める。片辺は16ピクセルを下限とする。
     if (static_cast<float>(width) / static_cast<float>(height) > kPreviewAspect) {
-        width = (std::max)(static_cast<int>(height * kPreviewAspect), 16);
+        width = (std::max)(static_cast<std::int32_t>(height * kPreviewAspect), 16);
     }
+    // 16:9以下の候補は、幅を基準に高さを決める。
     else {
-        height = (std::max)(static_cast<int>(width / kPreviewAspect), 16);
+        height = (std::max)(static_cast<std::int32_t>(width / kPreviewAspect), 16);
     }
 
     cameraPreviewWidth_ = width;
@@ -240,12 +258,10 @@ void PostEffect::ResizeCameraPreviewTextures() {
 }
 
 
+// ポストエフェクトのPSが読む定数、画像、サンプラーの割り当てを作ります。
 void PostEffect::CreateRootSignature() {
     RootSignatureBuilder builder;
 
-    // =================================================================
-    // 1. ルートパラメータの設定
-    // =================================================================
 
     // [0] 定数バッファ (CBV b0 - PixelShader用)
     builder.AddCbv(0, 0, D3D12_SHADER_VISIBILITY_PIXEL);
@@ -262,9 +278,6 @@ void PostEffect::CreateRootSignature() {
     // [4] ノイズテクスチャ (DescriptorTable t3 - PixelShader用)
     builder.AddSimpleDescriptorTable(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 1, 0, D3D12_SHADER_VISIBILITY_PIXEL);
 
-    // =================================================================
-    // 2. サンプラーの設定
-    // =================================================================
 
     // s0: テクスチャサンプラー (リニア補間、クランプ - PixelShader用)
     builder.AddStaticSampler(0, 0, D3D12_SHADER_VISIBILITY_PIXEL, D3D12_FILTER_MIN_MAG_MIP_LINEAR, D3D12_TEXTURE_ADDRESS_MODE_CLAMP);
@@ -272,12 +285,10 @@ void PostEffect::CreateRootSignature() {
     // s1: ポイントサンプラー (ポイント補間、クランプ - PixelShader用)
     builder.AddStaticSampler(1, 0, D3D12_SHADER_VISIBILITY_PIXEL, D3D12_FILTER_MIN_MAG_MIP_POINT, D3D12_TEXTURE_ADDRESS_MODE_CLAMP);
 
-    // =================================================================
-    // 3. ビルド実行
-    // =================================================================
     builder.Build(dxCommon_->GetDevice(), rootSignature_.GetAddressOf());
 }
 
+// 共通の全画面頂点シェーダーと各パスのピクセルシェーダーを組み合わせてPSOを用意します。
 void PostEffect::CreatePipelineState() {
     ID3D12Device* device = dxCommon_->GetDevice();
 
@@ -289,14 +300,11 @@ void PostEffect::CreatePipelineState() {
     auto psAdd = dxCommon_->CompileShader(L"Resources/shader/postprocess/PostEffect.PS.hlsl", L"ps_6_0", L"mainAdd");
     auto psComposite = dxCommon_->CompileShader(L"Resources/shader/postprocess/PostEffect.PS.hlsl", L"ps_6_0", L"mainComposite");
 
-    // ==========================================================
-    // --- 共通設定 ---
-    // ==========================================================
     GraphicsPipelineBuilder builder;
     builder.SetRootSignature(rootSignature_.Get());
     builder.SetInputLayout(nullptr, 0); // 頂点を SV_VertexID から生成する全画面パスです。
 
-    // カリングなし、Zテストなし
+    // 全画面を覆う合成なので、裏面カリングと深度テストは使わない。
     builder.SetRasterizerState(D3D12_CULL_MODE_NONE, D3D12_FILL_MODE_SOLID);
     builder.SetDepthStencilState(false, D3D12_DEPTH_WRITE_MASK_ZERO);
 
@@ -305,60 +313,51 @@ void PostEffect::CreatePipelineState() {
     builder.SetRenderTargets(1, rtvFormats, DXGI_FORMAT_UNKNOWN);
 
     // 基本はブレンドなし（不透明描画/上書き）
-    builder.SetBlendMode(::BlendMode::None);
+    builder.SetBlendMode(::BlendMode::kNone);
 
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pso;
 
-    // ==========================================================
     // [PSO 0] Copy用 (HDR出力)
-    // ==========================================================
     builder.SetShaders(vsBlob.Get(), psCopy.Get());
     builder.Build(device, pso.ReleaseAndGetAddressOf());
     pipelineStates_.push_back(pso);
 
-    // ==========================================================
-    // [PSO 1] トーンマップ・最終合成用 (SDR出力)
-    // ==========================================================
+    // [PSO 1] プレビュー向けのトーンマップ・最終合成用。描画先の形式は16ビット浮動小数点。
     builder.SetShaders(vsBlob.Get(), psComposite.Get());
     builder.Build(device, pso.ReleaseAndGetAddressOf());
     pipelineStates_.push_back(pso);
 
-    // ==========================================================
     // [PSO 2] 抽出用 (HDR出力)
-    // ==========================================================
     builder.SetShaders(vsBlob.Get(), psExtract.Get());
     builder.Build(device, pso.ReleaseAndGetAddressOf());
     pipelineStates_.push_back(pso);
 
-    // ==========================================================
     // [PSO 3] 縮小ブラー用 (HDR出力)
-    // ==========================================================
     builder.SetShaders(vsBlob.Get(), psDownsample.Get());
     builder.Build(device, pso.ReleaseAndGetAddressOf());
     pipelineStates_.push_back(pso);
 
-    // ==========================================================
     // [PSO 4] 加算合成用 (HDR出力)
-    // ==========================================================
     builder.SetShaders(vsBlob.Get(), psAdd.Get());
-    builder.SetBlendMode(::BlendMode::Add); 
+    builder.SetBlendMode(::BlendMode::kAdd); 
     builder.Build(device, pso.ReleaseAndGetAddressOf());
     pipelineStates_.push_back(pso);
 
-    // バックバッファはsRGB形式なので、HDR中間ターゲットとは別のPSOを使用する。
+    // 画面へ直接出力するときは、DirectXCommonのバックバッファ形式に合わせて別のPSOを作る。
     const DXGI_FORMAT backBufferFormat[] = { dxCommon_->GetRtvFormat() };
     builder.SetRenderTargets(1, backBufferFormat, DXGI_FORMAT_UNKNOWN);
-    builder.SetBlendMode(::BlendMode::None);
+    builder.SetBlendMode(::BlendMode::kNone);
     builder.SetShaders(vsBlob.Get(), psComposite.Get());
     builder.Build(device, pso.ReleaseAndGetAddressOf());
     pipelineStates_.push_back(pso);
 }
 
 // 同一テクスチャを描画先とサンプリング元に使い分けるため、現在状態を追跡して遷移します。
-void PostEffect::TransitionToRtv(ID3D12GraphicsCommandList* commandList, int texIndex) {
+void PostEffect::TransitionToRtv(ID3D12GraphicsCommandList* commandList, std::int32_t texIndex) {
     RenderTexture& rt = renderTextures_[texIndex];
+    // すでに描画先の状態なら、同じ状態への遷移命令を積まずに終了する。
     if (rt.currentState == D3D12_RESOURCE_STATE_RENDER_TARGET)
-        return; // 既にRTVなら何もしない
+        return;
 
     D3D12_RESOURCE_BARRIER barrier{};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -370,10 +369,11 @@ void PostEffect::TransitionToRtv(ID3D12GraphicsCommandList* commandList, int tex
 }
 
 // 次の描画パスが結果をサンプルできるよう、描画先をSRV状態へ遷移します。
-void PostEffect::TransitionToSrv(ID3D12GraphicsCommandList* commandList, int texIndex) {
+void PostEffect::TransitionToSrv(ID3D12GraphicsCommandList* commandList, std::int32_t texIndex) {
     RenderTexture& rt = renderTextures_[texIndex];
+    // すでにピクセルシェーダーから参照できる状態なら、遷移を省く。
     if (rt.currentState == D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
-        return; // 既にSRVなら何もしない
+        return;
 
     D3D12_RESOURCE_BARRIER barrier{};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -385,7 +385,8 @@ void PostEffect::TransitionToSrv(ID3D12GraphicsCommandList* commandList, int tex
 }
 
 
-void PostEffect::PreDrawScene(ID3D12GraphicsCommandList* commandList, int targetTexIndex, bool clear) {
+// 指定した描画先をRTVとして接続し、そのテクスチャの実寸に描画範囲を合わせます。
+void PostEffect::PreDrawScene(ID3D12GraphicsCommandList* commandList, std::int32_t targetTexIndex, bool clear) {
     // 指定されたテクスチャを描画先(RTV)に切り替える
     TransitionToRtv(commandList, targetTexIndex);
 
@@ -393,7 +394,7 @@ void PostEffect::PreDrawScene(ID3D12GraphicsCommandList* commandList, int target
     D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = rt.rtvHeap->GetCPUDescriptorHandleForHeapStart();
     commandList->OMSetRenderTargets(1, &rtvHandle, false, nullptr);
 
-    // 前段の結果へ加算するパスでは clear=false にして内容を保持します。
+    // 初期化が指定された場合だけ色をクリアし、加算パスでは前段の結果を保持する。
     if (clear) {
         float clearColor[] = { 0.1f, 0.1f, 0.1f, 1.0f };
         commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
@@ -410,7 +411,8 @@ void PostEffect::PreDrawScene(ID3D12GraphicsCommandList* commandList, int target
     commandList->RSSetScissorRects(1, &scissorRect);
 }
 
-void PostEffect::PreDrawSceneWithDepth(ID3D12GraphicsCommandList* commandList, int targetTexIndex, bool clear) {
+// 深度テストを行う描画へ、サイズを揃えた色と深度の描画先を渡します。
+void PostEffect::PreDrawSceneWithDepth(ID3D12GraphicsCommandList* commandList, std::int32_t targetTexIndex, bool clear) {
     // 色と深度のRender Targetを同時に束ね、特殊パスが深度判定を使えるようにします。
     TransitionToRtv(commandList, targetTexIndex);
 
@@ -419,6 +421,7 @@ void PostEffect::PreDrawSceneWithDepth(ID3D12GraphicsCommandList* commandList, i
     D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = rt.dsvHeap->GetCPUDescriptorHandleForHeapStart();
     commandList->OMSetRenderTargets(1, &rtvHandle, false, &dsvHandle);
 
+    // クリア指定時は環境の背景色で色を初期化し、深度を1.0に戻す。
     if (clear) {
         const engine::Vector4& sceneClearColor = engine::LightManager::GetInstance()->GetSceneClearColor();
         float clearColor[] = {
@@ -432,28 +435,33 @@ void PostEffect::PreDrawSceneWithDepth(ID3D12GraphicsCommandList* commandList, i
         commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
     }
 
+    // プレビューの実寸をビューポートとシザーに設定する。
     D3D12_RESOURCE_DESC resDesc = rt.resource->GetDesc();
     D3D12_VIEWPORT viewport = { 0.0f, 0.0f, (float)resDesc.Width, (float)resDesc.Height, 0.0f, 1.0f };
     D3D12_RECT scissorRect = { 0, 0, (LONG)resDesc.Width, (LONG)resDesc.Height };
     commandList->RSSetViewports(1, &viewport);
     commandList->RSSetScissorRects(1, &scissorRect);
 
-    ID3D12DescriptorHeap* descriptorHeaps[] = { SrvManager::GetInstance()->GetDescriptorHeap() };
+    // 続く描画でテクスチャを参照できるよう、SRVのヒープを設定する。
+    ID3D12DescriptorHeap* descriptorHeaps[] = { engine::SrvManager::GetInstance()->GetDescriptorHeap() };
     commandList->SetDescriptorHeaps(1, descriptorHeaps);
 }
 
-bool PostEffect::BeginCameraPreviewSpecialPass(ID3D12GraphicsCommandList* commandList, int targetTexIndex) {
-    // 必要な色・深度・Grab資源が揃う場合だけ、カメラプレビュー用パスを開始します。
-    if (!commandList || targetTexIndex < 0 || targetTexIndex >= static_cast<int>(renderTextures_.size())) {
+// カメラプレビューの特殊マテリアル描画を準備します。描画先と読み取り用の深度を接続できた場合はtrueを返します。
+bool PostEffect::BeginCameraPreviewSpecialPass(ID3D12GraphicsCommandList* commandList, std::int32_t targetTexIndex) {
+    // コマンドリストがない、または描画先番号が範囲外の場合はGPU命令を積まない。
+    if (!commandList || targetTexIndex < 0 || targetTexIndex >= static_cast<std::int32_t>(renderTextures_.size())) {
         return false;
     }
 
     RenderTexture& rt = renderTextures_[targetTexIndex];
+    // 背景コピー、深度、双方を参照するビューのいずれかが未作成なら、通常描画の状態を維持する。
     if (!rt.resource || !rt.depthResource || !rt.grabResource ||
         !rt.rtvHeap || !rt.dsvHeap || rt.depthSrvHandle == 0 || rt.grabSrvHandle == 0) {
         return false;
     }
 
+    // 背景色をコピーできるよう描画先を外し、色を転送元、退避先を転送先へ切り替える。
     commandList->OMSetRenderTargets(0, nullptr, false, nullptr);
 
     D3D12_RESOURCE_BARRIER barriers[2]{};
@@ -470,6 +478,7 @@ bool PostEffect::BeginCameraPreviewSpecialPass(ID3D12GraphicsCommandList* comman
     // 屈折で読む背景色を別のテクスチャへ退避し、特殊パスで描き足す色との同時読み書きを避けます。
     commandList->CopyResource(rt.grabResource.Get(), rt.resource.Get());
 
+    // コピー後は元の色を描画先に、退避した背景色をピクセルシェーダーの入力に切り替える。
     barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
     barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
     barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
@@ -479,6 +488,7 @@ bool PostEffect::BeginCameraPreviewSpecialPass(ID3D12GraphicsCommandList* comman
 
     constexpr D3D12_RESOURCE_STATES kReadOnlyDepthState =
         D3D12_RESOURCE_STATE_DEPTH_READ | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    // 深度が両方の読み取り用途を満たす状態でなければ、深度テストとPS参照を同時に許す状態へ遷移する。
     if (rt.depthState != kReadOnlyDepthState) {
         D3D12_RESOURCE_BARRIER depthBarrier{};
         depthBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -497,20 +507,23 @@ bool PostEffect::BeginCameraPreviewSpecialPass(ID3D12GraphicsCommandList* comman
     return true;
 }
 
-void PostEffect::EndCameraPreviewSpecialPass(ID3D12GraphicsCommandList* commandList, int targetTexIndex) {
-    // 特殊パス後の資源状態を戻し、続く通常描画へ渡します。
-    if (!commandList || targetTexIndex < 0 || targetTexIndex >= static_cast<int>(renderTextures_.size())) {
+// BeginCameraPreviewSpecialPass()で設定した読み取り用深度から、通常描画の書き込み用深度へ戻します。
+void PostEffect::EndCameraPreviewSpecialPass(ID3D12GraphicsCommandList* commandList, std::int32_t targetTexIndex) {
+    // コマンドリストがない、または描画先番号が範囲外なら、通常の描画先を設定できないため終了する。
+    if (!commandList || targetTexIndex < 0 || targetTexIndex >= static_cast<std::int32_t>(renderTextures_.size())) {
         return;
     }
 
     RenderTexture& rt = renderTextures_[targetTexIndex];
 
+    // 色・深度のリソースやビューが欠けている場合は、通常描画用の再接続を行えない。
     if (!rt.resource || !rt.depthResource || !rt.rtvHeap || !rt.dsvHeap) {
         return;
     }
 
+    // 特殊パスの読み取り専用ビューを外してから、深度の状態を変更する。
     commandList->OMSetRenderTargets(0, nullptr, false, nullptr);
-    // 先に読み取り用DSVを外し、深度を書き込める状態に戻ってから通常のDSVを接続します。
+    // 読み取り専用DSVを外した後、深度がすでに書き込み可能でなければ状態を戻す。
     if (rt.depthState != D3D12_RESOURCE_STATE_DEPTH_WRITE) {
         D3D12_RESOURCE_BARRIER depthBarrier{};
         depthBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -521,12 +534,14 @@ void PostEffect::EndCameraPreviewSpecialPass(ID3D12GraphicsCommandList* commandL
         rt.depthState = D3D12_RESOURCE_STATE_DEPTH_WRITE;
     }
 
+    // 色と書き込み用の深度ビューを再接続し、通常描画を続けられるようにする。
     const D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = rt.rtvHeap->GetCPUDescriptorHandleForHeapStart();
     const D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = rt.dsvHeap->GetCPUDescriptorHandleForHeapStart();
     commandList->OMSetRenderTargets(1, &rtvHandle, false, &dsvHandle);
 }
 
-void PostEffect::Draw(ID3D12GraphicsCommandList* commandList, uint32_t srvHandle, int psoIndex) {
+// 接続済みの描画先へ、指定されたPSOと入力画像で全画面三角形を1枚描き、パス数を記録します。
+void PostEffect::Draw(ID3D12GraphicsCommandList* commandList, uint32_t srvHandle, std::int32_t psoIndex) {
     commandList->SetGraphicsRootSignature(rootSignature_.Get());
     commandList->SetPipelineState(pipelineStates_[psoIndex].Get());
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST); // 3頂点で全画面を覆う
@@ -535,35 +550,36 @@ void PostEffect::Draw(ID3D12GraphicsCommandList* commandList, uint32_t srvHandle
     commandList->SetGraphicsRootConstantBufferView(0, constBuffer_->GetGPUVirtualAddress());
 
     // [1] t0 のセット (メイン画像)
-    SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 1, srvHandle);
+    engine::SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 1, srvHandle);
 
     // [2] t1 のセット (LUT画像) 
     // LUTまたはノイズが未設定でもテーブルは有効なSRVを指すよう、主画像のSRVを代わりに束縛します。
     uint32_t currentLutHandle = (lutSrvHandle_ > 0) ? lutSrvHandle_ : srvHandle;
-    SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 2, currentLutHandle);
+    engine::SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 2, currentLutHandle);
 
     // [3] t2 のセット (深度テクスチャ)
-    SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 3, dxCommon_->GetDepthSrvHandle());
+    engine::SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 3, dxCommon_->GetDepthSrvHandle());
 
     // [4] t3 のセット (ノイズテクスチャ)
     uint32_t currentNoiseHandle = (noiseSrvHandle_ > 0) ? noiseSrvHandle_ : srvHandle;
-    SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 4, currentNoiseHandle);
+    engine::SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 4, currentNoiseHandle);
 
-    commandList->DrawInstanced(3, 1, 0, 0); // 3頂点に変更
+    // 全画面三角形を描画し、描画回数とポストエフェクトのパス数に記録する。
+    commandList->DrawInstanced(3, 1, 0, 0);
     engine::RenderStats::GetInstance()->RecordNonIndexedDraw(3, 1, 1);
     engine::RenderStats::GetInstance()->RecordPostProcessPass();
 }
 
+// シェーダー定数のアップロード用バッファを作り、経過時間0秒の既定値を書き込みます。
 void PostEffect::CreateConstBuffer() {
-    // 定数バッファは256バイトアラインメントが必要
     // サイズへ255を足して下位8ビットを消し、次の256バイト境界まで切り上げます。
     constBuffer_ = dxCommon_->CreateBufferResource((sizeof(Params) + 0xff) & ~0xff);
     constBuffer_->Map(0, nullptr, reinterpret_cast<void**>(&paramsData_));
     *paramsData_ = MakeNeutralPostEffectParams(0.0f);
 }
 
-// 指定サイズの描画先と深度・参照用Viewを作成し、完了後に保持先を差し替えます。
-void PostEffect::CreateRenderTexture(int texIndex, int width, int height, DXGI_FORMAT format) {
+// 描画先の色・深度と各ビューを用意します。プレビュー用では深度参照と背景コピーのSRVも設定します。
+void PostEffect::CreateRenderTexture(std::int32_t texIndex, std::int32_t width, std::int32_t height, DXGI_FORMAT format) {
     ID3D12Device* device = dxCommon_->GetDevice();
 
     RenderTexture& rt = renderTextures_[texIndex];
@@ -571,18 +587,19 @@ void PostEffect::CreateRenderTexture(int texIndex, int width, int height, DXGI_F
         texIndex == kCameraPreviewTextureIndex ||
         texIndex == kCinematicCameraPreviewTextureIndex;
 
-    // 1. リソース設定 
+    // 指定されたピクセル寸法で、描画先として使える1枚の色テクスチャを作る。
     D3D12_RESOURCE_DESC resDesc = {};
     resDesc.Width = width;
     resDesc.Height = height;
     resDesc.MipLevels = 1;
     resDesc.DepthOrArraySize = 1;
-    resDesc.Format = format; // ★ HDRフォーマットが渡される
+    // 作成する描画先の形式は、呼び出し元が指定した形式に合わせる。
+    resDesc.Format = format;
     resDesc.SampleDesc.Count = 1;
     resDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     resDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
 
-    // クリアカラー (少し暗めのグレーなど)
+    // 最適化クリア値はPreDrawSceneで指定する不透明のグレーに合わせる。
     D3D12_CLEAR_VALUE clearValue = {};
     clearValue.Format = format;
     clearValue.Color[0] = 0.1f;
@@ -590,7 +607,6 @@ void PostEffect::CreateRenderTexture(int texIndex, int width, int height, DXGI_F
     clearValue.Color[2] = 0.1f;
     clearValue.Color[3] = 1.0f;
 
-    // リソース生成
     D3D12_HEAP_PROPERTIES heapProps = { D3D12_HEAP_TYPE_DEFAULT };
     Microsoft::WRL::ComPtr<ID3D12Resource> newResource;
     HRESULT hr = device->CreateCommittedResource(
@@ -599,17 +615,19 @@ void PostEffect::CreateRenderTexture(int texIndex, int width, int height, DXGI_F
         IID_PPV_ARGS(&newResource)
     );
 
+    // 色リソースの作成に失敗した場合は、ビューを作らずに終了する。
     if (FAILED(hr) || !newResource) {
         return;
     }
 
-    // 2. RTV (描画先としての設定)
+    // 色の1枚分の描画ビューを、CPUから設定できる専用のヒープに作る。
     D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc = {};
     rtvHeapDesc.NumDescriptors = 1;
     rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> newRtvHeap;
     hr = device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&newRtvHeap));
 
+    // 色を描画先として接続するヒープを確保できなければ、色のビューを設定できない。
     if (FAILED(hr) || !newRtvHeap) {
         return;
     }
@@ -643,6 +661,7 @@ void PostEffect::CreateRenderTexture(int texIndex, int width, int height, DXGI_F
         IID_PPV_ARGS(&newDepthResource)
     );
 
+    // 色と同じサイズの深度を確保できなければ、描画先としての登録を見送る。
     if (FAILED(hr) || !newDepthResource) {
         return;
     }
@@ -653,6 +672,7 @@ void PostEffect::CreateRenderTexture(int texIndex, int width, int height, DXGI_F
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> newDsvHeap;
     hr = device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&newDsvHeap));
 
+    // 通常描画と特殊パスの深度ビューを置くヒープがなければ、描画先を登録できない。
     if (FAILED(hr) || !newDsvHeap) {
         return;
     }
@@ -668,6 +688,7 @@ void PostEffect::CreateRenderTexture(int texIndex, int width, int height, DXGI_F
     readOnlyDsv.ptr += device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
     device->CreateDepthStencilView(newDepthResource.Get(), &dsvDesc, readOnlyDsv);
 
+    // カメラプレビュー2種では、特殊シェーダーの深度参照用SRVを用意する。
     if (needsPreviewSampling) {
         D3D12_SHADER_RESOURCE_VIEW_DESC depthSrvDesc{};
         depthSrvDesc.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
@@ -675,33 +696,35 @@ void PostEffect::CreateRenderTexture(int texIndex, int width, int height, DXGI_F
         depthSrvDesc.Texture2D.MipLevels = 1;
         depthSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 
+        // 解像度変更で深度SRVがすでにあれば、その番号のビューを更新する。
         if (rt.depthSrvHandle != 0) {
-            SrvManager::GetInstance()->CreateSrvForResource(rt.depthSrvHandle, newDepthResource.Get(), depthSrvDesc);
+            engine::SrvManager::GetInstance()->CreateSrvForResource(rt.depthSrvHandle, newDepthResource.Get(), depthSrvDesc);
         }
+        // 深度SRVをまだ持たなければ、新しい番号を確保する。
         else {
-            rt.depthSrvHandle = SrvManager::GetInstance()->CreateSrv(newDepthResource.Get(), depthSrvDesc);
+            rt.depthSrvHandle = engine::SrvManager::GetInstance()->CreateSrv(newDepthResource.Get(), depthSrvDesc);
         }
     }
 
-    // 3. SRV (画像としての設定)
+    // 出力色を後段のシェーダーやUIから読むためのビューを設定する。
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
     srvDesc.Format = format;
     srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     srvDesc.Texture2D.MipLevels = 1;
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 
-    // SRVManagerを使ってインデックスを取得
     // 再生成では従来のSRV番号を書き換え、ImGuiなどが保持する表示用ハンドルを維持します。
     if (rt.srvHandle != 0) {
-        SrvManager::GetInstance()->CreateSrvForResource(rt.srvHandle, newResource.Get(), srvDesc);
+        engine::SrvManager::GetInstance()->CreateSrvForResource(rt.srvHandle, newResource.Get(), srvDesc);
+    // 初回の生成では、出力色を参照するためにSRV番号を確保する。
     } else {
-        rt.srvHandle = SrvManager::GetInstance()->CreateSrv(newResource.Get(), srvDesc);
+        rt.srvHandle = engine::SrvManager::GetInstance()->CreateSrv(newResource.Get(), srvDesc);
     }
 
     Microsoft::WRL::ComPtr<ID3D12Resource> newGrabResource;
 
+    // カメラプレビュー2種に限り、特殊マテリアルが読む背景色のコピー先を作る。
     if (needsPreviewSampling) {
-        // 特殊マテリアル用の背景コピーはCamera Previewの2枚だけに確保します。
         D3D12_RESOURCE_DESC grabDesc = resDesc;
         grabDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
         hr = device->CreateCommittedResource(
@@ -711,18 +734,22 @@ void PostEffect::CreateRenderTexture(int texIndex, int width, int height, DXGI_F
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
             nullptr,
             IID_PPV_ARGS(&newGrabResource));
+        // 背景コピー先の確保に失敗したら保持するリソースの差し替え前に中断する。色と深度のSRVの設定はここより先に行われている。
         if (FAILED(hr) || !newGrabResource) {
             return;
         }
 
+        // 背景コピーのSRVがすでにあれば、その番号のビューを新しいリソースへ向け直す。
         if (rt.grabSrvHandle != 0) {
-            SrvManager::GetInstance()->CreateSrvForResource(rt.grabSrvHandle, newGrabResource.Get(), srvDesc);
+            engine::SrvManager::GetInstance()->CreateSrvForResource(rt.grabSrvHandle, newGrabResource.Get(), srvDesc);
         }
+        // 背景コピーのSRVをまだ持たなければ、新しい番号を確保する。
         else {
-            rt.grabSrvHandle = SrvManager::GetInstance()->CreateSrv(newGrabResource.Get(), srvDesc);
+            rt.grabSrvHandle = engine::SrvManager::GetInstance()->CreateSrv(newGrabResource.Get(), srvDesc);
         }
     }
 
+    // 用意したリソースを保存し、色と深度の状態追跡をそれぞれの生成直後の状態に揃える。
     rt.resource = newResource;
     rt.rtvHeap = newRtvHeap;
     rt.depthResource = newDepthResource;

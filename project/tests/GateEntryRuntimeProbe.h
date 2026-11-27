@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #ifdef USE_IMGUI
 #include "SceneManager.h"
 #include "Player.h"
@@ -16,9 +17,9 @@
 #include <stdexcept>
 
 // 専用worktreeでの明示起動だけが、実際のGPU描画とゲート遷移を検証します。
-namespace GateEntryRuntimeProbe {
+namespace gateEntryRuntimeProbe {
 inline bool Enabled() { return GetEnvironmentVariableA("CG2_GATE_ENTRY_TEST",nullptr,0)>0; }
-inline int phase = 0;
+inline std::int32_t phase = 0;
 inline bool WantsPlay() { return phase != 3; }
 inline void Require(bool value,const char* message) { if (!value) throw std::runtime_error(message); }
 inline bool Near(float a,float b) { return std::abs(a-b)<0.001f; }
@@ -64,17 +65,17 @@ inline void CheckDissolve(Player* player) {
 }
 inline void AfterDraw(SceneManager* manager,const std::string& path) {
     static std::ofstream log(path,std::ios::trunc);
-    static ULONGLONG started=GetTickCount64();
-    static bool done=false,capturedEarly=false,capturedLate=false,sawSelectDissolve=false,sawGameplayDissolve=false;
-    static int frames=0;
-    static uint32_t attribute=0,mask=0;
-    static float emissive=0;
-    static BlendMode blend=BlendMode::Normal;
-    static engine::Vector3 scale{};
-    auto finish=[&](const std::string& message) { log<<message<<std::endl;done=true;WinApp::CloseNow(); };
-    if (done) return;
+    static ULONGLONG sStarted=GetTickCount64();
+    static bool sDone=false,sCapturedEarly=false,sCapturedLate=false,sSawSelectDissolve=false,sSawGameplayDissolve=false;
+    static std::int32_t sFrames=0;
+    static uint32_t sAttribute=0,sMask=0;
+    static float sEmissive=0;
+    static BlendMode sBlend=BlendMode::kNormal;
+    static engine::Vector3 sScale{};
+    auto finish=[&](const std::string& message) { log<<message<<std::endl;sDone=true;WinApp::CloseNow(); };
+    if (sDone) return;
     try {
-        Require(GetTickCount64()-started<600000,"gate runtime timeout");
+        Require(GetTickCount64()-sStarted<600000,"gate runtime timeout");
         if (manager->IsTransitioning()) return;
         auto* scene=manager->GetCurrentScene();
         auto* player=GetScenePlayer(scene);
@@ -90,19 +91,19 @@ inline void AfterDraw(SceneManager* manager,const std::string& path) {
             gate->SetTransitionEnabled(true);
             Require(!gate->OnCollision(player),"invalid destination started a presentation");
             gate->SetParameter(&engine::EntityParameter::targetScene, destination);
-            attribute=player->GetCollisionAttribute();mask=player->GetCollisionMask();
-            emissive=player->GetEmissive();blend=player->GetBlendMode();scale=player->GetScale();
+            sAttribute=player->GetCollisionAttribute();sMask=player->GetCollisionMask();
+            sEmissive=player->GetEmissive();sBlend=player->GetBlendMode();sScale=player->GetScale();
             Start(gate,player);phase=2;log<<"START tutorial entry"<<std::endl;return;
         }
         if (phase==2) {
             auto* gate=FindGate(scene);
             Require(gate && gate->IsEntryPresentationActive(),"tutorial entry disappeared");
-            if (gate->GetEntryPresentationProgress()>0.22f && !capturedEarly) {
-                CheckDissolve(player);Capture(path+".tutorial-early.png");capturedEarly=true;
+            if (gate->GetEntryPresentationProgress()>0.22f && !sCapturedEarly) {
+                CheckDissolve(player);Capture(path+".tutorial-early.png");sCapturedEarly=true;
                 log<<"DRAW tutorial partial dissolve"<<std::endl;
             }
             if (gate->GetEntryPresentationProgress()>0.43f) {
-                CheckDissolve(player);Capture(path+".tutorial-late.png");capturedLate=true;phase=3;
+                CheckDissolve(player);Capture(path+".tutorial-late.png");sCapturedLate=true;phase=3;
             }
             return;
         }
@@ -110,9 +111,9 @@ inline void AfterDraw(SceneManager* manager,const std::string& path) {
             auto* gate=FindGate(scene);
             Require(gate && !gate->IsEntryPresentationActive(),"stop did not cancel presentation");
             Require(!player->IsCinematicLocked(),"stop retained cinematic lock");
-            Require(player->GetCollisionAttribute()==attribute && player->GetCollisionMask()==mask,"collision restoration failed");
-            Require(player->GetBlendMode()==blend && Near(player->GetEmissive(),emissive),"material restoration failed");
-            Require(Near(player->GetScale().x,scale.x),"scale restoration failed");
+            Require(player->GetCollisionAttribute()==sAttribute && player->GetCollisionMask()==sMask,"collision restoration failed");
+            Require(player->GetBlendMode()==sBlend && Near(player->GetEmissive(),sEmissive),"material restoration failed");
+            Require(Near(player->GetScale().x,sScale.x),"scale restoration failed");
             Require(player->GetMaterialData()->portalClipEnabled<0.5f,"stop retained dissolve");
             log<<"PASS stop restored material and collision"<<std::endl;
             auto away=gate->GetWorldPosition();away.z-=20.0f;
@@ -121,36 +122,36 @@ inline void AfterDraw(SceneManager* manager,const std::string& path) {
         }
         if (phase==4) { Start(FindGate(scene),player);phase=5;return; }
         if (phase==5 && name=="SELECT") {
-            Require(capturedEarly && capturedLate,"tutorial dissolve was not rendered");
+            Require(sCapturedEarly && sCapturedLate,"tutorial dissolve was not rendered");
             auto* gate=FindGate(scene,true);Require(gate,"select gate 0 missing");
             Require(!gate->OnCollision(player),"display node triggered an immediate transition");
             player->SetTranslate(gate->GetWorldPosition());player->SetVelocity({0,0,0});
-            player->UpdateWorldMatrix(true);phase=6;frames=0;
+            player->UpdateWorldMatrix(true);phase=6;sFrames=0;
             log<<"PASS tutorial gate reached SELECT; approach select gate"<<std::endl;return;
         }
         if (phase==6 && name=="SELECT") {
             if (player->IsCinematicLocked() && player->GetMaterialData()->portalClipProgress>0.14f) {
-                CheckDissolve(player);sawSelectDissolve=true;
-                if (++frames==12) Capture(path+".select.png");
+                CheckDissolve(player);sSawSelectDissolve=true;
+                if (++sFrames==12) Capture(path+".select.png");
             }
             return;
         }
         if (phase==6 && name=="GAMEPLAY") {
-            Require(sawSelectDissolve,"select did not use shared dissolve");
-            phase=7;frames=0;log<<"PASS select gate reached GAMEPLAY"<<std::endl;return;
+            Require(sSawSelectDissolve,"select did not use shared dissolve");
+            phase=7;sFrames=0;log<<"PASS select gate reached GAMEPLAY"<<std::endl;return;
         }
         if (phase==7) Require(name=="GAMEPLAY","gameplay returned before manual gate contact");
         if (phase==7 && name=="GAMEPLAY") {
-            if (++frames<200 || player->IsGateReturnAnimationActive() || !player->IsControlActive()) return;
+            if (++sFrames<200 || player->IsGateReturnAnimationActive() || !player->IsControlActive()) return;
             Start(FindGate(scene),player);phase=8;return;
         }
         if (phase==8 && name=="GAMEPLAY") {
             auto* gate=FindGate(scene);
-            if (gate && gate->GetEntryPresentationProgress()>0.22f) {CheckDissolve(player);sawGameplayDissolve=true;}
+            if (gate && gate->GetEntryPresentationProgress()>0.22f) {CheckDissolve(player);sSawGameplayDissolve=true;}
             return;
         }
         if (phase==8 && name=="SELECT") {
-            Require(sawGameplayDissolve,"gameplay return gate did not dissolve");
+            Require(sSawGameplayDissolve,"gameplay return gate did not dissolve");
             finish("PASS: tutorial, select and gameplay gates rendered dissolve; cancellation restored state");
         }
     } catch (const std::exception& error) {finish(std::string("FAIL: ")+error.what());}

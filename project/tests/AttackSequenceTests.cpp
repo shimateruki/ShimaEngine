@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "game/actor/enemy/combat/EnemyAttackProfile.h"
 #include <numbers>
 #include "game/actor/combat/AttackSequence.h"
@@ -62,7 +63,7 @@ int main(int argc, char** argv) {
         AttackSequenceClock clock;
         Check(clock.Start(saved->sequence), "start failed");
         std::vector<float> fired;
-        int projectileCount = 0;
+        std::int32_t projectileCount = 0;
         auto execute = [&](const AttackSequenceEvent& event) { fired.push_back(event.time); projectileCount += event.count; };
         auto always = [](const std::string&) { return true; };
         clock.Update(0, always, execute);
@@ -97,7 +98,7 @@ int main(int argc, char** argv) {
         Check(fired.empty(), "cancel failed");
         Check(clock.Start(saved->sequence), "seek restart failed");
 
-        for (int i = 0; i < 60; ++i)
+        for (std::int32_t i = 0; i < 60; ++i)
             clock.Update(1.0f / 60, always, execute);
         Check(fired.size() == 3, "fixed step replay differs");
         auto invalid = saved->sequence;
@@ -122,11 +123,11 @@ int main(int argc, char** argv) {
         context.ownerSize = {2, 3, 2};
         context.hasTarget = true;
         context.targetDistance = 9;
-        int shots = 0, flashes = 0;
+        std::int32_t shots = 0, flashes = 0;
         Check(clock.Start(fan->sequence), "prism clock failed");
         auto verifyFan = [&](const AttackSequenceEvent& event) {
             const auto emission = ResolveAttackSequenceEmission(event, context, fan->minSpeed, fan->maxSpeed);
-            const int index = static_cast<int>(std::round(event.time / 0.095f));
+            const std::int32_t index = static_cast<std::int32_t>(std::round(event.time / 0.095f));
             const float angle = (index - 2) * 0.13f;
             auto near = [](float a, float b) { return std::abs(a - b) < 0.00001f; };
             Check(near(emission.direction.x, std::sin(angle)) && near(emission.direction.z, std::cos(angle)), "fan angle changed");
@@ -284,7 +285,7 @@ int main(int argc, char** argv) {
 
         for (auto& track : reorderedCombo.tracks)
             if (track.conditionTrack >= 0)
-                track.conditionTrack = static_cast<int>(reorderedCombo.tracks.size()) - 1 - track.conditionTrack;
+                track.conditionTrack = static_cast<std::int32_t>(reorderedCombo.tracks.size()) - 1 - track.conditionTrack;
         Check(reorderedCombo.Validate(&error), error);
         const std::string comboPath = std::string(argv[1]) + ".combo.json";
         combo.tracks[4].clipOffset = 0.15f;
@@ -374,9 +375,9 @@ int main(int argc, char** argv) {
         lottery.attacks = {a, b};
         Check(lottery.SelectSequence(2, 10, {}, 0.9f)->id == "a", "priority selection changed");
         lottery.selectionMode = "weighted";
-        int countA = 0;
+        std::int32_t countA = 0;
 
-        for (int i = 0; i < 100; ++i)
+        for (std::int32_t i = 0; i < 100; ++i)
             if (lottery.SelectSequence(2, 10, {}, (i + 0.5f) / 100)->id == "a")
                 ++countA;
         Check(countA == 25, "weighted selection probabilities incorrect");
@@ -463,7 +464,7 @@ int main(int argc, char** argv) {
         Check(events[1].projectile.radius == componentFallback.radius && events[1].projectile.collisionEnabled,
             "editing one projectile changed another projectile");
         Check(clock.Start(reopenedComponents.attacks.front().sequence), "component clock start failed");
-        int enabledEvents = 0;
+        std::int32_t enabledEvents = 0;
         clock.Update(1, always, [&](const AttackSequenceEvent&) { ++enabledEvents; });
         Check(enabledEvents == 1 && !clock.WasStoppedByCondition(), "disabled projectile stopped later events");
         auto badComponent = componentFallback;
@@ -488,11 +489,11 @@ int main(int argc, char** argv) {
         placed.sizeForward = 0.8f;
         placed.yawDegrees = 35;
         const auto initialPosition = ResolveAttackSequenceEmission(placed,placementContext,0,0).position;
-        AttackPlacementMath::RotateEvent(placed,placementContext.ownerSize,1.2f);
+        attackPlacementMath::RotateEvent(placed,placementContext.ownerSize,1.2f);
         const auto rotatedPosition = ResolveAttackSequenceEmission(placed,placementContext,0,0).position;
         Check(engine::Math::Length(rotatedPosition-initialPosition)<0.0001f,"gizmo rotation moved emission position");
         const engine::Vector3 worldDelta{3,1,-2};
-        const auto localDelta = AttackPlacementMath::ToLocalDelta(worldDelta,(std::numbers::pi_v<float> * 0.5f)+placed.yawDegrees*(std::numbers::pi_v<float> / 180.0f));
+        const auto localDelta = attackPlacementMath::ToLocalDelta(worldDelta,(std::numbers::pi_v<float> * 0.5f)+placed.yawDegrees*(std::numbers::pi_v<float> / 180.0f));
         placed.right += localDelta.x;
         placed.up += localDelta.y;
         placed.forward += localDelta.z;
@@ -506,10 +507,10 @@ int main(int argc, char** argv) {
         auto midKey = keyed.Evaluate(0.5f);
         midKey.time = 0.5f;
         midKey.position[0] = 9;
-        Check(AttackPlacementMath::PutKey(keyed,midKey) && keyed.keys.size()==3 && keyed.keys[1].position[0]==9,
+        Check(attackPlacementMath::PutKey(keyed,midKey) && keyed.keys.size()==3 && keyed.keys[1].position[0]==9,
             "gizmo did not insert interpolated key at current time");
         midKey.position[0] = 8;
-        Check(AttackPlacementMath::PutKey(keyed,midKey) && keyed.keys.size()==3 && keyed.keys[1].position[0]==8,
+        Check(attackPlacementMath::PutKey(keyed,midKey) && keyed.keys.size()==3 && keyed.keys[1].position[0]==8,
             "gizmo duplicated existing time key");
         components.attacks.front().sequence.events = {placed};
         components.attacks.front().sequence.duration = 1;

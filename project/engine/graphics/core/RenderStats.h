@@ -8,17 +8,17 @@ namespace engine {
 
 /// <summary>描画命令を 1 フレーム内の用途別に分類します。</summary>
 enum class RenderPass : uint8_t {
-    MainScene,
-    Shadow,
-    CameraPreview,
-    GameUi,
-    PostProcess,
-    EditorOverlay,
-    Other,
-    Count
+    kMainScene,
+    kShadow,
+    kCameraPreview,
+    kGameUi,
+    kPostProcess,
+    kEditorOverlay,
+    kOther,
+    kCount
 };
 
-constexpr size_t kRenderPassCount = static_cast<size_t>(RenderPass::Count);
+constexpr size_t kRenderPassCount = static_cast<size_t>(RenderPass::kCount);
 
 /// <summary>1 種類の描画パスで GPU へ送った処理量です。</summary>
 // 関連：RenderStats（この型を使う機能の本体）
@@ -117,7 +117,7 @@ private:
     // 集計中と Editor 向けに公開済みのフレームを分離します。
     RenderFrameStats currentFrame_{};
     RenderFrameStats completedFrame_{};
-    RenderPass currentPass_ = RenderPass::Other; // 現在の記録先となる描画パス。
+    RenderPass currentPass_ = RenderPass::kOther; // 現在の記録先となる描画パス。
     uint64_t nextFrameNumber_ = 1;
     bool frameActive_ = false; // BeginFrameからEndFrameの記録区間内か。
 };
@@ -138,7 +138,7 @@ public:
     ScopedRenderPass& operator=(const ScopedRenderPass&) = delete;
 
 private:
-    RenderPass previousPass_ = RenderPass::Other; // スコープ終了時に戻す集計パス。
+    RenderPass previousPass_ = RenderPass::kOther; // スコープ終了時に戻す集計パス。
 };
 
 } // namespace engine

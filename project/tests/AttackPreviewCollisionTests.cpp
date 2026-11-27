@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "engine/component/Collider.h"
 #include "json.hpp"
 #include <fstream>
@@ -12,7 +13,7 @@ int main() {
         file >> source;
         const auto& saved = source.at("objects").at(0).at("collider");
         engine::ColliderConfig targetConfig;
-        targetConfig.type = static_cast<ColliderType>(saved.at("type").get<int>());
+        targetConfig.type = static_cast<engine::ColliderType>(saved.at("type").get<std::int32_t>());
         const auto& center = saved.at("center");
         const auto& size = saved.at("size");
         targetConfig.center = {center[0], center[1], center[2]};
@@ -28,7 +29,7 @@ int main() {
         projectileTransform.UpdateMatrix();
         engine::Collider projectile(&projectileTransform);
         engine::ColliderConfig projectileConfig;
-        projectileConfig.type = ColliderType::Sphere;
+        projectileConfig.type = engine::ColliderType::kSphere;
         projectileConfig.size = {0.6f, 0.6f, 0.6f};
         projectile.SetConfig(projectileConfig);
         projectile.SetScaleOverride({1, 1, 1});
@@ -42,7 +43,7 @@ int main() {
         projectileTransform.UpdateMatrix();
         if (projectile.CheckCollision(&target).isColliding)
             throw std::runtime_error("separated projectile reported contact");
-        targetConfig.type = ColliderType::None;
+        targetConfig.type = engine::ColliderType::kNone;
         target.SetConfig(targetConfig);
         projectileTransform.translate = {};
         projectileTransform.UpdateMatrix();

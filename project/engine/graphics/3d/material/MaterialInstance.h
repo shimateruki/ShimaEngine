@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "engine/utility/math/Math.h"
 
@@ -10,15 +11,15 @@ namespace engine { class Object3D; }
 // MaterialInstanceDataは、Object3dの描画設定を共有Assetとして再利用するための解決済みデータです。
 // 関連：MaterialInstanceAsset（読込・適用）、Object3D（材質設定）
 struct MaterialInstanceData {
-    int version = 1;
+    std::int32_t version = 1;
     std::string displayName;
     // 継承元JSONへの参照。空なら継承せず、このファイルの値だけを使います。
     std::string baseAsset;
 
-    engine::Vector4 color = engine::Colors::White;
-    int blendMode = 1;
-    int materialType = 0;
-    // 追加した通常シェーダー材質の保存ID。使う場合は互換用の整数材質番号を0にします。
+    engine::Vector4 color = engine::colors::kWhite;
+    std::int32_t blendMode = 1;
+    std::int32_t materialType = 0;
+    // 通常シェーダー用材質の保存ID。使用時は互換用の整数材質番号を0にする。
     std::string shaderMaterialId;
     float metallic = 0.0f;
     float roughness = 0.5f;

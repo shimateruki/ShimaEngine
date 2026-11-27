@@ -4,17 +4,19 @@
 
 #include "GpuParticleManager.h"
 
-// 通常移動の着地だけに使う短い粉塵。攻撃の予告リングとは見分けられる形にします。
-namespace BossGroundHopVfx {
+// 通常移動の踏み切りと着地に使う短い粉塵。攻撃の予告リングとは別の素材を使う。
+namespace bossGroundHopVfx {
 
 inline void EmitPuff(const engine::Vector3& groundPosition, const engine::Vector4& color, float radius, bool landing) {
     GpuParticleManager* particles = GpuParticleManager::GetInstance();
+    // GPU粒子サービスがまだ使えない場合は、この回の見た目だけを省く。
     if (!particles || !particles->IsInitialized()) {
         return;
     }
     // 着地と踏み切りでは素材を分け、素材が未読込ならその回の発生を省く。
     const char* presetName = landing ? "shared/player_land_dust" : "player/base/player_jump_dust";
     const auto preset = particles->GetPresets().find(presetName);
+    // 選んだ側の素材が未読込なら、代わりの粒子は発生させない。
     if (preset == particles->GetPresets().end()) {
         return;
     }
@@ -39,4 +41,4 @@ inline void EmitPuff(const engine::Vector3& groundPosition, const engine::Vector
     particles->EmitFromConfig(config);
 }
 
-} // namespace BossGroundHopVfx
+} // namespace bossGroundHopVfx

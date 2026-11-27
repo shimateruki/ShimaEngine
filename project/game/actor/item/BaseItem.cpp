@@ -12,6 +12,7 @@ void BaseItem::Initialize(engine::Object3DCommon* common, const std::string& mod
     ModelManager::GetInstance()->LoadModel(modelName);
     SetModel(modelName);
 
+    // 保存時の分類を共通アイテムにし、具体的な種別は生成側が後で設定する。
     SetClassName("Item");
     SetSaveCategory("Object");
     SetItemType("");
@@ -19,13 +20,13 @@ void BaseItem::Initialize(engine::Object3DCommon* common, const std::string& mod
 
     // プレイヤーとの接触だけを拾うトリガーにし、地形の物理衝突には参加させません。
     engine::ColliderConfig config;
-    config.type = ColliderType::Sphere;
+    config.type = engine::ColliderType::kSphere;
     config.size = {1.0f, 1.0f, 1.0f};
     SetColliderConfig(config);
     SetCollisionRadius(1.0f);
 
-    SetCollisionAttribute(CollisionCategories::Get("trigger"));
-    SetCollisionMask(CollisionCategories::Get("player"));
+    SetCollisionAttribute(engine::collisionCategories::Get("trigger"));
+    SetCollisionMask(engine::collisionCategories::Get("player"));
 }
 
 void BaseItem::Update(float deltaTime) {
@@ -42,6 +43,7 @@ void BaseItem::Update(float deltaTime) {
     engine::Vector3 rotate = GetRotation();
     rotate.y += rotationSpeed_ * deltaTime;
 
+    // 回転角が一周を超えた場合は、蓄積値を抑えるため2πラジアンだけ引く。
     if (rotate.y > (2.0f * std::numbers::pi_v<float>)) {
         rotate.y -= (2.0f * std::numbers::pi_v<float>);
     }
@@ -53,23 +55,26 @@ void BaseItem::Update(float deltaTime) {
 
 // 対象がプレイヤーで実際に重なった時だけ、派生クラスの取得処理を呼びます。
 bool BaseItem::OnCollision(engine::Object3D* other) {
-    // 属性だけで確定せず、相手の型と実際の重なりを確認してから取得します。
+    // 既に取得済みか接触相手が空なら、取得処理を呼ばない。
     if (isCollected_ || !other) {
         return false;
     }
 
     Player* player = dynamic_cast<Player*>(other);
 
+    // プレイヤー型でない相手は、衝突属性が合っていても取得できない。
     if (!player) {
         return false;
     }
 
-    CollisionInfo info = CheckCollision(other);
+    engine::CollisionInfo info = CheckCollision(other);
 
+    // 通知を受けても形状が実際に重なっていなければ、派生クラスの取得効果を発動させない。
     if (!info.isColliding) {
         return false;
     }
 
+    // 接触条件を満たした場合だけ、報酬と取得状態の確定を派生型に任せる。
     Collect(player);
     return true;
 }
@@ -82,7 +87,7 @@ void BaseItem::Collect(Player* player) {
 
 // 同じフレームの二重取得を防ぐため、取得直後に衝突と表示を無効化します。
 void BaseItem::MarkCollected() {
-    // 死亡フラグが反映される前にも、表示と判定を即時に止めます。
+    // 次の衝突通知より前に取得・不可視・判定無効を確定し、削除用の死亡状態も立てる。
     isCollected_ = true;
     SetCollisionAttribute(0);
     SetCollisionMask(0);

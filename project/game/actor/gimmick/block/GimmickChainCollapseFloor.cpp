@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "GimmickChainCollapseFloor.h"
 #include "ObjectPropertyDefinition.h"
 #include "CollisionConfig.h"
@@ -13,6 +14,7 @@ namespace {
 constexpr float kReturnDelaySeconds = 5.0f;
 } // namespace
 
+// 待機時に乗れる床を設定し、揺れ・落下・連鎖遅延・復帰の項目を登録する。
 void GimmickChainCollapseFloor::Initialize(engine::Object3DCommon* common, const std::string& modelName) {
     BaseGimmick::Initialize(common, modelName);
 
@@ -20,12 +22,13 @@ void GimmickChainCollapseFloor::Initialize(engine::Object3DCommon* common, const
     SetClassName("Gimmick");
     SetGimmickType("ChainCollapseFloor");
     SetName("Gimmick_ChainCollapseFloor");
-    SetCollisionAttribute(CollisionCategories::Get("ground"));
-    SetCollisionMask(CollisionCategories::GetDefaultGameplayMask());
+    SetCollisionAttribute(engine::collisionCategories::Get("ground"));
+    SetCollisionMask(engine::collisionCategories::GetDefaultGameplayMask());
     SetColor({0.75f, 0.92f, 1.0f, 0.82f});
     SetScale({2.0f, 0.25f, 2.0f});
     SetStatic(false);
 
+    // パラメーターが未作成なら既定の入れ物を用意してから、崩れ床用の初期値を設定する。
     if (!GetParameters().has_value())
         ResetParameters();
     SetParameter(&engine::EntityParameter::shakeDuration, 0.45f);
@@ -36,7 +39,7 @@ void GimmickChainCollapseFloor::Initialize(engine::Object3DCommon* common, const
     // 従来の一度きりの挙動を既定とし、必要なステージだけ明示的に復帰を有効化する。
     SetParameter(&engine::EntityParameter::returnOnOff, false);
 
-    // 編集項目の宣言です。動作処理と旧paramの保存キーは変更しません。
+    // Target IDと連鎖先のMy Event IDを結び付け、既存のパラメーターで各段階を調整できるようにする。
     using Self = GimmickChainCollapseFloor;
     engine::ObjectPropertyDefinition<Self> properties(*this, kTypeId, "連鎖崩れ床",
         "Target IDに次の床のMy Event IDを入れると連鎖します。");
@@ -51,8 +54,9 @@ void GimmickChainCollapseFloor::Initialize(engine::Object3DCommon* common, const
 
 void GimmickChainCollapseFloor::Update(float deltaTime) {
     // 待機・予告・揺れ・落下・消失を状態ごとに進め、再出現もここで管理します。
+    // 最初の更新で配置姿勢を記録し、岩モデルなら差し替えに使うモデルを揃える。
     if (!initializedStart_) {
-        // 最初に両モデルを準備し、踏んだ瞬間のディスク読込を避ける。
+        // 岩の系統なら両方のモデルを先読みし、踏んだ瞬間のディスク読み込みを避ける。
         if (GetModelName().find("Gimmicks/crumbling_rock_block") == 0) {
             ModelManager::GetInstance()->LoadModel("Gimmicks/crumbling_rock_block");
             ModelManager::GetInstance()->LoadModel("Gimmicks/crumbling_rock_block_intact");
@@ -63,20 +67,22 @@ void GimmickChainCollapseFloor::Update(float deltaTime) {
         initializedStart_ = true;
     }
 
-    if (state_ == State::Idle && SceneManager::GetInstance()->IsPlaying())
+    // ゲームの再生中に待機している床だけ、衝突通知に加えてプレイヤーの足元を調べる。
+    if (state_ == State::kIdle && SceneManager::GetInstance()->IsPlaying())
         CheckPlayerContact();
 
     switch (state_) {
-    case State::Idle:
+    case State::kIdle:
         // 待機中は配置を基準として記録し、崩れ始めた後の揺れや復帰位置に使う。
         startPosition_ = GetTransform()->translate;
         startRotation_ = GetTransform()->rotate;
         break;
 
-    case State::Pending:
+    case State::kPending:
         // 連鎖で通知された床は、順番に設定された待ちが尽きた時点で崩れ始める。
         pendingTimer_ -= deltaTime;
 
+        // 連鎖遅延が尽きたら揺れを開始する。
         if (pendingTimer_ <= 0.0f) {
             pendingTimer_ = 0.0f;
             StartCollapse();
@@ -84,7 +90,7 @@ void GimmickChainCollapseFloor::Update(float deltaTime) {
 
         break;
 
-    case State::Shaking: {
+    case State::kShaking: {
         // 元の位置を中心に水平の揺れを加え、予告が終わるまで落下へ移さない。
         timer_ += deltaTime;
 
@@ -94,14 +100,15 @@ void GimmickChainCollapseFloor::Update(float deltaTime) {
         SetTranslateX(startPosition_.x + offX);
         SetTranslateZ(startPosition_.z + offZ);
 
+        // 揺れの経過が設定時間に達したら、ChangeStateで落下と次の床への通知を始める。
         if (timer_ >= GetShakeDuration()) {
-            ChangeState(State::Falling);
+            ChangeState(State::kFalling);
         }
 
         break;
     }
 
-    case State::Falling:
+    case State::kFalling:
         // 重力と傾きを加えて落とし、落下用の時間が尽きたら非表示の状態へ移る。
         timer_ += deltaTime;
         velocityY_ -= GetGravity() * deltaTime;
@@ -110,17 +117,19 @@ void GimmickChainCollapseFloor::Update(float deltaTime) {
         SetEulerZ(GetRotation().z + 0.9f * deltaTime);
         SetQuaternionMaster(false);
 
+        // 設定した落下時間に達したら床を隠し、復帰待ちに入る。
         if (timer_ >= GetFallDuration()) {
-            ChangeState(State::Hidden);
+            ChangeState(State::kHidden);
         }
 
         break;
 
-    case State::Hidden:
+    case State::kHidden:
         // 再出現する設定のときだけ待ち時間を数え、配置と衝突をリセットする。
         if (ShouldReturnAfterCollapse()) {
             returnTimer_ += deltaTime;
 
+            // 消失後に5秒経過したら、元の配置と衝突を復元する。
             if (returnTimer_ >= kReturnDelaySeconds) {
                 ResetForRetry();
             }
@@ -133,10 +142,11 @@ void GimmickChainCollapseFloor::Update(float deltaTime) {
 }
 
 bool GimmickChainCollapseFloor::OnCollision(engine::Object3D* other) {
-    // 横から触れただけでは崩れず、プレイヤーが上面に乗った場合に始動します。
-    if (state_ == State::Idle && other && other->GetClassName() == "Player") {
-        CollisionInfo info = CheckCollision(other);
+    // 待機中にプレイヤーとの接触が届いたときだけ、実際に触れた方向を確認する。
+    if (state_ == State::kIdle && other && other->GetClassName() == "Player") {
+        engine::CollisionInfo info = CheckCollision(other);
 
+        // 床から見た法線のY成分が-0.5未満なら、上面への接触として揺れを開始する。
         if (info.isColliding && info.normal.y < -0.5f) {
             StartCollapse();
         }
@@ -151,40 +161,41 @@ void GimmickChainCollapseFloor::OnTrigger() {
 }
 
 void GimmickChainCollapseFloor::StartCollapse() {
-    // 予告中や待機中以外の重複始動を防ぎます。
-    if (state_ != State::Idle && state_ != State::Pending)
+    // 待機または連鎖待ちからだけ揺れへ進める。すでに進行中の崩落をやり直さない。
+    if (state_ != State::kIdle && state_ != State::kPending)
         return;
-    ChangeState(State::Shaking);
+    ChangeState(State::kShaking);
 }
 
 void GimmickChainCollapseFloor::QueueCollapse() {
     // 前の床だけ先に復帰して踏まれた場合も、後続床へのイベントを失わない。
-    if (state_ == State::Hidden && ShouldReturnAfterCollapse()) {
+    if (state_ == State::kHidden && ShouldReturnAfterCollapse()) {
         ResetForRetry();
     }
 
-    if (state_ != State::Idle)
+    // 待機状態になった床だけ、新たな連鎖の待ち時間を設定できる。
+    if (state_ != State::kIdle)
         return;
     pendingTimer_ = GetChainDelay();
-    ChangeState(State::Pending);
+    ChangeState(State::kPending);
 }
 
 void GimmickChainCollapseFloor::ResetForRetry() {
     // 復帰時は位置・判定・連鎖済みフラグを待機状態へ戻します。
-    ChangeState(State::Idle);
+    ChangeState(State::kIdle);
 }
 
 void GimmickChainCollapseFloor::ChangeState(State state) {
-    // 状態遷移時の表示と衝突を同時に切り替え、見えない床に乗れないようにします。
+    // 段階を切り替えて経過時間を初期化し、その段階の見た目・衝突・連鎖処理を適用する。
     state_ = state;
     timer_ = 0.0f;
 
     switch (state_) {
     // 初期姿勢と衝突を戻し、前回の落下・連鎖・乗員検知の状態を破棄します。
-    case State::Idle:
+    case State::kIdle:
         SetIsVisible(true);
-        SetCollisionAttribute(CollisionCategories::Get("ground"));
-        SetCollisionMask(CollisionCategories::GetDefaultGameplayMask());
+        SetCollisionAttribute(engine::collisionCategories::Get("ground"));
+        SetCollisionMask(engine::collisionCategories::GetDefaultGameplayMask());
         SetTranslate(startPosition_);
         SetEulerAngles(startRotation_);
         SetQuaternionMaster(false);
@@ -197,18 +208,18 @@ void GimmickChainCollapseFloor::ChangeState(State state) {
         break;
 
     // 通知を受けた床は予告色にするだけで、遅延が尽きるまで支えを残します。
-    case State::Pending:
+    case State::kPending:
         SetColor({0.95f, 0.85f, 0.35f, 0.9f});
         break;
 
     // 揺れ始めは色を強め、次の床へ通知する権利を用意します。
-    case State::Shaking:
+    case State::kShaking:
         SetColor({1.0f, 0.95f, 0.45f, 0.9f});
         triggeredNext_ = false;
         break;
 
     // 落下に入って初めて地面としての衝突を止め、次の床へ連鎖を通知します。
-    case State::Falling:
+    case State::kFalling:
         SetCollisionAttribute(0);
         SetCollisionMask(0);
         velocityY_ = 0.0f;
@@ -216,7 +227,7 @@ void GimmickChainCollapseFloor::ChangeState(State state) {
         break;
 
     // 落下後は姿と判定を消し、この時点から復帰までの時計を進められるようにします。
-    case State::Hidden:
+    case State::kHidden:
         SetIsVisible(false);
         SetCollisionAttribute(0);
         SetCollisionMask(0);
@@ -229,8 +240,10 @@ void GimmickChainCollapseFloor::ChangeState(State state) {
 void GimmickChainCollapseFloor::CheckPlayerContact() {
     // Sweepで床の直前に停止した場合と、薄い床を一フレームで通過した場合を拾う。
     BaseScene* scene = SceneManager::GetInstance()->GetCurrentScene();
+    // 現在のシーンが見つからない場合は、そのフレームの補助接地判定を行わない。
     if (!scene) return;
     Player* player = GetScenePlayer(scene);
+    // プレイヤーが見つからないか死亡している場合は、次の検出に古い足元座標を使わない。
     if (!player || player->IsDead()) {
         hasPreviousPlayerFoot_ = false;
         return;
@@ -258,17 +271,19 @@ void GimmickChainCollapseFloor::CheckPlayerContact() {
     const engine::Collider* collider = GetCollider();
     const bool insideFootprint = !collider || collider->GetConfig().footprint.size() < 3 ||
         collider->OverlapsFootprint(player->GetCollider());
+    // 上昇していないプレイヤーの足元が天面付近を通り、XZとフットプリントが重なるときに揺れを開始する。
     if (overlapsXZ && (nearTop || crossedTop) && player->GetVelocity().y <= 0.1f && insideFootprint) {
         StartCollapse();
     }
 }
 
 void GimmickChainCollapseFloor::UpdateRockAppearance() {
-    // 既存の透明床などは変更せず、新しい岩だけを不透明な石として扱う。
+    // 崩落岩モデルの系統だけ、床の段階に合わせて無傷・崩壊モデルと不透明色を適用する。
     if (GetModelName().find("Gimmicks/crumbling_rock_block") != 0)
         return;
-    const std::string desired = (state_ == State::Idle || state_ == State::Pending)
+    const std::string desired = (state_ == State::kIdle || state_ == State::kPending)
         ? "Gimmicks/crumbling_rock_block_intact" : "Gimmicks/crumbling_rock_block";
+    // 現在のモデルが段階に対応するモデルと異なるときだけ差し替える。
     if (GetModelName() != desired) {
         // モデル変更の自動フィットでEditor設定の判定が上書きされないようにする。
         const auto collider = GetColliderConfig();
@@ -289,10 +304,12 @@ void GimmickChainCollapseFloor::TriggerNextFloor() {
         return;
 
     triggeredNext_ = true;
-    int targetId = GetTargetId();
+    std::int32_t targetId = GetTargetId();
+    // 連鎖先IDが未設定を表す-1なら、シーンへイベントを送らない。
     if (targetId == -1)
         return;
 
+    // 現在のシーンを取得できた場合に、連鎖先IDへ起動イベントを送る。
     if (BaseScene* scene = SceneManager::GetInstance()->GetCurrentScene()) {
         scene->TriggerEvent(targetId);
     }
@@ -304,17 +321,17 @@ float GimmickChainCollapseFloor::GetShakeDuration() const {
 }
 
 float GimmickChainCollapseFloor::GetFallDuration() const {
-    // 落下演出の長さは配置設定から取得します。
+    // 落下を続ける秒数を取得する。パラメーターがなければ1.4秒。
     return GetParameters().has_value() ? GetParameters()->fallDuration : 1.4f;
 }
 
 float GimmickChainCollapseFloor::GetChainDelay() const {
-    // 連鎖する床同士の崩壊開始を少しずつ遅らせます。
+    // 後続床が揺れ始めるまでの遅延を秒で返す。パラメーターがなければ0.18秒。
     return GetParameters().has_value() ? GetParameters()->interval : 0.18f;
 }
 
 float GimmickChainCollapseFloor::GetGravity() const {
-    // 落下速度の増加率は配置設定に従います。
+    // 鉛直速度から毎秒差し引く加速度。パラメーターがなければ48ワールド単位/秒²。
     return GetParameters().has_value() ? GetParameters()->gravity : 48.0f;
 }
 

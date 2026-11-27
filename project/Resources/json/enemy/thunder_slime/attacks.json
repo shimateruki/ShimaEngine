@@ -26,6 +26,8 @@
     {
       "id": "player_line_lightning",
       "displayName": "コピー連続落雷",
+      "playerMovement": { "enabled": true, "duration": 0.15, "groundSpeedScale": 0.12, "airSpeedScale": 0.50, "airResponse": 15 },
+      "sequence": { "enabled": false, "binding": "player_special" },
       "targeting": {
         "minRange": 2.8,
         "maxRange": 22,
@@ -49,6 +51,18 @@
         "targetDistance": 18,
         "duration": 2.2
       }
+    },
+    {
+      "id": "player_thunder_charge",
+      "displayName": "コピー帯電・溜め",
+      "playerMovement": {"enabled": true, "duration": 0, "groundSpeedScale": 0.45, "airSpeedScale": 0.68, "airResponse": 9},
+      "sequence": { "enabled": false, "binding": "player_special" }
+    },
+    {
+      "id": "player_thunder_discharge",
+      "displayName": "コピー放電・反動",
+      "playerMovement": {"enabled": true, "duration": 0.22, "groundSpeedScale": 0.1, "airSpeedScale": 0.45, "airResponse": 15},
+      "sequence": { "enabled": false, "binding": "player_special" }
     }
   ]
 }

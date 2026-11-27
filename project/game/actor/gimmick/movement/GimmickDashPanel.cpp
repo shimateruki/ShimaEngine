@@ -13,10 +13,10 @@ void GimmickDashPanel::Initialize(engine::Object3DCommon* common, const std::str
     SetClassName("Gimmick");
     SetGimmickType("DashPanel");
     SetName("Gimmick_DashPanel");
-    SetCollisionAttribute(CollisionCategories::Get("ground"));
-    SetCollisionMask(CollisionCategories::GetDefaultGameplayMask());
+    SetCollisionAttribute(engine::collisionCategories::Get("ground"));
+    SetCollisionMask(engine::collisionCategories::GetDefaultGameplayMask());
     SetMaterialType(24);
-    SetBlendMode(BlendMode::None);
+    SetBlendMode(BlendMode::kNone);
     SetColor({1.0f, 0.38f, 0.04f, 1.0f});
     SetRoughness(0.42f);
     SetMetallic(0.28f);
@@ -25,13 +25,17 @@ void GimmickDashPanel::Initialize(engine::Object3DCommon* common, const std::str
     SetAutoTextureTiling(false);
     SetScale({2.0f, 0.25f, 1.2f});
 
-    // 編集項目の宣言です。動作処理と旧paramの保存キーは変更しません。
+    // 加速・解除の役割と、共通の配置項目をInspectorに表示する。
     using Self = GimmickDashPanel;
     engine::ObjectPropertyDefinition<Self> properties(*this, kTypeId, "ダッシュパネル",
         "上面を踏むと、ダッシュパネルは加速し、ダッシュ解除パネルはパネル加速を解除します。配置と向きはTransformで調整します。");
 }
 
 void GimmickDashPanel::Update(float deltaTime) {
+    // オブジェクト更新の後に衝突を調べるため、前回の上面接触を繰り越す。
+    touchedTopLastUpdate_ = touchedTopThisUpdate_;
+    touchedTopThisUpdate_ = false;
+
     // 編集済みの基準色を最初に保存し、短い発光パルスの後に戻す。
     if (!visualBaseCaptured_) {
         baseColor_ = GetColor();
@@ -66,21 +70,30 @@ void GimmickDashPanel::Update(float deltaTime) {
 
 // 上面を踏んだプレイヤーのパネル加速を更新し、発光パルスは短いクールダウンで抑えます。
 bool GimmickDashPanel::OnCollision(engine::Object3D* other) {
-    // 側面と裏面の接触では加速状態を変更しない。
     Player* player = dynamic_cast<Player*>(other);
-    if (!player)
+    // 対象が生存したプレイヤーでなければ、パネルの加速状態を変えない。
+    if (!player || player->IsDead())
         return true;
 
-    CollisionInfo info = CheckCollision(other);
+    engine::CollisionInfo info = CheckCollision(other);
 
+    // 衝突が成立し、床側から見た法線のYが-0.5未満の場合だけ、上面を踏んだと判定する。
     if (info.isColliding && info.normal.y < -0.5f) {
-        // 上面への接触が続く間はパネル種別に応じて加速を更新し、表示の再点灯だけを間引きます。
+        const bool startedTouchingTop = !touchedTopLastUpdate_ && !touchedTopThisUpdate_;
+        touchedTopThisUpdate_ = true;
+
+        // 解除パネルの上面では、加速が残っていればここで解除する。
         if (GetGimmickType() == kStopTypeId) {
             player->CancelDashPanelBoost();
+        // 加速パネルを踏み始めたか、すでに加速中の場合だけ倍率を適用する。
+        } else if (startedTouchingTop || player->IsDashPanelBoostActive()) {
+            player->ApplyDashPanelBoost(2.15f, 0.32f);
+        // 乗ったまま被弾などで加速が切れた場合は、踏み直すまで再発動しない。
         } else {
-            player->ApplyDashPanelBoost(0.9f, 2.15f, 0.32f);
+            return true;
         }
 
+        // 発光の待ち時間が切れた場合だけ点灯し、接触中でも毎フレーム最大光量に戻さない。
         if (activationCooldown_ <= 0.0f) {
             activationPulse_ = 1.0f;
             activationCooldown_ = 0.20f;

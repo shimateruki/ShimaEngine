@@ -13,10 +13,10 @@ public:
     inline static constexpr int32_t kClientHeight = 1080;
     static constexpr int32_t GetClientWidth() { return kClientWidth; }
     static constexpr int32_t GetClientHeight() { return kClientHeight; }
-    static int32_t GetWindowWidth() { return windowWidth_; }
-    static int32_t GetWindowHeight() { return windowHeight_; }
+    static int32_t GetWindowWidth() { return sWindowWidth; }
+    static int32_t GetWindowHeight() { return sWindowHeight; }
     /// <summary>論理解像度を変えず、実ウィンドウの幅・高さを一緒に更新する。</summary>
-    static void SetWindowSize(int32_t width, int32_t height) { windowWidth_ = width; windowHeight_ = height; }
+    static void SetWindowSize(int32_t width, int32_t height) { sWindowWidth = width; sWindowHeight = height; }
 
     // クライアント内に配置する映像領域。位置・大きさはピクセル。
     // 関連：WinApp（この型を使う機能の本体）
@@ -26,6 +26,7 @@ public:
 
     // 実ピクセルのクライアント内へ16:9の映像を中央配置します。
     static GameViewRect CalculateGameViewRect(int32_t width, int32_t height) {
+        // 幅または高さが0以下なら、映像を収められないため寸法0の矩形を返す。
         if (width <= 0 || height <= 0)
             return {};
         const float scaleX = static_cast<float>(width) / kClientWidth;
@@ -39,8 +40,10 @@ public:
 
     // 表示矩形を逆変換します。黒帯・無効領域はfalseを返し、UIの操作対象にしません。
     static bool ClientToGamePosition(float x, float y, const GameViewRect& view, float& gameX, float& gameY) {
+        // 表示領域が空か、座標が黒帯または矩形外なら変換しない。右端と下端は領域に含めない。
         if (view.width <= 0.0f || view.height <= 0.0f ||
             x < view.x || y < view.y || x >= view.x + view.width || y >= view.y + view.height) {
+            // クリック先として使えないことを、戻り値と両座標の負値で呼び出し元に伝える。
             gameX = gameY = -1.0f;
             return false;
         }
@@ -51,7 +54,7 @@ public:
     }
 
     /// <summary>指定したタイトルとサイズでゲームウィンドウを作成する。</summary>
-    void Initialize(const wchar_t* title = L"CG2", int width = 1280, int height = 720);
+    void Initialize(const wchar_t* title = L"CG2", std::int32_t width = 1280, std::int32_t height = 720);
 
     /// <summary>Windowsメッセージを処理し、アプリを継続できるか返す。</summary>
     bool Update();
@@ -73,7 +76,7 @@ public:
     DisplayState CaptureDisplayState() const;
 
     /// <summary>指定解像度と枠なし表示を適用できたか返す。</summary>
-    bool SetDisplayMode(int width, int height, bool borderless);
+    bool SetDisplayMode(std::int32_t width, std::int32_t height, bool borderless);
 
     /// <summary>保存済みのウィンドウスタイルと配置へ戻す。</summary>
     void RestoreDisplayState(const DisplayState& state);
@@ -100,13 +103,13 @@ public:
     void SetCursorRecenteringSuppressed(bool suppressed) { cursorRecenteringSuppressed_ = suppressed; }
 
 private:
-    inline static int32_t windowWidth_ = 1280;
-    inline static int32_t windowHeight_ = 720;
+    inline static int32_t sWindowWidth = 1280;
+    inline static int32_t sWindowHeight = 720;
     HWND hwnd_ = nullptr;
     HINSTANCE hInstance_ = nullptr;
     bool isCursorClipping_ = false;
     bool isCursorLocked_ = false;
     bool cursorRecenteringSuppressed_ = false;
 
-    inline static bool closeRequested_ = false;
+    inline static bool sCloseRequested = false;
 };

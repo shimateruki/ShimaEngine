@@ -224,10 +224,10 @@
       },
       "playerMovement": {
         "enabled": true,
-        "duration": 0.38,
-        "groundSpeedScale": 0.45,
-        "airSpeedScale": 0.85,
-        "airResponse": 6.0
+        "duration": 0.45,
+        "groundSpeedScale": 0.20,
+        "airSpeedScale": 0.55,
+        "airResponse": 12.0
       },
       "preview": {
         "targetDistance": 8.0,
@@ -332,6 +332,18 @@
           }
         ]
       }
+    },
+    {
+      "id": "player_fire_breath",
+      "displayName": "コピー炎ブレス・持続",
+      "playerMovement": {"enabled": true, "duration": 0, "groundSpeedScale": 0.1, "airSpeedScale": 0.55, "airResponse": 14},
+      "sequence": { "enabled": false, "binding": "player_special" }
+    },
+    {
+      "id": "player_fire_dash_recovery",
+      "displayName": "コピー炎ダッシュ・反動",
+      "playerMovement": {"enabled": true, "duration": 0.18, "groundSpeedScale": 0.15, "airSpeedScale": 0.48, "airResponse": 15},
+      "sequence": { "enabled": false, "binding": "player_special" }
     }
   ]
 }

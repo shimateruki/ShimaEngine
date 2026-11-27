@@ -42,15 +42,17 @@ public:
         std::function<void(float,float,float,float)> overlay;
     };
     // ゲーム固有の編集・確認処理を共通セッションへ登録する。
+    // 登録されたサービス一式を置き換える。引数は移動して共通テーブルへ保存する。
     static void RegisterServices(Services services) { ServicesTable() = std::move(services); }
     // SceneManagerを借用し、登録された初期化処理を呼ぶ。
     void Initialize(SceneManager* manager);
     // 確認を停止して終了処理を呼び、シーン・対象参照を解除する。
     void Finalize();
+    // シーンを切り替える前に呼ぶ任意の処理を登録する。空の関数で登録を解除できる。
     void SetBeforeSceneChange(std::function<void()> call) { beforeSceneChange_ = std::move(call); }
-    // 単体確認を停止して切替前処理を呼び、対象参照を解除する。
+    // 単体確認を停止し、シーン切替前コールバックが登録されている場合だけ呼ぶ。最後に選択対象を解除する。
     void PrepareSceneChange() { Stop(); if (beforeSceneChange_) beforeSceneChange_(); SetTarget(nullptr); }
-    // falseは対象未選択・削除済み・通常Play中・ゲーム側準備失敗を表す。
+    // 対象を解決し、ゲーム側の開始サービスが成功したときにtrue。プレイ・遷移・開始や終了処理中はfalse。
     bool Begin();
     // 確認用の実体を片付け、元対象の一時非表示を解除する。
     void Stop();
@@ -70,12 +72,13 @@ public:
     void SetTarget(engine::Object3D* target);
     // 現在シーンのIDから対象を解決する。世代変更・削除後はnullptr。
     engine::Object3D* GetTarget() const;
+    // 選択対象の単体確認が有効ならtrue。連続再生の一時停止中も有効のまま。
     bool IsActive() const { return active_; }
     // 現在接続している共通セッションを返す。未初期化ならnullptr。
-    static SelectedActorSession* Current() { return current_; }
+    static SelectedActorSession* Current() { return sCurrent; }
 private:
     // ゲーム側から接続された共通コールバック表を返す。
-    static Services& ServicesTable() { static Services services; return services; }
+    static Services& ServicesTable() { static Services sServices; return sServices; }
     std::function<void()> beforeSceneChange_;
     std::string targetKind_; // 同じ対象の種類変更も検出する識別値。
     SceneManager* manager_ = nullptr; // シーンの取得元。借用参照。
@@ -83,6 +86,6 @@ private:
     uint64_t targetId_ = 0, sceneGeneration_ = 0;
     float accumulator_ = 0; // 固定更新前の蓄積秒数。
     bool active_ = false, changing_ = false; // 確認中かと、開始・停止の再入防止。
-    inline static SelectedActorSession* current_ = nullptr; // 現在接続中のセッション。未接続ならnullptr。
+    inline static SelectedActorSession* sCurrent = nullptr; // 現在接続中のセッション。未接続ならnullptr。
 };
 #endif

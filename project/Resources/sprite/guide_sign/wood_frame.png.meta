@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "3a05d1454549d489ab24a2a84cb62493",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/sprite/guide_sign/wood_frame.png",
+  "version": 1
+}

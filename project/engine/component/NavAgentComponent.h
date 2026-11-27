@@ -43,37 +43,37 @@ public:
     /// <summary>局所グリッドのセル幅を返す。</summary>
     float GetCellSize() const { return cellSize_; }
 
-    /// <summary>局所グリッドのセル幅を設定する。</summary>
+    /// <summary>セル幅をワールド単位で設定し、次回に経路を再探索する。</summary>
     void SetCellSize(float value);
 
     /// <summary>障害物から確保するエージェントの半径を返す。</summary>
     float GetAgentRadius() const { return agentRadius_; }
 
-    /// <summary>障害物から確保するエージェントの半径を設定する。</summary>
+    /// <summary>回避半径をワールド単位で設定する。高さの下限も揃え、現在の経路を破棄する。</summary>
     void SetAgentRadius(float value);
 
     /// <summary>通過可否に使うエージェントの高さを返す。</summary>
     float GetAgentHeight() const { return agentHeight_; }
 
-    /// <summary>通過可否に使うエージェントの高さを設定する。</summary>
+    /// <summary>通過に必要な高さを設定し、次回に経路を再探索する。</summary>
     void SetAgentHeight(float value);
 
     /// <summary>探索範囲に足す余白を返す。</summary>
     float GetSearchPadding() const { return searchPadding_; }
 
-    /// <summary>探索範囲に足す余白を設定する。</summary>
+    /// <summary>探索範囲の余白をワールド単位で設定し、現在の経路を破棄する。</summary>
     void SetSearchPadding(float value);
 
     /// <summary>経路を再探索する間隔を返す。</summary>
     float GetRepathInterval() const { return repathInterval_; }
 
-    /// <summary>経路を再探索する間隔を設定する。</summary>
+    /// <summary>次回経路を作成したときに使う再探索間隔を秒で設定する。</summary>
     void SetRepathInterval(float value);
 
     /// <summary>目標到着と判定する距離を返す。</summary>
     float GetStoppingDistance() const { return stoppingDistance_; }
 
-    /// <summary>目標到着と判定する距離を設定する。</summary>
+    /// <summary>目標へ到着したと扱う水平距離をワールド単位で設定する。</summary>
     void SetStoppingDistance(float value);
 
     /// <summary>障害物として調べる衝突属性マスクを返す。</summary>
@@ -109,7 +109,7 @@ private:
     // 再探索の待機秒数。保持中の経路を使う間もCalculateDirectionへ経過時間を渡す。
     float repathInterval_ = 0.35f;
     float stoppingDistance_ = 0.25f; // 目標への到着とみなす距離。
-    uint32_t obstacleMask_ = CollisionCategories::Get("ground");
+    uint32_t obstacleMask_ = engine::collisionCategories::Get("ground");
     bool allowDiagonal_ = true; // 斜め隣のセルへ移動できるか。
 
     // 再探索間隔中は前回のグリッドと経路を再利用する。
@@ -117,7 +117,7 @@ private:
     std::vector<engine::Vector3> currentPath_; // 計算済みのワールド経路点。
     std::size_t waypointIndex_ = 0; // 次に目指す経路点の番号。
     float repathTimer_ = 0.0f; // 再探索までの待機秒数。
-    engine::Vector3 lastTargetPosition_ = engine::Vector3::ZERO; // 前回探索した目標位置。
+    engine::Vector3 lastTargetPosition_ = engine::Vector3::kZero; // 前回探索した目標位置。
     bool hasLastTarget_ = false; // 前回の目標位置が有効か。
     bool lastPathSucceeded_ = false; // 直近の経路探索が成功したか。
 };

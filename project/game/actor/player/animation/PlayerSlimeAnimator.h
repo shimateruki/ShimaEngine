@@ -15,13 +15,13 @@ class Player;
 class PlayerSlimeAnimator {
   public:
     // 基本姿勢。コピー技の一時姿勢は AbilityPose で重ねます。
-    enum class Mode { Idle, Run, Jump, Dash, AimHook, ShootHook, PullEnemy, Carry, GateReturn, Disabled };
+    enum class Mode { kIdle, kRun, kJump, kDash, kAimHook, kShootHook, kPullEnemy, kCarry, kGateReturn, kDisabled };
 
     enum class AbilityPose {
-        None,
-        Guard,
-        BlazeDash,
-        SlowFall,
+        kNone,
+        kGuard,
+        kBlazeDash,
+        kSlowFall,
     };
 
     /// <summary>基準スケールと前フレームの姿勢を初期化します。</summary>
@@ -46,9 +46,10 @@ class PlayerSlimeAnimator {
     // ワールド座標の進行方向。ゼロ長の場合は前方向を使う。
     void SetMotionDirection(const engine::Vector3& direction);
 
-    // 引き寄せ演出の向きと進行率。進行率は 0～1 に丸める。
+    // 引き寄せ演出に使う水平の向きを設定する。
     void SetPullDirection(const engine::Vector3& direction);
 
+    // 引き寄せの進行率を0〜1に収め、描画姿勢の更新に使う。
     void SetPullProgress(float progress);
 
     // 溜め率と姿勢の強さは 0～1 に丸める。
@@ -65,7 +66,6 @@ class PlayerSlimeAnimator {
     // 指定スケールへの短い反動を重ねる。duration の単位は秒。
     void TriggerImpulse(const engine::Vector3& scale, float duration);
 
-    // Animation Workbenchで編集できる能力モーションを、通常移動とは別レイヤーで再生します。
     /// <summary>通常移動と別レイヤーで能力モーションを再生します。</summary>
     /// <param name="clipName">Animation Workbench で編集したクリップ名</param>
     /// <returns>クリップが見つかり、再生を開始できたか</returns>
@@ -119,7 +119,7 @@ class PlayerSlimeAnimator {
     bool whipReturnPoseActive_ = false;
     bool whipPoseActive_ = false;
     BodyAnimationClip::Sample whipPose_;
-    Mode mode_ = Mode::Idle;
+    Mode mode_ = Mode::kIdle;
     float modeTimer_ = 0.0f; // アニメーションモードに使う経過秒数。
     float runMotionTime_ = 0.0f;
     float runSpeedRate_ = 0.0f;
@@ -129,7 +129,7 @@ class PlayerSlimeAnimator {
     float jumpChargeRate_ = 0.0f;
     float pullProgress_ = 0.0f;
 
-    AbilityPose abilityPose_ = AbilityPose::None;
+    AbilityPose abilityPose_ = AbilityPose::kNone;
     float abilityPoseStrength_ = 0.0f;
 
     float impulseTimer_ = 0.0f; // 一時的な伸縮までの残り秒数。
@@ -138,7 +138,7 @@ class PlayerSlimeAnimator {
     float modeTransitionTimer_ = 0.0f; // 表示姿勢の切替までの残り秒数。
     bool modeTransitionCapturePending_ = false;
     engine::Vector3 modeTransitionStartScale_ = {2.0f, 2.0f, 2.0f};
-    engine::Vector3 modeTransitionStartRotation_ = engine::Vector3::ZERO;
+    engine::Vector3 modeTransitionStartRotation_ = engine::Vector3::kZero;
 
     float jumpTakeoffStretchTimer_ = 0.0f; // 離陸時の伸びまでの残り秒数。
     float landingHoldTimer_ = 0.0f; // 着地の溜めまでの残り秒数。

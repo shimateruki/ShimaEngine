@@ -32,6 +32,7 @@ struct CrownFinaleTuning {
 
     float sealBarrageRadius = 41.0f;
     float sealBarrageSkyHeight = 11.2f;
+    float sealChantSkyHeight = 31.0f; // 大紋章の高さ。槍の出現高度とは別に調整します。
     float sealBarrageSkyRadiusRate = 0.88f;
     float sealBarrageSpearScale = 1.0f;
 
@@ -96,6 +97,7 @@ struct CrownFinaleTuning {
         limit(sealBarrierHeight, 5.0f, 20.0f, 9.0f);
         limit(sealBarrageRadius, 25.0f, 44.0f, 41.0f);
         limit(sealBarrageSkyHeight, 8.0f, 18.0f, 11.2f);
+        limit(sealChantSkyHeight, 24.0f, 42.0f, 31.0f);
         limit(sealBarrageSkyRadiusRate, 0.45f, 0.95f, 0.88f);
         limit(sealBarrageSpearScale, 0.65f, 1.45f, 1.0f);
         limit(sealBarrageMovieDuration, 3.1f, 5.0f, 3.55f);
@@ -114,7 +116,7 @@ struct CrownFinaleTuning {
         limit(movieFragmentDistance, 1.5f, 5.5f, 3.0f);
         limit(movieFragmentCameraDistance, 0.7f, 1.5f, 1.0f);
 
-        // 編集や外部JSONで工程が逆転しないよう、各カットの最低時間を保証します。
+        // ムービー全体に対する比率に下限の間隔を加え、着地・吸収・形成・移動の順を守ります。
         movieFragmentLandTime = (std::max)(movieFragmentLandTime, movieFragmentBreakTime + 0.07f);
         movieFragmentPullTime = (std::max)(movieFragmentPullTime, movieFragmentLandTime + 0.025f);
         movieFragmentAbsorbTime = (std::max)(movieFragmentAbsorbTime, movieFragmentPullTime + 0.05f);
@@ -140,15 +142,18 @@ struct CrownFinaleTuning {
 
     // 設定ファイルを読み込みます。存在しない場合は既定値を維持します。
     bool Load() {
-        // 省略された調整項目は現行の既定値を維持し、読み込み後に安全な範囲へ直す。
+        // 省略や型違いの調整項目は現在値を保ち、読み込み後に値の範囲と演出の順序を補正する。
         std::ifstream stream(kConfigPath);
+        // 保存された設定を開けなければ、現在の内容のまま失敗を返す。
         if (!stream)
             return false;
         auto data = nlohmann::json::parse(stream, nullptr, false);
+        // 解析に失敗するかJSONオブジェクト以外の場合は、個別の項目を適用しない。
         if (!data.is_object())
             return false;
         auto read = [&](const char* key, float& value) {
             auto it = data.find(key);
+            // 指定キーが存在し、数値として保存されている場合だけ調整値を置き換える。
             if (it != data.end() && it->is_number())
                 value = it->get<float>();
         };
@@ -171,6 +176,7 @@ struct CrownFinaleTuning {
         read("sealBarrierHeight", sealBarrierHeight);
         read("sealBarrageRadius", sealBarrageRadius);
         read("sealBarrageSkyHeight", sealBarrageSkyHeight);
+        read("sealChantSkyHeight", sealChantSkyHeight);
         read("sealBarrageSkyRadiusRate", sealBarrageSkyRadiusRate);
         read("sealBarrageSpearScale", sealBarrageSpearScale);
         read("sealBarrageMovieDuration", sealBarrageMovieDuration);
@@ -223,6 +229,7 @@ struct CrownFinaleTuning {
                                {"sealBarrierHeight", sealBarrierHeight},
                                {"sealBarrageRadius", sealBarrageRadius},
                                {"sealBarrageSkyHeight", sealBarrageSkyHeight},
+                               {"sealChantSkyHeight", sealChantSkyHeight},
                                {"sealBarrageSkyRadiusRate", sealBarrageSkyRadiusRate},
                                {"sealBarrageSpearScale", sealBarrageSpearScale},
                                {"sealBarrageMovieDuration", sealBarrageMovieDuration},
@@ -250,6 +257,7 @@ struct CrownFinaleTuning {
                                {"dashDamage", dashDamage},
                                {"armorOpenTime", armorOpenTime}};
         std::ofstream stream(kConfigPath);
+        // 保存ファイルを開けなければ、出力せず失敗を返す。
         if (!stream)
             return false;
         stream << data.dump(2) << '\n';
@@ -258,9 +266,9 @@ struct CrownFinaleTuning {
 
     // 初回アクセス時にだけファイルを読み込む共有の調整値です。
     static CrownFinaleTuning& Get() {
-        static CrownFinaleTuning tuning;
-        static const bool loaded = tuning.Load();
-        (void)loaded;
-        return tuning;
+        static CrownFinaleTuning sTuning;
+        static const bool kLoaded = sTuning.Load();
+        (void)kLoaded;
+        return sTuning;
     }
 };

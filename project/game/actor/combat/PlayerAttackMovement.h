@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-// 攻撃中だけ通常移動へ渡す制限。重力・ジャンプ・旋回の操作権は奪いません。
+// 攻撃中だけ通常移動へ渡す制限。鉛直速度と照準は通常の処理に任せる。
 struct PlayerAttackMovement {
     bool enabled = false;
     bool overrideHorizontalVelocity = false; // 能力が方向を制御する間だけ水平速度を置き換える。
@@ -13,6 +13,7 @@ struct PlayerAttackMovement {
     float airSpeedScale = 0.85f;
     float airResponse = 6.0f; // 空中の方向変更・減速への追従率（毎秒）。
 
+    bool blocksMovementActions = false; // 強い硬直では通常ダッシュを終え、ジャンプ予約の消費を復帰まで待つ。
     float maxFallSpeedOverride = 0.0f; // 能力中の落下速度上限。0はプレイヤーの設定を使う。
 
     bool Validate() const {

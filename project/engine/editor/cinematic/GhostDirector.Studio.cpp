@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include <cstdint>
 #include "engine/editor/cinematic/GhostDirector.h"
 #include "BaseScene.h"
 #include "SceneManager.h"
@@ -25,19 +26,22 @@ constexpr const char* kLabels[] = {"演出対象", "基準オブジェクト", "
 constexpr engine::Vector3 kOrigin{16000.0f, 10000.0f, 16000.0f};
 } // namespace
 
-int GhostDirector::GetRoleIndex(const std::string& name) {
+std::int32_t GhostDirector::GetRoleIndex(const std::string& name) {
     // 保存された役割名を制作空間の仮オブジェクト番号へ変換します。
-    for (int index = 0; index < 3; ++index)
+    for (std::int32_t index = 0; index < 3; ++index)
+        // 制作空間に割り当てる三つの予約名と一致した場合にだけ番号を返す。
         if (name == kRoles[index])
             return index;
     return -1;
 }
 
-engine::Object3D* GhostDirector::FindStudioObject(int role) const {
+engine::Object3D* GhostDirector::FindStudioObject(std::int32_t role) const {
     // シーンが切り替わっていたら古いポインタをたどらないようにします。
+    // 予約外の番号か制作空間のシーンが現行でない場合は検索しない。
     if (role < 0 || role >= 4 || !sceneManager_ || sceneManager_->GetCurrentScene() != studioScene_)
         return nullptr;
     for (const auto& object : studioScene_->GetObjects())
+        // 制作専用の内部 Object に限定し、予約名と一致するものを返す。
         if (object && object->IsEditorInternal() && object->GetName() == kNames[role])
             return object.get();
     return nullptr;
@@ -45,7 +49,7 @@ engine::Object3D* GhostDirector::FindStudioObject(int role) const {
 
 void GhostDirector::CreateStudioObjects() {
     // 実ステージと離れた座標に、対象・基準・カメラ・床の仮オブジェクトを作ります。
-    for (int index = 0; index < 4; ++index) {
+    for (std::int32_t index = 0; index < 4; ++index) {
         auto object = std::make_unique<engine::Object3D>();
         object->Initialize(studioScene_->GetObject3DCommon());
         object->SetName(kNames[index]);
@@ -58,6 +62,7 @@ void GhostDirector::CreateStudioObjects() {
         object->SetTranslate(kOrigin);
         object->SetCastShadow(false);
 
+        // カメラ以外にモデルを割り当てる。床には固定のプリミティブを使う。
         if (index != 2) {
             object->SetModel(index < 2 ? sequence_.previewModels[index] : "Primitives/cube");
             object->SetEnableLighting(false);
@@ -67,9 +72,11 @@ void GhostDirector::CreateStudioObjects() {
         if (index == 0) {
             object->SetScale({1.7f, 1.7f, 1.7f});
             object->SetTranslate(kOrigin + engine::Vector3{0, 0, 4});
+        // カメラは斜め後方へ置き、制作空間側を向く角度にする。
         } else if (index == 2) {
             object->SetTranslate(kOrigin + engine::Vector3{-6, 4, -10});
             object->SetRotation({0.2f, 0.4f, 0});
+        // 床は基準より少し下げ、制作空間を覆う薄い板にする。
         } else if (index == 3) {
             object->SetTranslate(kOrigin + engine::Vector3{0, -0.3f, 0});
             object->SetScale({24, 0.2f, 24});
@@ -84,8 +91,10 @@ void GhostDirector::CreateStudioObjects() {
 
 bool GhostDirector::BeginStudio() {
     // 別プレビューとのカメラ競合を避け、元のカメラ状態を退避してから開きます。
+    // すでに開いていれば、仮オブジェクトの生成や元の視点の退避を繰り返さない。
     if (studioEnabled_)
         return true;
+    // ゲームを停止している編集シーンと 3D 共通部が無い場合は、入場を中止する。
     if (!sceneManager_ || sceneManager_->IsPlaying() || !sceneManager_->GetCurrentScene() ||
         !sceneManager_->GetCurrentScene()->GetObject3DCommon()) {
         fileOperationStatus_ = "制作空間はゲームを停止した編集モードで開いてください。";
@@ -97,6 +106,7 @@ bool GhostDirector::BeginStudio() {
 if (EffectPreviewStage::GetInstance()->IsEnabled() ||
         (editor_ &&
          (editor_->GetAnimationClipEditor()->IsEnabled() || (editor_->GetActorSession() && editor_->GetActorSession()->IsActive())))) {
+        // 別プレビューと共有カメラを取り合わないよう、この条件では入場を止める。
         fileOperationStatus_ =
             "他の独立プレビューを終了してから制作空間を開いてください。カメラ・エフェクトの競合を防ぎます。";
         return false;
@@ -105,6 +115,7 @@ if (EffectPreviewStage::GetInstance()->IsEnabled() ||
 
 
     auto* camera = CameraManager::GetInstance()->GetMainCamera();
+    // 元のメインカメラを退避できなければ、仮空間へ切り替えない。
     if (!camera)
         return false;
     // 現在の再生で変更された姿勢を先に復元し、通常編集画面の視点を退避する。
@@ -116,8 +127,8 @@ if (EffectPreviewStage::GetInstance()->IsEnabled() ||
     studioStoredNear_ = camera->GetNearClip();
     studioStoredFar_ = camera->GetFarClip();
     studioStoredFollow_ = camera->GetFollowTarget();
-    studioStoredFollowMode_ = static_cast<int>(camera->GetFollowMode());
-    studioStoredMode_ = static_cast<int>(CameraEditor::GetInstance()->GetMode());
+    studioStoredFollowMode_ = static_cast<std::int32_t>(camera->GetFollowMode());
+    studioStoredMode_ = static_cast<std::int32_t>(CameraEditor::GetInstance()->GetMode());
     studioCameraSaved_ = true;
     studioScene_ = sceneManager_->GetCurrentScene();
     studioEnabled_ = true;
@@ -144,6 +155,7 @@ void GhostDirector::PlaceStudioCamera() {
     player_.Stop(true);
     currentScrubTime_ = 0.0f;
 
+    // メインカメラが存在する場合だけ、仮空間全体が映る固定の構図を適用する。
     if (auto* camera = CameraManager::GetInstance()->GetMainCamera()) {
         // プレビュー用の固定視点が元の追従対象に動かされないよう、先に追従を外す。
         camera->SetFollowTarget(nullptr);
@@ -151,7 +163,7 @@ void GhostDirector::PlaceStudioCamera() {
         camera->SetTarget(kOrigin + engine::Vector3{0, 1, 3});
         camera->SetRotation({0.284f, 0.507f, 0});
         camera->SetFovY(0.65f);
-        CameraEditor::GetInstance()->SetMode(CameraEditor::Mode::Editor);
+        CameraEditor::GetInstance()->SetMode(CameraEditor::Mode::kEditor);
         camera->Update();
     }
 }
@@ -164,13 +176,17 @@ void GhostDirector::EndStudio() {
     const bool sameScene = sceneManager_ && sceneManager_->GetCurrentScene() == studioScene_;
     player_.Stop(sameScene);
 
+    // 制作時と同じシーンの場合だけ、仮オブジェクトの削除と視点復元を行う。
     if (sameScene) {
         // カメラカットの復帰Blend中に仮Objectを破棄しない。
+        // メインカメラがあれば、制作空間のカットによる上書きを即時に終了する。
         if (auto* camera = CameraManager::GetInstance()->GetMainCamera())
             camera->EndOverride(0.0f);
+        // 仮カメラが編集対象に残っている場合は、削除を予約する前に選択を解除する。
         if (CameraEditor::GetInstance()->GetSelectedCameraObject() == FindStudioObject(2))
             CameraEditor::GetInstance()->SetSelectedCameraObject(nullptr);
-        for (int index = 0; index < 4; ++index) {
+        for (std::int32_t index = 0; index < 4; ++index) {
+            // 削除対象がまだ存在する場合は、先に非表示にしてからキューへ送る。
             if (auto* object = FindStudioObject(index)) {
                 object->SetIsVisible(false);
 
@@ -180,12 +196,15 @@ void GhostDirector::EndStudio() {
             }
         }
 
+        // 入場時にカメラ状態を退避できていた場合にだけ復元を試す。
         if (studioCameraSaved_) {
+            // メインカメラが残っている場合に設定を戻し、追従先を現シーンから探す。
             if (auto* camera = CameraManager::GetInstance()->GetMainCamera()) {
                 engine::Object3D* follow = nullptr;
 
                 // 退避した追従先のポインタを現シーンの登録一覧と照合する。削除されていた場合は追従なしへ戻す。
                 for (const auto& object : studioScene_->GetObjects())
+                    // 保存した参照と同じ個体が登録中の場合だけ、追従先に戻せる。
                     if (object.get() == studioStoredFollow_)
                         follow = object.get();
                 camera->SetFollowTarget(follow);
@@ -215,9 +234,12 @@ void GhostDirector::DrawStudioControls() {
     // 仮モデルの選択と実シーンの役割割り当ては、制作空間の状態で表示を切り替えます。
     ImGui::TextWrapped(
         "1. 制作空間を開く → 2. 動作・VFX・カメラを組み合わせる → 3. 保存 → 4. 実ステージへ役割を割り当てて確認");
+    // 同じボタンで制作空間の入場と退出を制御する。
     if (ImGui::Button(studioEnabled_ ? "制作空間を終了・元の画面へ" : "制作空間を開く（仮モデルを自動準備）")) {
+        // 開いていれば、仮表示を閉じて元の視点を復元する。
         if (studioEnabled_)
             EndStudio();
+        // 閉じていれば、入場条件を確認して仮の制作空間を準備する。
         else
             BeginStudio();
     }
@@ -225,13 +247,16 @@ void GhostDirector::DrawStudioControls() {
     // 制作空間では、利用可能なモデル一覧から仮オブジェクトの外見だけを差し替える。
     if (studioEnabled_) {
         ImGui::TextColored({0.4f, 0.9f, 0.7f, 1}, "制作空間 ON / 実ステージのObjectは操作しません");
+        // 全体表示ボタンで再生を停止し、入口の固定視点に戻る。
         if (ImGui::Button("全体を見渡す（停止）"))
             PlaceStudioCamera();
-        for (int index = 0; index < 2; ++index) {
+        for (std::int32_t index = 0; index < 2; ++index) {
             ImGui::PushID(index);
 
+            // 仮モデルの候補を開いた場合に、素材管理のモデル名を一覧にする。
             if (ImGui::BeginCombo(kLabels[index], sequence_.previewModels[index].c_str())) {
                 for (const auto& model : ModelManager::GetInstance()->GetAvailableModelNames()) {
+                    // 仮モデルの選択を受けたら、差し替え前に再生状態を復元して停止する。
                     if (ImGui::Selectable(model.c_str(), model == sequence_.previewModels[index])) {
                         player_.Stop(true);
 
@@ -252,9 +277,12 @@ void GhostDirector::DrawStudioControls() {
 
         ImGui::TextWrapped("仮モデルはシーケンスと一緒に保存します。対象・基準・カメラの基本構成で、実ステージのモデル"
                            "は変更しません。");
+        // サンプル欄が開いているときだけ、新規作成の操作を出す。
         if (ImGui::TreeNode("サンプル（任意）")) {
+            // 作成操作では、現在の編集内容を置き換える前に確認画面を出す。
             if (ImGui::Button("入口サンプルを新規作成"))
                 ImGui::OpenPopup("入口サンプルを作成");
+            // 確認画面を開いた場合に、上書きされる範囲を示して作成の選択を待つ。
             if (ImGui::BeginPopupModal("入口サンプルを作成", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
                 ImGui::TextWrapped("現在の未保存シーケンスを置き換えます。シーンや保存済みファイルは変更しません。");
 
@@ -264,8 +292,10 @@ void GhostDirector::DrawStudioControls() {
                     ResetTimelineInteraction();
                     sequence_.Clear();
                     sequence_.previewModels[1] = "Gimmicks/portal_gate";
+                    // 制作空間の役者が見つかった場合は、サンプルの仮モデルへ戻す。
                     if (auto* actor = FindStudioObject(0))
                         actor->SetModel(sequence_.previewModels[0]);
+                    // 制作空間の基準物が見つかった場合は、入口用のゲートモデルを割り当てる。
                     if (auto* reference = FindStudioObject(1))
                         reference->SetModel(sequence_.previewModels[1]);
                     sequence_.name = "entry_studio";
@@ -284,7 +314,7 @@ void GhostDirector::DrawStudioControls() {
                     const float times[] = {0, 0.9f, 1.8f, 2.7f};
 
                     // 役者と演出カメラを同じ時刻のキーで作り、入口の移動をすぐ再生できる形にする。
-                    for (int index = 0; index < 4; ++index) {
+                    for (std::int32_t index = 0; index < 4; ++index) {
                         actor.keys.push_back({times[index], positions[index], {}, {1.7f, 1.7f, 1.7f}, 4});
                         const engine::Vector3 eye{-6.0f + index * 0.6f, 4, -10.0f + index};
                         const engine::Vector3 direction = positions[index] + engine::Vector3{0, 1, 0} - eye;
@@ -324,6 +354,7 @@ void GhostDirector::DrawStudioControls() {
                 }
 
                 ImGui::SameLine();
+                // キャンセルでは編集データを保持したまま確認画面だけ閉じる。
                 if (ImGui::Button("キャンセル"))
                     ImGui::CloseCurrentPopup();
                 ImGui::EndPopup();
@@ -334,12 +365,15 @@ void GhostDirector::DrawStudioControls() {
 
         ImGui::TextWrapped(
             "実Object名のトラックは制作空間では再生しません。実シーンを使う場合は制作空間を終了してください。");
+    // 制作空間の外では、開いているときだけ実シーンの役割割り当てを表示する。
     } else if (ImGui::TreeNode("実ステージで確認するための役割割り当て")) {
-        for (int index = 0; index < 3; ++index) {
+        for (std::int32_t index = 0; index < 3; ++index) {
             auto& binding = sequence_.roleBindings[index];
             ImGui::PushID(index);
 
+            // 役割の割り当て欄を開いた場合に、解除や候補の選択を受け付ける。
             if (ImGui::BeginCombo(kLabels[index], binding.targetName.empty() ? "未設定" : binding.targetName.c_str())) {
+                // 未設定を選んだら再生を停止し、役割を空にした状態でプレビューを更新する。
                 if (ImGui::Selectable("未設定に戻す")) {
                     player_.Stop(true);
                     binding = {};
@@ -349,8 +383,10 @@ void GhostDirector::DrawStudioControls() {
                 // 本番の対象候補からエディター専用物を除き、カメラの役割にはカメラだけを表示する。
                 if (sceneManager_ && sceneManager_->GetCurrentScene()) {
                     for (auto& object : sceneManager_->GetCurrentScene()->GetObjects()) {
+                        // 無効な参照や内部物を除き、カメラ役ではカメラ型以外も除外する。
                         if (!object || object->IsEditorInternal() || (index == 2 && !object->IsCameraObject()))
                             continue;
+                        // 実オブジェクトを選ぶと、名前とイベント ID を記録し、プレビューへ読み直す。
                         if (ImGui::Selectable(object->GetName().c_str(), binding.targetName == object->GetName())) {
                             player_.Stop(true);
                             binding = {object->GetName(), object->GetEventId()};
@@ -369,6 +405,7 @@ void GhostDirector::DrawStudioControls() {
         ImGui::TreePop();
     }
 
+    // 操作結果がある場合に、直近の入退場やファイル操作の結果を表示する。
     if (!fileOperationStatus_.empty())
         ImGui::TextWrapped("%s", fileOperationStatus_.c_str());
 #endif
@@ -379,11 +416,14 @@ void GhostDirector::DrawImGui() {
     // 映像・時間軸・選択内容を別領域へ配置する編集画面の入口です。
     ImGui::SeparatorText("演出制作");
     ImGui::TextWrapped("中央：映像 / 下：再生とトラック / 右：選択項目の編集");
+    // 対象欄が開いている場合は制作空間または実シーンの割り当てを表示する。
     if (ImGui::CollapsingHeader("プレビュー空間と対象", ImGuiTreeNodeFlags_DefaultOpen))
         DrawStudioControls();
     DrawInspectorContents();
+    // 設定確認の欄を開いた場合は、シーケンスの確認情報を表示する。
     if (ImGui::CollapsingHeader("設定チェック"))
         DrawAuthoringGuide();
+    // 補助欄を開いた場合は、基準点と入口テンプレートの設定を表示する。
     if (ImGui::CollapsingHeader("補助：基準点・入口テンプレート"))
         DrawAnchorTemplateEditor();
 #endif
@@ -396,6 +436,7 @@ void GhostDirector::DrawTimelinePanel() {
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove;
     // 変更の保存待ちはドックのタブに表示し、時間軸や再生の状態は変えない。
     if (documentDirty_) flags |= ImGuiWindowFlags_UnsavedDocument;
+    // タイムラインのウィンドウが表示可能な場合にだけ、操作欄とトラックを描画する。
     if (ImGui::Begin("演出制作 - Timeline", nullptr, flags)) {
         ImGui::TextUnformatted("演出制作   |   トラックを選択 → 右側で編集   /   時間軸をクリックして確認");
         DrawTransportControls();

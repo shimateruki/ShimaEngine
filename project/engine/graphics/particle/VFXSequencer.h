@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -8,30 +9,30 @@
 
 /// <summary>タイムラインから起動できる演出の種類です。</summary>
 enum class VfxEventType {
-    GpuParticle = 0,
-    MeshEffect = 1,
-    SoundEffect = 2,
-    MovingParticle = 3,
-    CameraShake = 4,
-    PostEffectPulse = 5,
-    LightPulse = 6,
-    HitStop = 7,
-    ControllerRumble = 8,
-    CameraFovPulse = 9,
-    Debris = 10
+    kGpuParticle = 0,
+    kMeshEffect = 1,
+    kSoundEffect = 2,
+    kMovingParticle = 3,
+    kCameraShake = 4,
+    kPostEffectPulse = 5,
+    kLightPulse = 6,
+    kHitStop = 7,
+    kControllerRumble = 8,
+    kCameraFovPulse = 9,
+    kDebris = 10
 };
 
 /// <summary>発火時刻と種類別パラメータをまとめたタイムラインイベントです。</summary>
 // 関連：VfxSequencer（この型を使う機能の本体）
 struct VfxEvent {
     // 以下の hasFired/isFinished/applied* は再生時の状態で、Asset 設定値とは分けて扱います。
-    VfxEventType type = VfxEventType::GpuParticle;
+    VfxEventType type = VfxEventType::kGpuParticle;
     std::string presetName;
 
     float triggerTime = 0.0f; // シーケンス先頭からの発火秒数。
 
-    engine::Vector3 offset = engine::Vector3::ZERO;
-    engine::Vector3 rotation = engine::Vector3::ZERO;
+    engine::Vector3 offset = engine::Vector3::kZero;
+    engine::Vector3 rotation = engine::Vector3::kZero;
     engine::Vector3 scale = { 1.0f, 1.0f, 1.0f };
 
     // 0は単発。正数はシーケンス先頭基準の毎秒発生数。遅延時も現在位置から1フレーム最大1回。
@@ -53,7 +54,7 @@ struct VfxEvent {
     engine::Vector3 endOffset = { 0.0f, 0.0f, 10.0f };
 
     float duration = 1.0f; // イベントの継続秒数。
-    int easingType = 0;
+    std::int32_t easingType = 0;
 
     bool isFinished = false;
 
@@ -198,9 +199,9 @@ private:
     // イベントの定義・再生状態と、対象または明示位置に適用するルート変換です。
     std::vector<VfxEvent> events_;
     engine::Object3D* targetObject_ = nullptr; // 追従対象。借用参照。
-    engine::Vector3 rootPosition_ = engine::Vector3::ZERO;
+    engine::Vector3 rootPosition_ = engine::Vector3::kZero;
     engine::Vector3 rootScale_ = { 1.0f, 1.0f, 1.0f }; // 各イベントへ重ねる全体の拡縮。
-    engine::Vector3 rootRotation_ = engine::Vector3::ZERO;
+    engine::Vector3 rootRotation_ = engine::Vector3::kZero;
 
     float currentTime_ = 0.0f; // シーケンスの再生位置（秒）。
     bool isPlaying_ = false;

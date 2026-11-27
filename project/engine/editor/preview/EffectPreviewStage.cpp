@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "EffectPreviewStage.h"
 #include <numbers>
 
@@ -10,6 +11,7 @@
 #include "LightManager.h"
 #include "ModelManager.h"
 #include "Object3D.h"
+#include "ProfilerManager.h"
 #include "SceneManager.h"
 #include "imgui.h"
 
@@ -18,6 +20,7 @@
 #include <cmath>
 #include <iomanip>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -30,23 +33,41 @@ constexpr const char* kLegacyRightRailName = "__Editor_EffectPreviewRightRail";
 constexpr const char* kYAxisName = "__Editor_EffectPreviewAxisY";
 constexpr const char* kOriginMarkerName = "__Editor_EffectPreviewOrigin";
 constexpr const char* kEnvironmentPrefix = "__Editor_EffectPreview";
-constexpr int kGridLineCount = 21;
-constexpr int kGridCenterIndex = kGridLineCount / 2;
-constexpr int kOuterMajorHalfCount = 10;
+constexpr std::int32_t kGridLineCount = 21;
+constexpr std::int32_t kGridCenterIndex = kGridLineCount / 2;
+constexpr std::int32_t kOuterMajorHalfCount = 10;
 
-std::string MakeGridXName(int index) {
+// プレビュー環境の配置を再適用する条件。Sceneから借りたObject参照は保持しない。
+struct EnvironmentLayout {
+    uint64_t sceneGeneration;
+    size_t objectCount;
+    bool visible;
+    bool floor;
+    bool grid;
+    bool axes;
+    std::array<float, 3> position;
+    float radius;
+    float spacing;
+    std::array<std::array<float, 4>, 6> colors;
+
+    bool operator==(const EnvironmentLayout&) const = default;
+};
+
+std::optional<EnvironmentLayout> appliedEnvironmentLayout;
+
+std::string MakeGridXName(std::int32_t index) {
     return std::string(kEnvironmentPrefix) + "GridX_" + std::to_string(index);
 }
 
-std::string MakeGridZName(int index) {
+std::string MakeGridZName(std::int32_t index) {
     return std::string(kEnvironmentPrefix) + "GridZ_" + std::to_string(index);
 }
 
-std::string MakeOuterMajorXName(int index) {
+std::string MakeOuterMajorXName(std::int32_t index) {
     return std::string(kEnvironmentPrefix) + "OuterMajorX_" + std::to_string(index);
 }
 
-std::string MakeOuterMajorZName(int index) {
+std::string MakeOuterMajorZName(std::int32_t index) {
     return std::string(kEnvironmentPrefix) + "OuterMajorZ_" + std::to_string(index);
 }
 
@@ -57,25 +78,25 @@ bool IsPreviewEnvironmentName(const std::string& name) {
 const char* GetToolKindName(EffectPreviewStage::ToolKind kind) {
     // プレビューを共有する編集ツールの種類を、画面表示用の名称へ変換する。
     switch (kind) {
-    case EffectPreviewStage::ToolKind::CpuParticle:
+    case EffectPreviewStage::ToolKind::kCpuParticle:
         return "CPU Particle";
 
-    case EffectPreviewStage::ToolKind::GpuParticle:
+    case EffectPreviewStage::ToolKind::kGpuParticle:
         return "GPU Particle";
 
-    case EffectPreviewStage::ToolKind::MeshEffect:
+    case EffectPreviewStage::ToolKind::kMeshEffect:
         return "Mesh Effect";
 
-    case EffectPreviewStage::ToolKind::VfxSequence:
+    case EffectPreviewStage::ToolKind::kVfxSequence:
         return "VFX Sequence";
 
-    case EffectPreviewStage::ToolKind::Debris:
+    case EffectPreviewStage::ToolKind::kDebris:
         return "Debris";
 
-    case EffectPreviewStage::ToolKind::Trail:
+    case EffectPreviewStage::ToolKind::kTrail:
         return "Trail";
 
-    case EffectPreviewStage::ToolKind::None:
+    case EffectPreviewStage::ToolKind::kNone:
     default:
         return "None";
     }
@@ -88,16 +109,18 @@ ImU32 ToImU32(const engine::Vector4& color) {
 
 EffectPreviewStage* EffectPreviewStage::GetInstance() {
     // 複数のエフェクト編集ツールが同じプレビュー空間を共有する。
-    static EffectPreviewStage instance;
-    return &instance;
+    static EffectPreviewStage sInstance;
+    return &sInstance;
 }
 
 void EffectPreviewStage::Initialize(SceneManager* sceneManager, engine::DirectXCommon* dxCommon) {
+    appliedEnvironmentLayout.reset();
     // Scene と描画クリア色の変更先は外部所有として参照だけ保持する。
     sceneManager_ = sceneManager;
     dxCommon_ = dxCommon;
 }
 
+// プレビュー空間に必要な最小寸法と床を設定し、初回だけ視点の退避と移動を予約します。
 void EffectPreviewStage::EnableForToolPreview() {
     const bool isEnteringPreview = !enabled_;
     enabled_ = true;
@@ -119,6 +142,7 @@ void EffectPreviewStage::EnableForToolPreview() {
 }
 
 void EffectPreviewStage::ReturnToScene() {
+    appliedEnvironmentLayout.reset();
     enabled_ = false;
     // 共有ライトと通常視点を先に復元し、その後に一時的な視点保護を解除する。
     RestoreStudioLighting();
@@ -127,8 +151,10 @@ void EffectPreviewStage::ReturnToScene() {
     recenterCameraRequested_ = false;
     CameraEditor::GetInstance()->SetEditorStateSaveBlocker(1u << 0, false);
 
+    // 現在のシーンがある場合は、その中に残る専用の目印と床を非表示にします。
     if (sceneManager_ && sceneManager_->GetCurrentScene()) {
         for (auto& object : sceneManager_->GetCurrentScene()->GetObjects()) {
+            // 有効な配置で名前が専用環境の接頭辞を持つものだけを隠します。
             if (object && IsPreviewEnvironmentName(object->GetName())) {
                 object->SetIsVisible(false);
             }
@@ -136,6 +162,7 @@ void EffectPreviewStage::ReturnToScene() {
     }
 
     // 背景は退避済みの色ではなく、復元後のシーン設定が示すクリア色で描き直す。
+    // 描画基盤が利用できる場合に、復元後のシーンクリア色を設定します。
     if (dxCommon_) {
         const engine::Vector4& sceneClearColor = engine::LightManager::GetInstance()->GetSceneClearColor();
         dxCommon_->SetRenderClearColor(
@@ -155,12 +182,13 @@ void EffectPreviewStage::ReportToolState(
     float currentTime,
     float duration,
     bool isPlaying,
-    int activeCount,
+    std::int32_t activeCount,
     const std::vector<TimelineEvent>& events,
     const PerformanceMetrics& performance) {
-    // 編集ツールが変わるとシーク位置と計測条件を破棄し、別素材の値を混ぜない。
+    // 報告の時刻と尺は秒、件数は現在表示中の個数です。報告元が替わったら以前のサンプルを引き継ぎません。
     const bool changedTool = activeToolKind_ != toolKind || activeToolTitle_ != title;
 
+    // ツールの種別かタイトルが変わった場合は、以前の計測状態と表示結果を消します。
     if (changedTool) {
         ResetPerformanceMeasurement(true);
     }
@@ -175,6 +203,7 @@ void EffectPreviewStage::ReportToolState(
     reportedPerformance_ = performance;
     UpdatePerformanceMeasurement(performance);
 
+    // 同じ時刻でも新しいツールにはシーク要求を送れるよう、前の送信位置と時刻を無効にします。
     if (changedTool) {
         lastDispatchedSeekTarget_ = -1.0f;
         lastSeekDispatchTimestamp_ = -1.0;
@@ -194,6 +223,7 @@ void EffectPreviewStage::UpdatePerformanceMeasurement(const PerformanceMetrics& 
         return;
     }
 
+    // ウォームアップが終わるまでは、フレーム数だけを進めて計測に加えません。
     if (performanceWarmupProgress_ < performanceWarmupFrames_) {
         ++performanceWarmupProgress_;
         return;
@@ -204,12 +234,14 @@ void EffectPreviewStage::UpdatePerformanceMeasurement(const PerformanceMetrics& 
     performanceGpuTimeAccumMs_ += performance.gpuTimeMs;
     performanceParticleCountAccum_ += static_cast<double>(performance.particleCount);
 
+    // 測定間隔が正の場合だけ、FPSの計算に使う経過秒へ加えます。
     if (performance.frameDeltaSeconds > 0.0f) {
         performanceElapsedSeconds_ += performance.frameDeltaSeconds;
     }
 
     ++performanceSampleProgress_;
 
+    // 要求されたフレーム数に達していなければ、まだ平均を確定しません。
     if (performanceSampleProgress_ < performanceSampleFrames_) {
         return;
     }
@@ -217,7 +249,7 @@ void EffectPreviewStage::UpdatePerformanceMeasurement(const PerformanceMetrics& 
     // CPU/GPU時間と粒子数はサンプル平均、FPSは同じ区間の実経過時間から求める。
     const double sampleCount = static_cast<double>(performanceSampleProgress_);
     measuredPerformance_.available = true;
-    measuredPerformance_.particleCount = static_cast<int>(
+    measuredPerformance_.particleCount = static_cast<std::int32_t>(
         std::lround(performanceParticleCountAccum_ / sampleCount));
     measuredPerformance_.cpuTimeMs = static_cast<float>(performanceCpuTimeAccumMs_ / sampleCount);
     measuredPerformance_.gpuTimeMs = static_cast<float>(performanceGpuTimeAccumMs_ / sampleCount);
@@ -232,7 +264,7 @@ void EffectPreviewStage::UpdatePerformanceMeasurement(const PerformanceMetrics& 
 void EffectPreviewStage::ResetPerformanceMeasurement(bool clearResult) {
     // 計測を止める操作では結果を残せるよう、実行状態と表示結果を分けて初期化する。
     performanceMeasurementRunning_ = false;
-    performanceMeasurementTool_ = ToolKind::None;
+    performanceMeasurementTool_ = ToolKind::kNone;
     performanceWarmupProgress_ = 0;
     performanceSampleProgress_ = 0;
     performanceCpuTimeAccumMs_ = 0.0;
@@ -240,6 +272,7 @@ void EffectPreviewStage::ResetPerformanceMeasurement(bool clearResult) {
     performanceElapsedSeconds_ = 0.0;
     performanceParticleCountAccum_ = 0.0;
 
+    // 計測結果も消す指定の場合にだけ、表示用の平均値を無効にします。
     if (clearResult) {
         performanceMeasurementValid_ = false;
         measuredPerformance_ = {};
@@ -256,26 +289,31 @@ void EffectPreviewStage::DrawTimelineWindow() {
     ImGui::SameLine();
     ImGui::TextDisabled("[%s]", GetToolKindName(activeToolKind_));
 
+    // 隔離空間を表示中であれば、通常シーンへ戻す操作を出します。
     if (enabled_) {
         ImGui::TextColored(
             ImVec4(0.42f, 0.90f, 0.68f, 1.0f),
             "隔離プレビュー空間を表示中");
         ImGui::SameLine();
 
+        // 復帰を押されたら、退避した視点と照明へ戻します。
         if (ImGui::Button(ICON_FA_UNDO " 元のSceneへ戻る")) {
             ReturnToScene();
         }
+    // 通常シーンを表示している間は、プレビューへ入る操作を出します。
     } else {
         ImGui::TextColored(
             ImVec4(1.0f, 0.78f, 0.32f, 1.0f),
             "通常Sceneへ復帰済み");
         ImGui::SameLine();
 
+        // 入場を押されたら、現在の視点を退避するプレビュー空間へ移ります。
         if (ImGui::Button(ICON_FA_PLAY " プレビュー空間へ入る")) {
             EnableForToolPreview();
         }
     }
 
+    // 先頭からの再生を押した場合は時間をゼロにし、編集ツールへ新しい再生要求を送ります。
     if (ImGui::Button(ICON_FA_PLAY " 先頭から")) {
         transportPlaying_ = true;
         timelineScrubTime_ = 0.0f;
@@ -284,16 +322,20 @@ void EffectPreviewStage::DrawTimelineWindow() {
 
     ImGui::SameLine();
 
+    // 再生が許可されている間は、一時停止を選べるようにします。
     if (transportPlaying_) {
+        // 一時停止を押されたら、現在位置を保ったまま時間を進めない状態にします。
         if (ImGui::Button(ICON_FA_PAUSE " 一時停止")) {
             transportPlaying_ = false;
         }
+    // 停止中に再開を押されたら、現在位置から進行を許可します。
     } else if (ImGui::Button(ICON_FA_PLAY " 再開")) {
         transportPlaying_ = true;
     }
 
     ImGui::SameLine();
 
+    // 停止ボタンは再生状態を止め、位置を先頭へ戻す要求を送ります。
     if (ImGui::Button(ICON_FA_STOP " 停止")) {
         transportPlaying_ = false;
         timelineScrubTime_ = 0.0f;
@@ -309,6 +351,7 @@ void EffectPreviewStage::DrawTimelineWindow() {
         ++seekRequestSerial_;
     };
 
+    // 各ステップボタンを押したとき、現在の報告位置から指定のフレーム数だけ前後へ移動します。
     ImGui::SameLine();
     if (ImGui::SmallButton("-10F"))
         requestStep(-10.0f / 60.0f);
@@ -323,6 +366,7 @@ void EffectPreviewStage::DrawTimelineWindow() {
         requestStep(10.0f / 60.0f);
     ImGui::SameLine();
 
+    // 中心移動を押した場合は、視点の配置を次のカメラ更新へ予約します。
     if (ImGui::Button(ICON_FA_CROSSHAIRS " プレビュー中心へ")) {
         RequestCameraRecenter();
     }
@@ -335,6 +379,7 @@ void EffectPreviewStage::DrawTimelineWindow() {
     ImGui::SetNextItemWidth(130.0f);
     ImGui::DragFloat("表示倍率", &timelinePixelsPerSecond_, 5.0f, 80.0f, 600.0f, "%.0f px/s");
 
+    // サマリーの表が描画可能なら、選択ツールから報告された時刻・状態・件数を表示します。
     if (ImGui::BeginTable("EffectTimelineSummary", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingStretchSame)) {
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
@@ -344,7 +389,7 @@ void EffectPreviewStage::DrawTimelineWindow() {
         ImGui::TableSetColumnIndex(2);
         ImGui::Text("Active %d", reportedActiveCount_);
         ImGui::TableSetColumnIndex(3);
-        ImGui::Text("イベント %d", static_cast<int>(reportedEvents_.size()));
+        ImGui::Text("イベント %d", static_cast<std::int32_t>(reportedEvents_.size()));
         ImGui::EndTable();
     }
 
@@ -359,6 +404,7 @@ void EffectPreviewStage::DrawTimelineWindow() {
         const bool intervalElapsed =
             lastSeekDispatchTimestamp_ < 0.0 ||
             now - lastSeekDispatchTimestamp_ >= (1.0 / 30.0);
+        // 強制送信でなければ、十分に移動し、かつ前回の送信から約1/30秒経過した場合に限って送ります。
         if (!force && (!changedEnough || !intervalElapsed)) {
             return;
         }
@@ -371,16 +417,19 @@ void EffectPreviewStage::DrawTimelineWindow() {
         ++seekRequestSerial_;
     };
 
+    // スライダーの時刻が動いたら、ドラッグ中として制限付きでシークを送ります。
     if (ImGui::SliderFloat("再生位置", &timelineScrubTime_, 0.0f, reportedDuration_, "%.3f s")) {
         timelineScrubTime_ = std::clamp(timelineScrubTime_, 0.0f, reportedDuration_);
         timelineScrubbing_ = true;
         dispatchSeek(timelineScrubTime_, false);
     }
 
+    // スライダーをつかんだフレームから報告値でカーソルを上書きしないようにします。
     if (ImGui::IsItemActivated()) {
         timelineScrubbing_ = true;
     }
 
+    // スライダーを離したら、送信制限を無視して最後の指定位置を伝えます。
     if (ImGui::IsItemDeactivated()) {
         timelineScrubbing_ = false;
         dispatchSeek(timelineScrubTime_, true);
@@ -389,7 +438,7 @@ void EffectPreviewStage::DrawTimelineWindow() {
     constexpr float kLabelWidth = 132.0f;
     constexpr float kHeaderHeight = 24.0f;
     constexpr float kLaneHeight = 28.0f;
-    const int laneCount = (std::max)(1, static_cast<int>(reportedEvents_.size()));
+    const std::int32_t laneCount = (std::max)(1, static_cast<std::int32_t>(reportedEvents_.size()));
     // 時間軸の幅は秒数と 1 秒あたりのピクセル数の積。ラベル幅を足して長い素材も横スクロールで扱う。
     const float contentWidth = (std::max)(
         ImGui::GetContentRegionAvail().x,
@@ -406,9 +455,9 @@ void EffectPreviewStage::DrawTimelineWindow() {
         ImVec2(origin.x + kLabelWidth, origin.y + canvasHeight),
         IM_COL32(120, 128, 142, 220));
 
-    const int wholeSeconds = static_cast<int>(std::ceil(reportedDuration_));
+    const std::int32_t wholeSeconds = static_cast<std::int32_t>(std::ceil(reportedDuration_));
 
-    for (int second = 0; second <= wholeSeconds; ++second) {
+    for (std::int32_t second = 0; second <= wholeSeconds; ++second) {
         const float x = origin.x + kLabelWidth + static_cast<float>(second) * timelinePixelsPerSecond_;
         drawList->AddLine(
             ImVec2(x, origin.y + kHeaderHeight),
@@ -428,8 +477,9 @@ void EffectPreviewStage::DrawTimelineWindow() {
             ImVec2(origin.x + kLabelWidth + reportedDuration_ * timelinePixelsPerSecond_, laneY + kLaneHeight - 5.0f),
             IM_COL32(70, 150, 205, 190),
             4.0f);
+    // イベントがある場合は、開始・終了秒を表示倍率でピクセルへ換算し、イベントごとに別の行に描きます。
     } else {
-        for (int index = 0; index < static_cast<int>(reportedEvents_.size()); ++index) {
+        for (std::int32_t index = 0; index < static_cast<std::int32_t>(reportedEvents_.size()); ++index) {
             const TimelineEvent& event = reportedEvents_[index];
             const float laneY = origin.y + kHeaderHeight + static_cast<float>(index) * kLaneHeight;
             const float startX = origin.x + kLabelWidth + std::clamp(event.startTime, 0.0f, reportedDuration_) * timelinePixelsPerSecond_;
@@ -453,6 +503,7 @@ void EffectPreviewStage::DrawTimelineWindow() {
 
     const bool timelinePointerActive =
         ImGui::IsItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    // 時間軸を押したときか左ボタンでドラッグ中に、横位置をシーク先として扱います。
     if ((ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) || timelinePointerActive) {
         const float mouseX = ImGui::GetIO().MousePos.x;
         timelineScrubbing_ = true;
@@ -460,6 +511,7 @@ void EffectPreviewStage::DrawTimelineWindow() {
         dispatchSeek((mouseX - origin.x - kLabelWidth) / timelinePixelsPerSecond_, false);
     }
 
+    // 時間軸の操作を終えた場合は、最終時刻を必ず送ってドラッグ状態を解除します。
     if (ImGui::IsItemDeactivated() && timelineScrubbing_) {
         timelineScrubbing_ = false;
         dispatchSeek(timelineScrubTime_, true);
@@ -472,11 +524,12 @@ void EffectPreviewStage::DrawTimelineWindow() {
         ImGui::SeparatorText(ICON_FA_CHART_BAR " Performance Measurement");
         ImGui::TextDisabled(
             "選択中の%sだけを計測します。CPU/GPUの自動比較や設定変更は行いません。",
-            activeToolKind_ == ToolKind::CpuParticle ? "通常Particle" : "GPU Particle");
+            activeToolKind_ == ToolKind::kCpuParticle ? "通常Particle" : "GPU Particle");
 
         // 現在値と計測結果は同じ列・単位で描き、先頭セルだけ表示内容を切り替える。
         const auto drawPerformanceTable = [](const char* id, const char* heading,
             const auto& values, float fps, const auto& drawRowLabel) {
+            // 表を作成できた場合に、経過時間・粒子数・FPS・メモリを共通の列順で表示します。
             if (ImGui::BeginTable(
                 id, 6,
                 ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchSame)) {
@@ -521,6 +574,7 @@ void EffectPreviewStage::DrawTimelineWindow() {
         performanceWarmupFrames_ = std::clamp(performanceWarmupFrames_, 1, 300);
         performanceSampleFrames_ = std::clamp(performanceSampleFrames_, 30, 600);
 
+        // 計測ボタンを押したら、選んでいるツールを計測対象に固定し、古い結果を消します。
         if (ImGui::Button(ICON_FA_STOPWATCH " このParticleを計測", ImVec2(180.0f, 0.0f))) {
             ResetPerformanceMeasurement(true);
             performanceMeasurementRunning_ = true;
@@ -529,15 +583,17 @@ void EffectPreviewStage::DrawTimelineWindow() {
 
         ImGui::EndDisabled();
 
+        // 計測が進行中なら、停止操作とフレーム数に基づく進捗を表示します。
         if (performanceMeasurementRunning_) {
             ImGui::SameLine();
 
+            // 中止が押された場合は現在の計測を止め、結果の消去は要求しません。
             if (ImGui::Button(ICON_FA_STOP " 中止")) {
                 ResetPerformanceMeasurement(false);
             }
 
-            const int completedFrames = performanceWarmupProgress_ + performanceSampleProgress_;
-            const int totalFrames = performanceWarmupFrames_ + performanceSampleFrames_;
+            const std::int32_t completedFrames = performanceWarmupProgress_ + performanceSampleProgress_;
+            const std::int32_t totalFrames = performanceWarmupFrames_ + performanceSampleFrames_;
             const float progress = totalFrames > 0 ?
                 static_cast<float>(completedFrames) / static_cast<float>(totalFrames) : 0.0f;
             const char* phase = performanceWarmupProgress_ < performanceWarmupFrames_ ?
@@ -548,17 +604,19 @@ void EffectPreviewStage::DrawTimelineWindow() {
                 phase);
         }
 
+        // 計測結果が確定した場合だけ、平均値とコピー操作を表示します。
         if (performanceMeasurementValid_) {
             drawPerformanceTable("EffectPerformanceMeasured", "計測結果", measuredPerformance_, measuredPerformance_.fps, [&] {
                 ImGui::Text("%dF平均", performanceSampleFrames_);
             });
 
-            const char* methodLabel = activeToolKind_ == ToolKind::CpuParticle ? "CPU更新" : "GPU更新";
+            const char* methodLabel = activeToolKind_ == ToolKind::kCpuParticle ? "CPU更新" : "GPU更新";
             // 表示中の確定結果だけを資料へ貼れるよう、MarkdownとTSVの両形式にする。
             const auto buildResultText = [&](bool markdown) {
                 std::ostringstream stream;
                 stream << std::fixed;
 
+                // Markdownを選んだ場合は、列の見出しと区切り線を含む表を組み立てます。
                 if (markdown) {
                     stream << "| 方式 | 粒子数 | CPU時間 | GPU時間 | FPS | 使用メモリ |\n"
                         << "|---|---:|---:|---:|---:|---:|\n"
@@ -570,6 +628,7 @@ void EffectPreviewStage::DrawTimelineWindow() {
                         << static_cast<double>(measuredPerformance_.memoryBytes) / (1024.0 * 1024.0)
                         << "MB |\n";
                 }
+                // TSVを選んだ場合は、同じ列値をタブと改行で区切ります。
                 else {
                     stream << "方式\t粒子数\tCPU時間\tGPU時間\tFPS\t使用メモリ\n"
                         << methodLabel << '\t' << measuredPerformance_.particleCount << '\t'
@@ -584,18 +643,21 @@ void EffectPreviewStage::DrawTimelineWindow() {
                 return stream.str();
             };
 
+            // Markdownのボタンを押した場合に、その形式をクリップボードへ渡します。
             if (ImGui::Button("Markdown行をコピー")) {
                 ImGui::SetClipboardText(buildResultText(true).c_str());
             }
 
             ImGui::SameLine();
 
+            // TSVのボタンを押した場合に、その形式をクリップボードへ渡します。
             if (ImGui::Button("PowerPoint用TSVをコピー")) {
                 ImGui::SetClipboardText(buildResultText(false).c_str());
             }
 
             ImGui::SameLine();
 
+            // 消去を押した場合は、確定した平均値を表示から取り除きます。
             if (ImGui::Button(ICON_FA_TRASH_ALT " 結果を消去")) {
                 ResetPerformanceMeasurement(true);
             }
@@ -607,13 +669,19 @@ void EffectPreviewStage::DrawTimelineWindow() {
 }
 
 void EffectPreviewStage::Update() {
+#ifdef USE_IMGUI
+    PROFILE_SCOPE("Editor / エフェクトプレビュー環境");
+#endif
+    // 入退場に合わせ、通常シーンのカメラと照明を退避・復元する。
     CameraEditor::GetInstance()->SetEditorStateSaveBlocker(1u << 0, enabled_ && isolatedSpace_);
 
+    // 無効から有効へ変わったフレームでは、通常視点を退避して自動配置をやり直せる状態にします。
     if (enabled_ && !wasEnabled_) {
         CaptureCameraState();
         hasPlacedCamera_ = false;
     }
 
+    // 有効から無効へ変わったフレームでは、照明・視点・背景の変更を復元して再配置の予約を消します。
     if (!enabled_ && wasEnabled_) {
         RestoreStudioLighting();
         RestoreCameraState();
@@ -625,39 +693,78 @@ void EffectPreviewStage::Update() {
 
     wasEnabled_ = enabled_;
 
+    // プレビューが有効な間だけ、プレビューの背景を反映します。
     if (enabled_) {
         ApplyBackgroundColor();
 
+        // 照明を使う設定なら、光源・フォグ・空をStudio用に置き換えます。
         if (studioLighting_) {
             ApplyStudioLighting();
+        // 光源の切り替えを無効にした場合は、退避した実シーンの照明へ戻します。
         } else {
             RestoreStudioLighting();
         }
     }
 
-    engine::Object3D* floor = FindFloor();
-    engine::Vector3 previewPos = GetGroundPosition();
+    // シーンがない間は配置先がないため、次に有効になったシーンで再適用する。
+    const auto* scene = sceneManager_ ? sceneManager_->GetCurrentScene() : nullptr;
+    // 配置先のシーンが取得できない間は、適用済みの環境情報を無効にします。
+    if (!scene) {
+        appliedEnvironmentLayout.reset();
+        return;
+    }
 
-    if (enabled_ && (showFloor_ || showGrid_ || showAxes_)) {
-        if (!floor) {
-            CreateFloor();
-            floor = FindFloor();
-        }
-
-        // 中央グリッドの端より 2 ワールド単位外に床の端を置く。床とグリッドの高さは少し離し、重なりを避ける。
+    // 床は中央グリッドの端より2ワールド単位外まで確保する。
+    const bool showEnvironment = enabled_ && (showFloor_ || showGrid_ || showAxes_);
+    // 床・グリッド・軸のいずれかを表示する場合に、床の寸法をグリッドの範囲から補います。
+    if (showEnvironment) {
         stageRadius_ = (std::max)(stageRadius_, gridSpacing_ * static_cast<float>(kGridCenterIndex) + 2.0f);
         floorSize_ = stageRadius_ * 2.0f;
+    }
+
+    // 設定と所属シーンが同じ間は、名前検索・表示切替・行列更新を省く。
+    const auto previewPos = GetGroundPosition();
+    const auto rgba = [](const engine::Vector4& color) {
+        return std::array{color.x, color.y, color.z, color.w};
+    };
+    const EnvironmentLayout layout{
+        sceneManager_->GetSceneGeneration(), showEnvironment ? scene->GetObjects().size() : 0,
+        showEnvironment, showFloor_, showGrid_, showAxes_,
+        {previewPos.x, previewPos.y, previewPos.z}, stageRadius_, gridSpacing_,
+        {rgba(floorColor_), rgba(minorGridColor_), rgba(majorGridColor_),
+         rgba(xAxisColor_), rgba(yAxisColor_), rgba(zAxisColor_)},
+    };
+    // シーン世代、物体数、寸法、位置、色と表示設定が前回適用時と同じなら配置を作り直しません。
+    if (appliedEnvironmentLayout == layout)
+        return;
+
+    // プレビュー環境を表示する条件を満たしたら、床と補助線を配置します。
+    if (showEnvironment) {
+        // 床をまだ取得できない場合は、床と補助線を一式作るよう依頼します。
+        if (!FindFloor()) {
+            // AddObjectで予約した床がSceneへ入るまで、配置を適用済みにしない。
+            appliedEnvironmentLayout.reset();
+            CreateFloor();
+            // 生成予約を入れても床がまだ一覧に無い間は、適用完了とせず次の更新を待ちます。
+            if (!FindFloor())
+                return;
+        }
+
+        // 床とグリッドの高さを少し離し、重なりを避ける。
         const float half = stageRadius_;
         const float floorY = previewPos.y - 0.08f;
         const float gridY = previewPos.y + 0.01f;
 
+        // 床が表示設定なら、グリッドの少し下へ広げます。
         if (showFloor_) {
             UpdateEnvironmentObject(kFloorName, { previewPos.x, floorY, previewPos.z }, { half, 0.05f, half }, floorColor_);
+        // 床を表示しない場合でも、記録済みの床を削除せず非表示へ切り替えます。
         } else {
             SetEnvironmentObjectVisible(kFloorName, false);
         }
 
-        for (int i = 0; i < kGridLineCount; ++i) {
+        for (std::int32_t i = 0; i < kGridLineCount; ++i) {
+            // グリッド非表示時は中心の軸だけを例外とし、それ以外の線をすべて隠します。
             if (!showGrid_ && !(showAxes_ && i == kGridCenterIndex)) {
                 SetEnvironmentObjectVisible(MakeGridXName(i), false);
                 SetEnvironmentObjectVisible(MakeGridZName(i), false);
@@ -674,13 +781,14 @@ void EffectPreviewStage::Update() {
             UpdateEnvironmentObject(MakeGridZName(i), { previewPos.x + offset, gridY + 0.006f, previewPos.z }, { lineWidth, 0.010f, half }, zLineColor);
         }
 
-        for (int i = -kOuterMajorHalfCount; i <= kOuterMajorHalfCount; ++i) {
-            const int nameIndex = i + kOuterMajorHalfCount;
+        for (std::int32_t i = -kOuterMajorHalfCount; i <= kOuterMajorHalfCount; ++i) {
+            const std::int32_t nameIndex = i + kOuterMajorHalfCount;
             const float offset = static_cast<float>(i) * 5.0f * gridSpacing_;
             // 外周の太線は 5 区画刻み。中心の細線と重なる区間や床の外は描かない。
             const bool overlapsFineGrid = std::abs(offset) <= gridSpacing_ * static_cast<float>(kGridCenterIndex) + 0.001f;
             const bool withinStage = std::abs(offset) <= stageRadius_ + 0.001f;
 
+            // グリッド非表示、細線との重複、床の範囲外のいずれかに該当する外周線は隠します。
             if (!showGrid_ || overlapsFineGrid || !withinStage) {
                 SetEnvironmentObjectVisible(MakeOuterMajorXName(nameIndex), false);
                 SetEnvironmentObjectVisible(MakeOuterMajorZName(nameIndex), false);
@@ -691,9 +799,11 @@ void EffectPreviewStage::Update() {
             UpdateEnvironmentObject(MakeOuterMajorZName(nameIndex), { previewPos.x + offset, gridY + 0.006f, previewPos.z }, { 0.025f, 0.010f, half }, majorGridColor_);
         }
 
+        // 軸を表示する場合は、床原点にY軸と位置の目印を加えます。
         if (showAxes_) {
             UpdateEnvironmentObject(kYAxisName, { previewPos.x, previewPos.y + 1.5f, previewPos.z }, { 0.018f, 1.5f, 0.018f }, yAxisColor_);
             UpdateEnvironmentObject(kOriginMarkerName, { previewPos.x, previewPos.y + 0.035f, previewPos.z }, { 0.07f, 0.07f, 0.07f }, { 0.92f, 0.92f, 0.95f, 1.0f });
+        // 軸を表示しない場合は、縦の軸と原点の印も隠します。
         } else {
             SetEnvironmentObjectVisible(kYAxisName, false);
             SetEnvironmentObjectVisible(kOriginMarkerName, false);
@@ -704,13 +814,16 @@ void EffectPreviewStage::Update() {
         SetEnvironmentObjectVisible(kLegacyLeftRailName, false);
         SetEnvironmentObjectVisible(kLegacyRightRailName, false);
     }
-    else if (floor) {
-        for (auto& object : sceneManager_->GetCurrentScene()->GetObjects()) {
+    else {
+        // 無効化したフレームに、旧配置との互換用Objectも含めて隠す。
+        for (const auto& object : scene->GetObjects()) {
+            // 有効な専用環境名の配置を見つけた場合だけ隠します。
             if (object && IsPreviewEnvironmentName(object->GetName())) {
                 object->SetIsVisible(false);
             }
         }
     }
+    appliedEnvironmentLayout = layout;
 }
 
 void EffectPreviewStage::DrawImGui() {
@@ -719,16 +832,20 @@ void EffectPreviewStage::DrawImGui() {
     ImGui::Text(ICON_FA_MAGIC " Effect Preview Stage");
     ImGui::Separator();
 
+    // 有効中は通常のシーンへ戻る操作を表示します。
     if (enabled_) {
+        // 戻るボタンを押すと、視点と照明を復元します。
         if (ImGui::Button(ICON_FA_UNDO " 元のSceneへ戻る")) {
             ReturnToScene();
         }
+    // 通常シーンの表示中に入場を選んだ場合は、プレビューの状態を準備します。
     } else if (ImGui::Button(ICON_FA_PLAY " プレビュー空間へ入る")) {
         EnableForToolPreview();
     }
 
     ImGui::SameLine();
 
+    // 一回再生を押したら、新しい要求番号で選択ツールに開始を伝えます。
     if (ImGui::Button(ICON_FA_PLAY " 1回再生")) {
         ++playRequestSerial_;
     }
@@ -738,6 +855,7 @@ void EffectPreviewStage::DrawImGui() {
     ImGui::Checkbox("有効化時にカメラを移動", &moveCameraOnEnter_);
     ImGui::SameLine();
 
+    // カメラの移動を押されたら、次の上書きでプレビュー中心に配置するよう予約します。
     if (ImGui::Button(ICON_FA_CROSSHAIRS " カメラをプレビューへ移動")) {
         RequestCameraRecenter();
     }
@@ -745,6 +863,7 @@ void EffectPreviewStage::DrawImGui() {
     ImGui::DragFloat("再生速度", &playbackSpeed_, 0.05f, 0.0f, 5.0f);
     ImGui::DragFloat3(isolatedSpace_ ? "隔離空間内の床原点" : "プレビュー床原点", &origin_.x, 0.1f);
 
+    // 隔離空間を使う場合だけ、シーン座標から離すための基準点を編集できます。
     if (isolatedSpace_) {
         ImGui::DragFloat3("隔離空間ベース", &isolatedBase_.x, 100.0f);
     }
@@ -752,6 +871,7 @@ void EffectPreviewStage::DrawImGui() {
     ImGui::DragFloat("プレビュー中心高さ", &previewCenterHeight_, 0.05f, 0.0f, 10.0f, "%.2f m");
     ImGui::TextDisabled("中心原点のEffectは標準1m。接地型Effectは0mへ下げて確認できます。");
 
+    // 入場時にカメラを移動する設定なら、視点を組み立てる距離・方位角・高さを編集できます。
     if (moveCameraOnEnter_) {
         ImGui::DragFloat("カメラ距離", &cameraDistance_, 0.1f, 2.0f, 80.0f);
         ImGui::DragFloat("カメラ高さ", &cameraHeight_, 0.1f, -20.0f, 40.0f);
@@ -761,8 +881,9 @@ void EffectPreviewStage::DrawImGui() {
 
     ImGui::SeparatorText("Studio Viewport");
     const char* presetNames[] = { "Studio Dark", "Studio Light", "Emission Black" };
-    int selectedPreset = studioPresetIndex_;
+    std::int32_t selectedPreset = studioPresetIndex_;
 
+    // 表示プリセットが変わった時点で、背景と床、グリッドの色へ展開します。
     if (ImGui::Combo("表示プリセット", &selectedPreset, presetNames, IM_ARRAYSIZE(presetNames))) {
         ApplyStudioPreset(selectedPreset);
     }
@@ -775,13 +896,16 @@ void EffectPreviewStage::DrawImGui() {
     ImGui::SameLine();
     ImGui::Checkbox("XYZ軸", &showAxes_);
 
+    // 床かグリッドを表示する場合にだけ、間隔と環境半径の設定を提示します。
     if (showFloor_ || showGrid_) {
+        // グリッド間隔が変わった場合は、1区画の許容範囲に収めます。
         if (ImGui::DragFloat("グリッド間隔", &gridSpacing_, 0.05f, 0.1f, 6.0f, "%.2f m")) {
             gridSpacing_ = std::clamp(gridSpacing_, 0.1f, 6.0f);
         }
 
         const float minimumRadius = gridSpacing_ * static_cast<float>(kGridCenterIndex) + 2.0f;
 
+        // 半径を変えた場合は、中央の細線が床からはみ出さない下限を適用します。
         if (ImGui::DragFloat("空間半径", &stageRadius_, 0.5f, minimumRadius, 80.0f, "%.1f m")) {
             stageRadius_ = std::clamp(stageRadius_, minimumRadius, 80.0f);
         }
@@ -791,6 +915,7 @@ void EffectPreviewStage::DrawImGui() {
 
     ImGui::Checkbox("Studio Lighting", &studioLighting_);
 
+    // Studio照明が有効で設定欄を展開した場合だけ、光の調整を表示します。
     if (studioLighting_ && ImGui::TreeNode("Studio Lighting設定")) {
         ImGui::ColorEdit3("Key Light色", &studioLightColor_.x);
         ImGui::DragFloat3("Key Light方向", &studioLightDirection_.x, 0.01f, -1.0f, 1.0f);
@@ -800,6 +925,7 @@ void EffectPreviewStage::DrawImGui() {
         ImGui::TreePop();
     }
 
+    // 色の詳細欄を展開した場合は、背景・床・補助線の色を個別に調整できます。
     if (ImGui::TreeNode("表示色の微調整")) {
         ImGui::ColorEdit4("背景色", &backgroundColor_.x);
         ImGui::ColorEdit4("床色", &floorColor_.x);
@@ -808,6 +934,7 @@ void EffectPreviewStage::DrawImGui() {
         ImGui::TreePop();
     }
 
+    // Studio標準へのリセットを押されたら、環境寸法と照明を戻し、カメラの再配置も予約します。
     if (ImGui::Button(ICON_FA_UNDO " Studio標準へ戻す", ImVec2(-1, 0))) {
         ApplyStudioPreset(0);
         showFloor_ = true;
@@ -824,6 +951,7 @@ void EffectPreviewStage::DrawImGui() {
         recenterCameraRequested_ = true;
     }
 
+    // 環境の撤去を押されたら、通常の配置物へ触れず専用オブジェクトだけを削除予約します。
     if (ImGui::Button(ICON_FA_TRASH_ALT " Preview環境を削除", ImVec2(-1, 0))) {
         RemoveFloor();
     }
@@ -856,8 +984,9 @@ void EffectPreviewStage::ApplyCameraOverride() {
     if (!enabled_)
         return;
 
-    CameraEditor::GetInstance()->SetMode(CameraEditor::Mode::Editor);
+    CameraEditor::GetInstance()->SetMode(CameraEditor::Mode::kEditor);
 
+    // 入場時に自動配置がまだ済んでいないか、再配置が要求された場合だけ視点を動かします。
     if ((moveCameraOnEnter_ && !hasPlacedCamera_) || recenterCameraRequested_) {
         PlaceCameraAtPreview();
         hasPlacedCamera_ = true;
@@ -868,6 +997,7 @@ void EffectPreviewStage::ApplyCameraOverride() {
 void EffectPreviewStage::PlaceCameraAtPreview() {
     // 方位角と距離から視点を作り、プレビュー中心を注視する。
     engine::Camera* camera = CameraManager::GetInstance()->GetMainCamera();
+    // メインカメラを取得できなければ、現在の視点への配置を行えません。
     if (!camera)
         return;
 
@@ -889,14 +1019,16 @@ void EffectPreviewStage::PlaceCameraAtPreview() {
     camera->SetTarget(target);
     camera->SetRotation({ pitch, -azimuth, 0.0f });
     camera->Update();
-    CameraEditor::GetInstance()->SetMode(CameraEditor::Mode::Editor);
+    CameraEditor::GetInstance()->SetMode(CameraEditor::Mode::kEditor);
 }
 
 void EffectPreviewStage::CreateFloor() {
     // 専用名で重複生成を防ぎつつ、床・中央グリッド・外周線・原点印を揃える。
+    // シーン管理または現在のシーンが無ければ環境を生成できません。
     if (!sceneManager_ || !sceneManager_->GetCurrentScene())
         return;
     BaseScene* scene = sceneManager_->GetCurrentScene();
+    // 現在のシーンに3D描画基盤が無い間は、床やグリッドの生成を待ちます。
     if (!scene->GetObject3DCommon())
         return;
 
@@ -905,12 +1037,12 @@ void EffectPreviewStage::CreateFloor() {
     const bool wasMissing = FindFloor() == nullptr;
     CreateEnvironmentObject(kFloorName);
 
-    for (int i = 0; i < kGridLineCount; ++i) {
+    for (std::int32_t i = 0; i < kGridLineCount; ++i) {
         CreateEnvironmentObject(MakeGridXName(i));
         CreateEnvironmentObject(MakeGridZName(i));
     }
 
-    for (int i = 0; i <= kOuterMajorHalfCount * 2; ++i) {
+    for (std::int32_t i = 0; i <= kOuterMajorHalfCount * 2; ++i) {
         CreateEnvironmentObject(MakeOuterMajorXName(i));
         CreateEnvironmentObject(MakeOuterMajorZName(i));
     }
@@ -918,19 +1050,23 @@ void EffectPreviewStage::CreateFloor() {
     CreateEnvironmentObject(kYAxisName);
     CreateEnvironmentObject(kOriginMarkerName);
 
+    // 生成前に床が存在しなかった場合にだけ、初回生成としてログに残します。
     if (wasMissing) {
         DebugConsole::GetInstance()->AddLog("Effect Preview Stage environment created.");
     }
 }
 
 void EffectPreviewStage::RemoveFloor() {
+    appliedEnvironmentLayout.reset();
     // Scene のコンテナ走査中は削除せず、専用環境だけを後から撤去予約する。
+    // シーンを取得できない場合は、削除を予約する対象がありません。
     if (!sceneManager_ || !sceneManager_->GetCurrentScene())
         return;
 
     std::vector<engine::Object3D*> targets;
 
     for (auto& object : sceneManager_->GetCurrentScene()->GetObjects()) {
+        // 有効なオブジェクトのうち、専用名を持つものだけを削除候補へ集めます。
         if (object && IsPreviewEnvironmentName(object->GetName())) {
             targets.push_back(object.get());
         }
@@ -940,6 +1076,7 @@ void EffectPreviewStage::RemoveFloor() {
         sceneManager_->GetCurrentScene()->RequestRemoveObject(target);
     }
 
+    // 削除予約した対象がある場合だけ、撤去をログに残します。
     if (!targets.empty()) {
         DebugConsole::GetInstance()->AddLog("Effect Preview Stage environment removed.");
     }
@@ -952,10 +1089,12 @@ engine::Object3D* EffectPreviewStage::FindFloor() const {
 
 engine::Object3D* EffectPreviewStage::FindEnvironmentObject(const std::string& name) const {
     // 通常 Scene の Object と区別するため、編集環境の固定名で探す。
+    // 現在のシーンを取得できない場合は、名前を検索する一覧がありません。
     if (!sceneManager_ || !sceneManager_->GetCurrentScene())
         return nullptr;
 
     for (auto& object : sceneManager_->GetCurrentScene()->GetObjects()) {
+        // 有効なオブジェクトの名前が一致した場合に、その実体への借用参照を返します。
         if (object && object->GetName() == name) {
             return object.get();
         }
@@ -966,15 +1105,18 @@ engine::Object3D* EffectPreviewStage::FindEnvironmentObject(const std::string& n
 
 void EffectPreviewStage::CreateEnvironmentObject(const std::string& name) {
     // 保存・衝突の対象から外したエディター内部 Object として生成する。
+    // 環境を追加できるシーンが無ければ生成しません。
     if (!sceneManager_ || !sceneManager_->GetCurrentScene())
         return;
     BaseScene* scene = sceneManager_->GetCurrentScene();
+    // 描画基盤を取得できないか、同名の環境がすでにあれば、新たな実体を生成しません。
     if (!scene->GetObject3DCommon() || FindEnvironmentObject(name))
         return;
 
     auto object = std::make_unique<engine::Object3D>();
     object->Initialize(scene->GetObject3DCommon());
     object->SetName(name);
+    // シーン保存とゲーム用衝突から外すため、内部用の種類と無効な衝突カテゴリを設定します。
     object->SetClassName("EditorOnly_EffectPreviewStage");
     object->SetSaveCategory("Object");
     object->SetEditorInternal(true);
@@ -983,7 +1125,7 @@ void EffectPreviewStage::CreateEnvironmentObject(const std::string& name) {
     object->SetCollisionAttribute(0);
     object->SetCollisionMask(0);
     object->SetMaterialType(0);
-    object->SetBlendMode(BlendMode::Normal);
+    object->SetBlendMode(BlendMode::kNormal);
     object->SetTexture("Resources/sprite/common/white.png");
     object->SetEnableLighting(false);
     object->SetCastShadow(false);
@@ -994,12 +1136,14 @@ void EffectPreviewStage::CreateEnvironmentObject(const std::string& name) {
     object->SetIsVisible(false);
     object->UpdateLocalMatrix();
     object->UpdateWorldMatrix();
+    // 環境を非表示で登録し、表示設定の反映は Update() が担当します。
     scene->AddObject(std::move(object));
 }
 
 void EffectPreviewStage::UpdateEnvironmentObject(const std::string& name, const engine::Vector3& translate, const engine::Vector3& scale, const engine::Vector4& color) {
     // 環境の配置と色だけを更新し、モデルや材質設定は生成時の共通値を保つ。
     engine::Object3D* object = FindEnvironmentObject(name);
+    // 登録が反映されていなければ、その部品の配置は更新しません。
     if (!object)
         return;
 
@@ -1014,12 +1158,13 @@ void EffectPreviewStage::UpdateEnvironmentObject(const std::string& name, const 
 
 void EffectPreviewStage::SetEnvironmentObjectVisible(const std::string& name, bool visible) {
     // ツールを閉じた後も残る環境 Object を、必要に応じて非表示へ切り替える。
+    // 対象の名前を解決できた場合に、その実体の表示を切り替えます。
     if (engine::Object3D* object = FindEnvironmentObject(name)) {
         object->SetIsVisible(visible);
     }
 }
 
-void EffectPreviewStage::ApplyStudioPreset(int presetIndex) {
+void EffectPreviewStage::ApplyStudioPreset(std::int32_t presetIndex) {
     // 暗部・明部・発光の検証目的ごとに、床とグリッドの基準色を揃える。
     studioPresetIndex_ = std::clamp(presetIndex, 0, 2);
 
@@ -1054,11 +1199,13 @@ void EffectPreviewStage::ApplyStudioPreset(int presetIndex) {
 void EffectPreviewStage::ApplyStudioLighting() {
     // 最初の適用時に Scene 側の光・Fog・Skybox を退避し、プレビュー中だけ上書きする。
     engine::LightManager* lightManager = engine::LightManager::GetInstance();
+    // ライト管理を取得できなければ、シーンの照明状態は変えられません。
     if (!lightManager)
         return;
 
     DirectionalLight& light = lightManager->GetDirectionalLight();
 
+    // Studio照明を初めて適用する場合に、元の光・フォグ有効状態・空を保持します。
     if (!studioLightingApplied_) {
         storedDirectionalColor_ = light.color;
         storedDirectionalDirection_ = light.direction;
@@ -1084,6 +1231,7 @@ void EffectPreviewStage::ApplyStudioLighting() {
         };
     }
 
+    // 調整用の色と強さを適用し、通常シーンのフォグと空を一時的に外します。
     light.color = studioLightColor_;
     light.intensity = studioLightIntensity_;
     light.ambientColor = {
@@ -1104,6 +1252,7 @@ void EffectPreviewStage::RestoreStudioLighting() {
 
     engine::LightManager* lightManager = engine::LightManager::GetInstance();
 
+    // ライト管理が利用できる場合にだけ、退避した描画状態を適用できます。
     if (lightManager) {
         DirectionalLight& light = lightManager->GetDirectionalLight();
         light.color = storedDirectionalColor_;
@@ -1121,6 +1270,7 @@ void EffectPreviewStage::RestoreStudioLighting() {
 
 void EffectPreviewStage::ApplyBackgroundColor() {
     // Studio 用の背景色を描画クリア色へ反映する。
+    // 描画基盤が無い場合は、クリア色を反映できません。
     if (!dxCommon_)
         return;
     dxCommon_->SetRenderClearColor(backgroundColor_.x, backgroundColor_.y, backgroundColor_.z, backgroundColor_.w);
@@ -1132,13 +1282,14 @@ void EffectPreviewStage::CaptureCameraState() {
         return;
 
     engine::Camera* camera = CameraManager::GetInstance()->GetMainCamera();
+    // メインカメラが取得できない間は、視点を退避済みにはしません。
     if (!camera)
         return;
 
     storedEye_ = camera->GetEye();
     storedTarget_ = camera->GetTargetPoint();
     storedRotation_ = camera->GetRotation();
-    storedCameraMode_ = static_cast<int>(CameraEditor::GetInstance()->GetMode());
+    storedCameraMode_ = static_cast<std::int32_t>(CameraEditor::GetInstance()->GetMode());
     hasCapturedCamera_ = true;
 }
 
@@ -1149,6 +1300,7 @@ void EffectPreviewStage::RestoreCameraState() {
 
     engine::Camera* camera = CameraManager::GetInstance()->GetMainCamera();
 
+    // メインカメラが残っている場合は、退避した位置と姿勢を適用して更新します。
     if (camera) {
         camera->SetFollowTarget(nullptr);
         camera->SetEye(storedEye_);

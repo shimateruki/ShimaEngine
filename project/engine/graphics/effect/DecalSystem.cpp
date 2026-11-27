@@ -13,6 +13,7 @@ namespace {
 engine::Vector3 SafeNormal(const engine::Vector3& value) {
     const float length = engine::Math::Length(value);
 
+    // 面の法線がほぼゼロなら回転の基準に使えないため、上向きとみなす。
     if (length <= 0.0001f)
         return { 0.0f, 1.0f, 0.0f };
     return value * (1.0f / length);
@@ -53,6 +54,7 @@ std::unique_ptr<engine::Object3D> DecalSystem::Create(
     const engine::Vector3& surfacePoint,
     const engine::Vector3& surfaceNormal,
     const DecalSpawnDesc& desc) {
+    // 共有描画資源を取得できない場合は、デカールの生成に進まない。
     if (!common)
         return nullptr;
 
@@ -76,10 +78,10 @@ std::unique_ptr<engine::Object3D> DecalSystem::Create(
     decal->SetCollisionMask(0);
 
     engine::Object3D::ColliderConfig collider = decal->GetColliderConfig();
-    collider.type = ColliderType::None;
+    collider.type = engine::ColliderType::kNone;
     decal->SetColliderConfig(collider);
 
-    // 尺寸や時間を有効範囲へ揃え、再生状態を初期化してから面に置く。
+    // 投影面に沿う姿勢とデカールの寸法を、生成するオブジェクトに設定する。
     engine::Object3D::DecalSettings settings;
     settings.enabled = true;
     settings.size = {
@@ -105,6 +107,7 @@ engine::Object3D* DecalSystem::Spawn(
     const DecalSpawnDesc& desc) {
     std::unique_ptr<engine::Object3D> decal = Create(
         scene.GetObject3DCommon(), surfacePoint, surfaceNormal, desc);
+    // 生成できなかった場合は、シーンへ追加する処理を行わない。
     if (!decal)
         return nullptr;
 
@@ -113,6 +116,7 @@ engine::Object3D* DecalSystem::Spawn(
     scene.AddObject(std::move(decal));
 
     for (const std::unique_ptr<engine::Object3D>& ownedObject : scene.GetObjects()) {
+        // 追加が遅延することがあるため、現在のシーンに登録されたことを確認してから参照を返す。
         if (ownedObject.get() == result) {
             return result;
         }
@@ -128,11 +132,13 @@ engine::Object3D* DecalSystem::SpawnFromRaycast(
     float maxDistance,
     uint32_t collisionMask,
     const DecalSpawnDesc& desc) {
+    // 照射距離が正でない場合か、照射方向を正規化できない場合は、レイを飛ばさない。
     if (maxDistance <= 0.0f || engine::Math::Length(rayDirection) <= 0.0001f)
         return nullptr;
     // 方向を単位ベクトルへ揃え、入力ベクトルの長さにかかわらず maxDistance をワールド上の距離として使います。
-    const RaycastHit hit = CollisionManager::GetInstance()->Raycast(
+    const engine::RaycastHit hit = engine::CollisionManager::GetInstance()->Raycast(
         rayStart, SafeNormal(rayDirection), maxDistance, collisionMask);
+    // レイが面に当たらなければ、置く位置や向きを確定できないため生成しない。
     if (!hit.isHit)
         return nullptr;
     return Spawn(scene, hit.hitPoint, hit.normal, desc);
@@ -170,6 +176,7 @@ void engine::Object3D::SetDecalSettings(const DecalSettings& settings) {
     decalSettings_.fadeIn = (std::max)(decalSettings_.fadeIn, 0.0f);
     decalSettings_.fadeOut = (std::max)(decalSettings_.fadeOut, 0.0f);
 
+    // 無効にするときは経過を0にし、前の表示時間を次の有効化に持ち越さない。
     if (!decalSettings_.enabled) {
         decalElapsedTime_ = 0.0f;
     }
@@ -180,6 +187,7 @@ void engine::Object3D::RestartDecalPlayback() {
     // フェードに掛ける元の不透明度を、この時点の色から保存します。
     decalAuthoredAlpha_ = GetColor().w;
 
+    // 有効なデカールに限り、再生に備えて表示と終了の状態を戻す。
     if (decalSettings_.enabled) {
         SetIsVisible(true);
         SetDead(false);

@@ -7,10 +7,12 @@
 #include <unordered_set>
 #include <vector>
 
+namespace engine {
+
 /// <summary>空間分割グリッドの整数座標です。</summary>
 // 関連：CollisionManager（この型を使う機能の本体）
 struct Vector3i {
-    int x, y, z;
+    std::int32_t x, y, z;
 };
 
 /// <summary>順序を統一したオブジェクトペアをハッシュ化します。</summary>
@@ -155,7 +157,7 @@ private:
     // ワールド座標を整数のセル座標へ、またセル座標を格納用IDへ変換します。
     Vector3i GetGridIndices(const engine::Vector3& pos);
 
-    int64_t GetGridIdFromIndices(int x, int y, int z);
+    int64_t GetGridIdFromIndices(std::int32_t x, std::int32_t y, std::int32_t z);
 
     // 2 つの Collider を調べ、当フレームの接触ペアへ登録します。
     void CheckCollisionPair(engine::Object3D* objA, engine::Object3D* objB);
@@ -199,3 +201,5 @@ private:
     std::unordered_map<std::pair<engine::Object3D*, engine::Object3D*>, ContactState, PairHash> previousContacts_;
     std::unordered_map<std::pair<engine::Object3D*, engine::Object3D*>, ContactState, PairHash> currentContacts_;
 };
+
+} // namespace engine

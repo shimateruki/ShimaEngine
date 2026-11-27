@@ -68,7 +68,7 @@
 #include <cmath>
 #include <filesystem>
 
-namespace GameEditorControllerImplementation {
+namespace gameEditorControllerImplementation {
 inline constexpr float kEditorViewportAspect = 16.0f / 9.0f;
 
 // 利用可能領域の中央へ固定アスペクトの描画領域を収めます。
@@ -119,7 +119,6 @@ void DrawSelectedObjectOrientation(const GameViewArea& area, engine::Camera* cam
 
 }
 
-// GameEditorControllerの既定コンストラクタ。メンバ生成はInitializeで行う。
 
 
 #endif

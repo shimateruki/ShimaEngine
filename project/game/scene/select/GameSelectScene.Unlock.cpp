@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include <cstdint>
 #include "game/scene/select/GameSelectScene.h"
 #include "Camera.h"
 #include "Player.h"
@@ -8,11 +9,11 @@
 #include "SceneManager.h"
 #include <algorithm>
 #include "game/scene/select/GameSelectScene.Internal.h"
-using namespace StageSelectDetail;
+using namespace stageSelectDetail;
 
 // 解放演出の開始・進行・復帰。入力とカメラの復帰、既読保存の条件を一組として維持する。
 void GameSelectScene::BeginUnlockPresentation() {
-    // Director に姿勢を記録させ、プレイヤーの操作権と視点を保存してから再生する。
+    // 解放する対象が未指定か、この演出の準備が済んでいる場合は、再生設定を作り直さない。
     if (unlockingStageIndex_ < 0 || unlockPresentationInitialized_) {
         return;
     }
@@ -28,12 +29,14 @@ void GameSelectScene::BeginUnlockPresentation() {
     unlockTimelineLoaded_ = unlockPlayer_.Load("Resources/json/scenario/stage_select/stage_select_unlock_" +
                                                std::to_string(unlockingStageIndex_) + ".json",
                                                SceneManager::GetInstance());
+    // シーケンスを読み込めた場合に限り、ゲート、鍵、錠、カメラの演出条件を検証する。
     if (unlockTimelineLoaded_) {
         const auto* sequence = unlockPlayer_.GetSequence();
         // ゲーム固有の節目と役割だけを確認し、対象の共通検証はPrepareへ任せる。
         std::vector<std::string> issues;
         auto signalTime = [sequence, &issues](const char* name) {
             for (const auto& signal : sequence->signals) {
+                // 指定の名前が一致し、有効になっているSignalだけ、その時刻を使う。
                 if (signal.enabled && signal.signal == name) {
                     return signal.time;
                 }
@@ -52,11 +55,13 @@ void GameSelectScene::BeginUnlockPresentation() {
                                                     track.binding.targetName == object->GetName();
                                          });
         };
+        // 鍵と錠のどちらかに有効な対象トラックが無ければ、演出を準備できない。
         if (!hasTrack(unlockKeyObject_) || !hasTrack(unlockLockObject_)) {
             issues.emplace_back("鍵または南京錠の Transform Track が対象ステージを指していません。");
         }
         // 同じ対象に表示用クリップも要求する。配置済みの鍵と錠を使うため、生成クリップは対象から外す。
         for (const auto* object : {unlockKeyObject_, unlockLockObject_}) {
+            // それぞれの配置対象が存在し、同名の生成なし表示クリップが有効である必要がある。
             if (!object || !std::any_of(sequence->presentation.objects.begin(),
                     sequence->presentation.objects.end(), [object](const CinematicObjectClip& clip) {
                         return clip.enabled && !clip.spawn && clip.name == object->GetName();
@@ -65,24 +70,29 @@ void GameSelectScene::BeginUnlockPresentation() {
             }
         }
         const std::string cameraName = "StageSelect_UnlockCamera_" + std::to_string(unlockingStageIndex_);
+        // 対象ステージの解錠カメラを指す有効なショットが無ければ、不備として扱う。
         if (!std::any_of(sequence->cameraShots.begin(), sequence->cameraShots.end(),
                          [&cameraName](const CinematicCameraShot& shot) {
                              return shot.enabled && !shot.muted && shot.binding.targetName == cameraName;
                          })) {
             issues.emplace_back("解錠カメラの Shot が対象ステージを指していません。");
         }
+        // ゲーム固有の条件に不備がある場合は、理由をログに残して準備を中止する。
         if (!issues.empty()) {
             unlockTimelineLoaded_ = false;
             for (const auto& issue : issues) {
                 DebugConsole::GetInstance()->AddLog("Stage Select unlock timeline: " + issue);
             }
+        // ゲーム側の検証を通った場合だけ、再生器にトラック共通の準備を任せる。
         } else {
             unlockTimelineLoaded_ = unlockPlayer_.Prepare();
         }
+    // シーケンス自体を読み込めない場合は、失敗理由を残し、今回は再生しない。
     } else {
         DebugConsole::GetInstance()->AddLog("Stage Select: unlock timeline missing; presentation canceled for retry.");
     }
 
+    // プレイヤーがいる場合だけ操作の状態を控え、演出中の操作と移動を止める。
     if (player_) {
         unlockHadPlayerControl_ = player_->IsControlActive();
         player_->SetIsControlActive(false);
@@ -95,7 +105,7 @@ void GameSelectScene::BeginUnlockPresentation() {
         unlockCameraStartTarget_ = camera->GetTargetPoint();
         camera->SetInputEnabled(false);
         camera->SetFollowTarget(nullptr);
-        camera->SetFollowMode(engine::Camera::FollowMode::FixedPoint);
+        camera->SetFollowMode(engine::Camera::FollowMode::kFixedPoint);
         camera->ConfigFixedPoint(unlockCameraStartEye_,
                                  SelectLookAtRotation(unlockCameraStartEye_, unlockCameraStartTarget_));
     }
@@ -113,12 +123,12 @@ void GameSelectScene::BeginUnlockPresentation() {
 }
 
 #ifdef USE_IMGUI
-void GameSelectScene::StartDebugUnlockPresentation(int stageIndex) {
+void GameSelectScene::StartDebugUnlockPresentation(std::int32_t stageIndex) {
     // セーブの既読状態を変えず、必要なモデルが揃う場合だけ演出を試す。
     const auto& stages = StageManager::GetInstance()->GetStages();
 
     // 先頭ステージには解放演出がなく、範囲外の選択も受け付けません。
-    if (stageIndex <= 0 || stageIndex >= static_cast<int>(stages.size())) {
+    if (stageIndex <= 0 || stageIndex >= static_cast<std::int32_t>(stages.size())) {
         return;
     }
 
@@ -132,6 +142,7 @@ void GameSelectScene::StartDebugUnlockPresentation(int stageIndex) {
     engine::Object3D* key = FindObjectByName(std::string(kStageGateCrownKeyPrefix) + std::to_string(stageIndex));
     engine::Object3D* lock = FindObjectByName(std::string(kStageGateLockPrefix) + std::to_string(stageIndex));
 
+    // ゲート・鍵・錠が一つでも見つからなければ、デバッグ再生を開始しない。
     if (!gate || !key || !lock) {
         DebugConsole::GetInstance()->AddLog("Stage Select: debug crown unlock cinematic assets are missing.");
         return;
@@ -157,6 +168,7 @@ void GameSelectScene::UpdateUnlockPresentation(float deltaTime) {
 
     // 初回にだけ準備し、シナリオが不正で中断された場合は同じフレームで再生しません。
     BeginUnlockPresentation();
+    // 準備中に中断して対象が解放された場合は、このフレームで時計を進めない。
     if (unlockingStageIndex_ < 0) {
         return;
     }
@@ -164,6 +176,7 @@ void GameSelectScene::UpdateUnlockPresentation(float deltaTime) {
     unlockPlayer_.Update(deltaTime);
     selectedStageIndex_ = unlockingStageIndex_;
 
+    // プレイヤーが存在する間は、演出中に操作や移動を再開させない。
     if (player_) {
         player_->SetIsControlActive(false);
         player_->SetVelocity({0.0f, 0.0f, 0.0f});
@@ -181,11 +194,12 @@ void GameSelectScene::FinishUnlockPresentation(bool markSeen) {
         return;
     }
 
-    const int unlockedStageIndex = unlockingStageIndex_;
+    const std::int32_t unlockedStageIndex = unlockingStageIndex_;
     const bool debugReplay = unlockPresentationDebugReplay_;
 
     RestoreUnlockPresentationState();
 
+    // 既読の記録は、本番で記録を要求された場合だけ行う。
     if (markSeen && !debugReplay) {
         GameDataManager::GetInstance()->MarkStageUnlockSeen(unlockedStageIndex);
     }
@@ -199,6 +213,7 @@ void GameSelectScene::FinishUnlockPresentation(bool markSeen) {
     unlockLockObject_ = nullptr;
     unlockPresentationDebugReplay_ = false;
 
+    // 確認用の再生で開始前の選択が記録されていた場合は、その選択へ戻す。
     if (debugReplay && unlockDebugPreviousSelectedStageIndex_ >= 0) {
         selectedStageIndex_ = unlockDebugPreviousSelectedStageIndex_;
     }
@@ -217,14 +232,17 @@ void GameSelectScene::RestoreUnlockPresentationState() {
     }
     // 復元後も鍵や錠が画面に残らないように隠し、鍵が持っていた粒子も停止します。
     unlockTimelineLoaded_ = false;
+    // 鍵の実体を取得済みであれば、見た目に加え付属粒子の再生も止める。
     if (unlockKeyObject_) {
         unlockKeyObject_->SetIsVisible(false);
         unlockKeyObject_->SetGpuParticleName("");
     }
+    // 南京錠の実体を取得済みであれば、演出後に残らないよう非表示にする。
     if (unlockLockObject_) {
         unlockLockObject_->SetIsVisible(false);
     }
 
+    // プレイヤーが存在する場合は、演出前の操作可否へ戻し、移動は停止したままにする。
     if (player_) {
         player_->SetIsControlActive(unlockHadPlayerControl_);
         player_->SetVelocity({0.0f, 0.0f, 0.0f});
@@ -235,9 +253,10 @@ void GameSelectScene::RestoreUnlockPresentationState() {
         camera->SetEye(unlockCameraStartEye_);
         camera->SetTarget(unlockCameraStartTarget_);
         camera->SyncRotationToCurrentView();
+        // プレイヤーがいる場合は、通常の追従と照準操作に戻す準備を行う。
         if (player_) {
             camera->SetFollowTarget(player_);
-            camera->SetFollowMode(engine::Camera::FollowMode::Aimable);
+            camera->SetFollowMode(engine::Camera::FollowMode::kAimable);
             camera->ResetFollowSmoothing();
         }
         // 位置と追従先を整え、補間を初期化した後で初めてカメラ操作を受け付ける。

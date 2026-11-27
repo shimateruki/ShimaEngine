@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "56a05f805edd53859414e729da3184c9",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/sprite/ui/result/clear/japanese/continue_text.png",
+  "version": 1
+}

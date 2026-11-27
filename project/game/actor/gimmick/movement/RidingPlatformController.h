@@ -7,16 +7,16 @@ class GimmickMovingFloor;
 class BaseScene;
 class BaseEnemy;
 
-// 乗車開始と乗員追従だけを担当し、軌道・停車・敵の登場時刻はTimelineへ委譲する。
+// 乗車開始と乗員の追従を担当する。床の軌道と敵の登場時刻はタイムラインから取得し、停止条件をこのクラスで評価する。
 // 関連：床側がCinematicSequenceと開始条件を渡し、シーン内の登場Actorと乗員を接続する。
-// 主な入口：Update / Reset
+// 毎フレームの入口はUpdate。Resetは乗り場へ戻す内部処理。
 class RidingPlatformController {
   public:
     // deltaTime は秒。前フレームの接地から乗員を確定し、タイムラインで床と乗員を進めます。
     void Update(GimmickMovingFloor& floor, float deltaTime);
 
   private:
-    // この信号を持つ乗車床だけ、破壊待ちと乗り場への呼び戻しを使う。
+    // タイムラインに有効なride.ferry信号があるとき、離脱中の停止と乗り場への呼び戻しに船用の条件を使う。
     bool ferry_ = false;
     float absentTime_ = 0.0f;
 
@@ -33,7 +33,7 @@ class RidingPlatformController {
         bool falling = false; // 高い島から降りる場合だけ、縦方向を加速落下にする。
     };
 
-    // リプレイから除外された敵は乗車イベントの対象にしない。
+    // 指定名でリプレイ除外されていない最初のオブジェクトを敵として解決する。該当しなければnullptr。
     BaseEnemy* FindEnemy(BaseScene& scene, const std::string& name) const;
 
     // 床・敵・当たり判定を演出開始前の配置へ戻し、再乗車できる状態にする。

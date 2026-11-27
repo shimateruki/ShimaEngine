@@ -28,48 +28,44 @@ constexpr const char* kDefaultWhiteTexture = "Resources/sprite/common/white.png"
 float CalculateMaterialMultiplier(float value, float reference) {
     constexpr float kEpsilon = 1.0e-5f;
 
+    // 基準が十分に大きい場合だけ、材質値を基準に対する倍率として計算する。
     if (std::abs(reference) > kEpsilon) {
         return value / reference;
     }
 
+    // 基準と値が両方ほぼ0なら変更なしの1を返し、基準だけが0に近いなら値をそのまま渡す。
     return std::abs(value) <= kEpsilon ? 1.0f : value;
 }
 
-// 描画中に同じフォールバック画像のファイル確認を繰り返さないよう、SRVを一度だけ解決します。
+// 共有画像の有効なハンドルを保持し、法線・ORMの代替で必要になったときに初回ロードする。
 uint32_t GetDefaultWhiteTextureHandle() {
-    static uint32_t handle = 0;
+    static uint32_t sHandle = 0;
 
-    if (handle == 0) {
-        handle = TextureManager::GetInstance()->Load(kDefaultWhiteTexture);
+    // 共有の白画像をまだ取得していなければ、その参照を初めて使う時点でロードする。
+    if (sHandle == 0) {
+        sHandle = engine::TextureManager::GetInstance()->Load(kDefaultWhiteTexture);
     }
 
-    return handle;
+    return sHandle;
 }
 
 
 }
 
 
-// ==========================================
-// 初期化: メッシュごとにバッファを作る
-// ==========================================
 
-// ========================================================================
-// Model 基本初期化とGPUバッファ管理
-// ------------------------------------------------------------------------
-// モデルデータの読み込み結果をGPUへ渡すための初期化、ボーン行列用の
-// バッファ更新、頂点数などの軽量な問い合わせを担当する。
-// ========================================================================
 
 // モデル共通情報とファイル名を受け取り、モデルデータ・GPUリソース・スケルトンを初期化する。
 void Model::Initialize(ModelCommon* common, const std::string& directoryPath, const std::string& filename) {
     InitializeFromCpuData(common, LoadFile(directoryPath, filename), filename);
 }
 
+// 描画リソースを作らず、ファイルの内容をCPU側で準備して返す。
 Model::ModelData Model::LoadCpuData(const std::string& directoryPath, const std::string& filename) {
     return LoadFile(directoryPath, filename);
 }
 
+// CPU側のモデルからローカル境界、材質、メッシュやボーンのGPUリソースを準備する。
 void Model::InitializeFromCpuData(
     ModelCommon* common,
     ModelData modelData,
@@ -78,7 +74,7 @@ void Model::InitializeFromCpuData(
     common_ = common;
     DirectXCommon* dxCommon = common_->GetDxCommon();
 
-    // 1. ワーカースレッドまたは同期経路で読み込んだCPUデータを受け取る
+    // ワーカーまたは同期読込で準備済みのCPUデータを受け取る。
     modelData_ = std::move(modelData);
     // 頂点・インデックスのどちらかがないメッシュをあらかじめ除き、描画と境界計算を有効な形状だけに絞ります。
     modelData_.meshes.erase(
@@ -88,14 +84,13 @@ void Model::InitializeFromCpuData(
             }),
         modelData_.meshes.end());
 
-    // --- Aabb（モデルのサイズ）計算 ---
+    // 有効な全メッシュの頂点から、カリングなどで使うローカル座標の範囲を求める。
     engine::Vector3 min = { FLT_MAX, FLT_MAX, FLT_MAX };
     engine::Vector3 max = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
     bool hasVertices = false;
 
     for (const auto& mesh : modelData_.meshes) {
         for (const auto& vertex : mesh.vertices) {
-            // 全メッシュの全頂点から最小・最大を割り出す
             min.x = (std::min)(min.x, vertex.position.x);
             min.y = (std::min)(min.y, vertex.position.y);
             min.z = (std::min)(min.z, vertex.position.z);
@@ -106,15 +101,16 @@ void Model::InitializeFromCpuData(
         }
     }
 
+    // 有効な頂点が一個でもあれば、その範囲を描画用の外接箱として使う。
     if (hasVertices) {
-        // カリング用のローカルAABBを保存
         localAabbMin_ = min;
         localAabbMax_ = max;
 
-        // 中心座標とサイズも一応計算して保持
+        // 境界の中心と各軸の寸法も、配置と描画側が参照できるよう保持する。
         center_ = { (min.x + max.x) / 2.0f, (min.y + max.y) / 2.0f, (min.z + max.z) / 2.0f };
         size_ = { max.x - min.x, max.y - min.y, max.z - min.z };
     }
+    // 有効な頂点がなければ、カリングなどに使う外接箱へ既定値を設定する。
     else {
         localAabbMin_ = { -0.5f, -0.5f, -0.5f };
         localAabbMax_ = { 0.5f, 0.5f, 0.5f };
@@ -122,34 +118,36 @@ void Model::InitializeFromCpuData(
         size_ = { 1.0f, 1.0f, 1.0f };
     }
 
-    // 2. マテリアルごとにテクスチャをロード
+    // 材質画像を読み込み、ベース色の未指定は白、係数や法線は線形色空間で扱う。
     for (auto& material : modelData_.materials) {
-        material.textureHandle = TextureManager::GetInstance()->Load(
+        material.textureHandle = engine::TextureManager::GetInstance()->Load(
             material.textureFilePath.empty() ? kDefaultWhiteTexture : material.textureFilePath,
-            TextureManager::TextureColorSpace::SRGB);
-        // 法線やORMは色ではなくベクトルや係数のデータなので、sRGB変換なしで読みます。
+            engine::TextureManager::TextureColorSpace::kSRGB);
+        // 法線マップを使う指定とパスが揃えば、ベクトル値を保持する線形画像として読み込む。
         if (material.hasNormalMap && !material.normalMapPath.empty()) {
-            material.normalMapHandle = TextureManager::GetInstance()->Load(
+            material.normalMapHandle = engine::TextureManager::GetInstance()->Load(
                 material.normalMapPath,
-                TextureManager::TextureColorSpace::Linear);
+                engine::TextureManager::TextureColorSpace::kLinear);
         }
 
+        // ORM画像が指定済みなら、粗さなどの係数を線形値として読み込む。
         if (material.hasOrmMap && !material.ormMapPath.empty()) {
-            material.ormMapHandle = TextureManager::GetInstance()->Load(
+            material.ormMapHandle = engine::TextureManager::GetInstance()->Load(
                 material.ormMapPath,
-                TextureManager::TextureColorSpace::Linear);
+                engine::TextureManager::TextureColorSpace::kLinear);
         }
     }
 
-    // 3. メッシュごとに頂点バッファ・インデックスバッファを作成
+    // メッシュ単位で頂点とインデックスを転送する。失敗したメッシュは描画側がリソースの有無で除外する。
     for (auto& mesh : modelData_.meshes) {
+        // 頂点かインデックスが空のメッシュは描画できないため、GPUバッファを作らない。
         if (mesh.vertices.empty() || mesh.indices.empty()) {
             continue;
         }
 
-        // 頂点バッファ
         mesh.vertexResource = dxCommon->CreateBufferResource(sizeof(VertexData) * mesh.vertices.size());
 
+        // 頂点バッファを確保できなければ、そのメッシュの転送を飛ばす。
         if (!mesh.vertexResource) {
             DebugConsole::GetInstance()->AddLog("Model vertex buffer creation failed: " + sourceName);
             continue;
@@ -162,18 +160,21 @@ void Model::InitializeFromCpuData(
         VertexData* vertexData = nullptr;
         HRESULT vertexMapResult = mesh.vertexResource->Map(0, nullptr, reinterpret_cast<void**>(&vertexData));
 
+        // 頂点の書き込みアドレスが取れない場合は、GPUバッファを解放して次のメッシュへ進む。
         if (FAILED(vertexMapResult) || !vertexData) {
             DebugConsole::GetInstance()->AddLog("Model vertex buffer map failed: " + sourceName);
             mesh.vertexResource.Reset();
             continue;
         }
 
+        // 頂点を転送したら、CPUから参照するためのマップを閉じる。
         std::memcpy(vertexData, mesh.vertices.data(), sizeof(VertexData) * mesh.vertices.size());
         mesh.vertexResource->Unmap(0, nullptr);
 
-        // インデックスバッファ
+        // 頂点データの確定後、面の頂点順を格納するインデックス領域を作る。
         mesh.indexResource = dxCommon->CreateBufferResource(sizeof(uint32_t) * mesh.indices.size());
 
+        // インデックスを確保できなければ、そのメッシュの頂点バッファも外す。
         if (!mesh.indexResource) {
             DebugConsole::GetInstance()->AddLog("Model index buffer creation failed: " + sourceName);
             mesh.vertexResource.Reset();
@@ -187,6 +188,7 @@ void Model::InitializeFromCpuData(
         uint32_t* indexData = nullptr;
         HRESULT indexMapResult = mesh.indexResource->Map(0, nullptr, reinterpret_cast<void**>(&indexData));
 
+        // インデックスを書き込めない場合は、今回の頂点とインデックスをどちらも使用しない。
         if (FAILED(indexMapResult) || !indexData) {
             DebugConsole::GetInstance()->AddLog("Model index buffer map failed: " + sourceName);
             mesh.vertexResource.Reset();
@@ -198,10 +200,11 @@ void Model::InitializeFromCpuData(
         mesh.indexResource->Unmap(0, nullptr);
     }
 
-    // 4. 定数バッファ(Material)の作成と初期設定
+    // メッシュの転送後に、モデルの基準材質を送る定数バッファを用意する。
     materialData_ = nullptr;
     materialResource_ = dxCommon->CreateBufferResource(sizeof(Material));
 
+    // 材質バッファを確保できない場合は、材質の初期値を書き込めないので終了する。
     if (!materialResource_) {
         DebugConsole::GetInstance()->AddLog("Model material buffer creation failed: " + sourceName);
         return;
@@ -209,6 +212,7 @@ void Model::InitializeFromCpuData(
 
     HRESULT materialMapResult = materialResource_->Map(0, nullptr, reinterpret_cast<void**>(&materialData_));
 
+    // 材質バッファをマップできない場合は、GPUリソースとCPU側の参照を初期状態に戻す。
     if (FAILED(materialMapResult) || !materialData_) {
         DebugConsole::GetInstance()->AddLog("Model material buffer map failed: " + sourceName);
         materialResource_.Reset();
@@ -216,9 +220,10 @@ void Model::InitializeFromCpuData(
         return;
     }
 
+    // 材質が指定されていないモデルでも使える既定の描画値を用意する。
     materialData_->color = { 1.0f, 1.0f, 1.0f, 1.0f };
     materialData_->enableLighting = true;
-    materialData_->selectedLighting = 2; // 隊長の設定値を維持
+    materialData_->selectedLighting = 2;
     materialData_->shininess = 50;
     materialData_->materialType = 0;
     materialData_->roughness = 0.5f;
@@ -237,6 +242,7 @@ void Model::InitializeFromCpuData(
     materialData_->portalClipColor = { 1.0f, 0.82f, 0.36f, 0.80f };
     materialData_->uvTransform = math_.MakeIdentity4x4();
 
+    // モデルの基準材質を取得できた場合は、既定値をインポートした材質値で上書きする。
     if (const MaterialData* primaryMaterial = GetPrimaryMaterialData()) {
         materialData_->color = primaryMaterial->baseColorFactor;
         materialData_->roughness = primaryMaterial->roughness;
@@ -244,18 +250,16 @@ void Model::InitializeFromCpuData(
         materialData_->enableNormalMap = primaryMaterial->hasNormalMap ? 1 : 0;
     }
 
-    // 5. ボーン用バッファの作成 
+    // ボーン行列の参照を作ってから、それを入力とする計算スキニングの出力先を作る。
     CreateBoneBuffer();
     CreateComputeSkinningResources();
 }
 
-// ==========================================
-// ボーンバッファの作成とSRV登録 
-// ==========================================
 // スキニング用のボーン行列バッファを作成し、SRVとしてシェーダーから参照できる状態にする。
 void Model::CreateBoneBuffer() {
     DirectXCommon* dxCommon = common_->GetDxCommon();
 
+    // ボーンがないモデルへ切り替わった場合は、前の姿勢用の参照を残さない。
     if (modelData_.bones.empty()) {
         boneResource_.Reset();
         boneMappedData_ = nullptr;
@@ -263,11 +267,11 @@ void Model::CreateBoneBuffer() {
         return;
     }
 
-    // 1. リソース作成
     // StructuredBufferで関節一つにつき一要素として扱います。GPUへ渡す要素間隔も同じ型のバイト数を使います。
     UINT sizeInBytes = sizeof(BoneForGpu) * static_cast<UINT>(modelData_.bones.size());
     boneResource_ = dxCommon->CreateBufferResource(sizeInBytes);
 
+    // ボーン行列のバッファを確保できなければ、行列の転送先を無効にする。
     if (!boneResource_) {
         DebugConsole::GetInstance()->AddLog("Model bone buffer creation failed.");
         boneMappedData_ = nullptr;
@@ -275,9 +279,10 @@ void Model::CreateBoneBuffer() {
         return;
     }
 
-    // 2. マッピング
+    // 毎回の姿勢更新をCPUから書けるよう、ボーン行列の領域をマップする。
     HRESULT boneMapResult = boneResource_->Map(0, nullptr, reinterpret_cast<void**>(&boneMappedData_));
 
+    // ボーンの転送先をマップできない場合は、バッファも使わずに終了する。
     if (FAILED(boneMapResult) || !boneMappedData_) {
         DebugConsole::GetInstance()->AddLog("Model bone buffer map failed.");
         boneResource_.Reset();
@@ -286,15 +291,14 @@ void Model::CreateBoneBuffer() {
         return;
     }
 
-    // ★重要: 初期値を「単位行列」で埋めておく
-    // これをしないと、アニメーション更新が走る前の1フレーム目にモデルが消えます
+    // ボーン行列を単位行列で初期化し、最初のアニメーション更新前も元の頂点を描く。
     engine::Math math;
 
     for (size_t i = 0; i < modelData_.bones.size(); ++i) {
         boneMappedData_[i].finalMatrix = math.MakeIdentity4x4();
     }
 
-    // 3. SRVを作成 (StructuredBuffer)
+    // ボーン行列を要素単位で読めるStructuredBufferとして登録する。
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
     srvDesc.Format = DXGI_FORMAT_UNKNOWN;
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -304,16 +308,13 @@ void Model::CreateBoneBuffer() {
     srvDesc.Buffer.StructureByteStride = sizeof(BoneForGpu);
     srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
 
-    // SRVManagerでディスクリプタを確保して作成
-    boneSrvIndex_ = SrvManager::GetInstance()->Allocate();
-    SrvManager::GetInstance()->CreateSrvForResource(boneSrvIndex_, boneResource_.Get(), srvDesc);
+    boneSrvIndex_ = engine::SrvManager::GetInstance()->Allocate();
+    engine::SrvManager::GetInstance()->CreateSrvForResource(boneSrvIndex_, boneResource_.Get(), srvDesc);
 }
 
-// ==========================================
-// ボーン行列の更新 
-// ==========================================
 // 現在のスケルトン行列をGPU側のボーンバッファへ転送する。
 void Model::UpdateBoneBuffer() {
+    // ボーン行列を転送できるCPUアドレスがなければ、姿勢の更新を行わない。
     if (!boneMappedData_) {
         return;
     }
@@ -328,28 +329,28 @@ void Model::UpdateBoneBuffer() {
         return;
     }
 
-    // ボーンごとに計算
+    // ボーン名に対応するジョイントを探し、それぞれ現在の姿勢へ変換する。
     for (size_t i = 0; i < modelData_.bones.size(); ++i) {
-        // ボーン名に対応するJointを探す
         auto it = modelData_.skeleton.jointMap.find(modelData_.bones[i].name);
 
-        // FinalMatrix = InverseBindPose * SkeletonSpaceMatrix
+        // ボーンに対応するジョイントがあれば、現在の姿勢と逆バインド姿勢を合成する。
         if (it != modelData_.skeleton.jointMap.end()) {
             // バインド姿勢を一度打ち消し、現在のジョイント姿勢を適用する順に掛けます。
             const Joint& joint = modelData_.skeleton.joints[it->second];
             boneMappedData_[i].finalMatrix =
                 math_.Multiply(modelData_.bones[i].inverseBindPoseMatrix, joint.skeletonSpaceMatrix);
         }
+        // 姿勢側に対応するジョイントがないボーンには、頂点を変形しない単位行列を送る。
         else {
-            // ノードが見つからない場合は単位行列を入れる
             boneMappedData_[i].finalMatrix = math_.MakeIdentity4x4();
         }
     }
 
+    // 行列を更新したため、次の描画前に計算スキニングの出力を作り直す。
     computeSkinningDirty_ = true;
 }
 
-// モデルの描画処理
+// 計算シェーダーが出力するスキニング済み頂点のバッファをメッシュごとに準備する。
 void Model::CreateComputeSkinningResources() {
     // 再生成前に旧出力を捨て、未対応モデルではCPU側の頂点バッファを使える状態へ戻す。
     computeSkinningAvailable_ = false;
@@ -362,6 +363,7 @@ void Model::CreateComputeSkinningResources() {
         mesh.computeSkinnedVertexState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
     }
 
+    // GPU計算に必要な共有基盤、スキニング設定、ボーンバッファが揃ってから出力を作る。
     if (!common_ || !common_->IsComputeSkinningAvailable() ||
         !modelData_.hasSkinning || !boneResource_ || modelData_.bones.empty()) {
         return;
@@ -371,6 +373,7 @@ void Model::CreateComputeSkinningResources() {
     bool hasSkinnedMesh = false;
 
     for (auto& mesh : modelData_.meshes) {
+        // 頂点バッファと内容を持つメッシュだけ、スキニング済みの出力先を作る。
         if (!mesh.vertexResource || mesh.vertices.empty()) {
             continue;
         }
@@ -398,8 +401,8 @@ void Model::CreateComputeSkinningResources() {
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
             nullptr,
             IID_PPV_ARGS(mesh.computeSkinnedVertexResource.GetAddressOf()));
+        // 出力バッファの作成に失敗した場合は、一部のメッシュだけがGPU計算を使う状態を避ける。
         if (FAILED(result)) {
-            // 一部のMeshだけ有効になる状態を避け、全Meshを一括でフォールバックさせる。
             DebugConsole::GetInstance()->AddLog("Compute skinning output buffer creation failed.");
 
             for (auto& resetMesh : modelData_.meshes) {
@@ -422,13 +425,15 @@ void Model::CreateComputeSkinningResources() {
     computeSkinningAvailable_ = hasSkinnedMesh;
 }
 
+// 変形済み頂点が利用できる状態ならtrueを返す。必要な場合だけGPU計算の命令を積む。
 bool Model::PrepareComputeSkinning() {
-    // ボーン更新がないフレームは前回の計算結果を再利用する。
+    // 計算用の基盤やボーンバッファが使えない場合は、スキニング済み頂点を用意できない。
     if (!computeSkinningAvailable_ || !common_ ||
         !common_->IsComputeSkinningAvailable() || !boneResource_) {
         return false;
     }
 
+    // ボーン更新がなく前回の出力が有効なら、スキニングを再実行せず完了とする。
     if (!computeSkinningDirty_ && computeSkinningOutputReady_) {
         return true;
     }
@@ -441,12 +446,13 @@ bool Model::PrepareComputeSkinning() {
     bool dispatched = false;
 
     for (auto& mesh : modelData_.meshes) {
+        // 入力頂点と計算の出力先が両方揃ったメッシュだけ、GPU計算へ送る。
         if (!mesh.vertexResource || !mesh.computeSkinnedVertexResource || mesh.vertices.empty()) {
             continue;
         }
 
+        // 出力先がGPU書き込み状態にない場合だけ、UAVとして書ける状態へ切り替える。
         if (mesh.computeSkinnedVertexState != D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
-            // 前フレームの描画で頂点入力になっているため、書き込み可能な状態へ戻す。
             D3D12_RESOURCE_BARRIER toUnorderedAccess{};
             toUnorderedAccess.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
             toUnorderedAccess.Transition.pResource = mesh.computeSkinnedVertexResource.Get();
@@ -457,6 +463,7 @@ bool Model::PrepareComputeSkinning() {
             mesh.computeSkinnedVertexState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
         }
 
+        // 元の頂点とボーンを読み取り、現在のメッシュに対応する出力へ書き込む。
         commandList->SetComputeRootShaderResourceView(0, mesh.vertexResource->GetGPUVirtualAddress());
         commandList->SetComputeRootUnorderedAccessView(
             2,
@@ -496,13 +503,14 @@ bool Model::PrepareComputeSkinning() {
         dispatched = true;
     }
 
-    // 有効な計算命令を記録できた場合だけ、以後の同一フレームの描画で結果バッファを使います。
+    // 有効な計算命令を記録できた場合は、ボーン更新で無効になるまで結果を再利用する。
     computeSkinningOutputReady_ = dispatched;
     computeSkinningDirty_ = !dispatched;
     return dispatched;
 }
 
 const D3D12_VERTEX_BUFFER_VIEW& Model::GetActiveVertexBufferView(const Mesh& mesh) const {
+    // スキニング済みで更新待ちがなく、出力先も有効なメッシュでは、変形後の頂点を返す。
     if (computeSkinningAvailable_ && computeSkinningOutputReady_ && !computeSkinningDirty_ &&
         mesh.computeSkinnedVertexResource) {
         return mesh.computeSkinnedVertexBufferView;
@@ -511,6 +519,7 @@ const D3D12_VERTEX_BUFFER_VIEW& Model::GetActiveVertexBufferView(const Mesh& mes
     return mesh.vertexBufferView;
 }
 
+// 通常描画の入力を設定し、メッシュごとの材質と頂点を束縛してインスタンスを描画する。
 void Model::Draw(
     ID3D12Resource* wvpResource,
     ID3D12Resource* directionalLightResource,
@@ -523,60 +532,68 @@ void Model::Draw(
     uint32_t overrideTextureHandle,
     uint32_t instanceCount,
     uint32_t startInstanceLocation,
-    int meshDrawIndex)
-{
+    std::int32_t meshDrawIndex) {
     ID3D12GraphicsCommandList* commandList = common_->GetDxCommon()->GetCommandList();
     engine::RenderStats::GetInstance()->RecordObjectDraw();
 
-    // 1. マテリアル設定
+    // 呼び出し元から上書き材質を渡された場合は、両方の描画用スロットに同じ材質を送る。
     if (overrideMaterialResource) {
         commandList->SetGraphicsRootConstantBufferView(0, overrideMaterialResource->GetGPUVirtualAddress());
         commandList->SetGraphicsRootConstantBufferView(14, overrideMaterialResource->GetGPUVirtualAddress());
     }
+    // 上書き材質を指定されなかった場合は、モデル自身の材質バッファを使用する。
     else if (materialResource_) {
         commandList->SetGraphicsRootConstantBufferView(0, materialResource_->GetGPUVirtualAddress());
         commandList->SetGraphicsRootConstantBufferView(14, materialResource_->GetGPUVirtualAddress());
     }
 
-    // 2. 定数バッファ設定
+    // WVPバッファを受け取った場合は、その変換行列を頂点描画へ結び付ける。
     if (wvpResource)
         commandList->SetGraphicsRootConstantBufferView(1, wvpResource->GetGPUVirtualAddress());
 
-    // (RootParam[2] はテクスチャ)
+    // 平行光のバッファが指定されている場合だけ、その定数を渡す。
     if (directionalLightResource)
         commandList->SetGraphicsRootConstantBufferView(3, directionalLightResource->GetGPUVirtualAddress());
+    // カメラのバッファが指定されている場合だけ、視点の定数を渡す。
     if (cameraResource)
         commandList->SetGraphicsRootConstantBufferView(4, cameraResource->GetGPUVirtualAddress());
+    // 点光源のバッファが指定されている場合だけ、その定数を渡す。
     if (pointLightResource)
         commandList->SetGraphicsRootConstantBufferView(5, pointLightResource->GetGPUVirtualAddress());
+    // スポットライトのバッファが指定されている場合だけ、その定数を渡す。
     if (spotLightResource)
         commandList->SetGraphicsRootConstantBufferView(6, spotLightResource->GetGPUVirtualAddress());
 
 
+    // ボーン情報と実際に参照できるSRVの両方があるモデルだけ、ボーン行列を描画へ渡す。
     if (!modelData_.bones.empty() && boneResource_ && boneSrvIndex_ != 0) {
-        SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 7, boneSrvIndex_);
+        engine::SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 7, boneSrvIndex_);
     }
 
     uint32_t envMapHandle = LightManager::GetInstance()->GetEnvironmentMapHandle();
 
-    if (envMapHandle != 0) { // 念のため0（未読み込み）じゃないかチェック
-        SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 8, envMapHandle);
+    // 環境マップを登録済みの場合だけ、反射用の画像を記述子テーブルへ追加する。
+    if (envMapHandle != 0) {
+        engine::SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 8, envMapHandle);
     }
 
-    // 3. メッシュごとの描画ループ
+    // 対象メッシュごとに材質の差分、画像、頂点を確定して描画する。
     for (size_t meshIndex = 0; meshIndex < modelData_.meshes.size(); ++meshIndex) {
+        // 特定のメッシュ番号を指定された場合は、その番号以外を飛ばす。負値は全メッシュを対象にする。
         if (meshDrawIndex >= 0 && meshIndex != static_cast<size_t>(meshDrawIndex)) {
             continue;
         }
 
         const auto& mesh = modelData_.meshes[meshIndex];
 
+        // 頂点・インデックスのリソースと面データが揃うメッシュだけ描画する。
         if (!mesh.vertexResource || !mesh.indexResource || mesh.indices.empty()) {
             continue;
         }
 
         const MaterialData* meshMaterial = nullptr;
 
+        // インポートした材質の添字が有効な場合だけ、メッシュ固有の設定を取得する。
         if (mesh.materialIndex < modelData_.materials.size()) {
             meshMaterial = &modelData_.materials[mesh.materialIndex];
         }
@@ -590,7 +607,7 @@ void Model::Draw(
         const MaterialData* primaryMaterial = GetPrimaryMaterialData();
         const bool usesModelTexture =
             overrideTextureHandle == 0 || overrideTextureHandle >= DirectXCommon::kMaxSrvCount;
-        // 基準材質からの色と粗さを倍率で、金属度を差で渡し、メッシュごとの材質差を復元します。
+        // 上書き画像を使わず、基準・メッシュの両方の材質があれば、色と粗さの倍率と金属度の差を作る。
         if (usesModelTexture && meshMaterial && primaryMaterial) {
             meshMaterialFactors[0] = CalculateMaterialMultiplier(
                 meshMaterial->baseColorFactor.x, primaryMaterial->baseColorFactor.x);
@@ -613,43 +630,48 @@ void Model::Draw(
 
         // オブジェクト側の上書きを優先し、なければメッシュ材質、どちらも使えなければ共有の白画像を束縛します。ORMも同じ優先順です。
         uint32_t meshNormalHandle = normalMapHandle;
+        // オブジェクト側の法線画像を使えないときは、有効なメッシュ材質の法線画像を優先する。
         if ((meshNormalHandle == 0 || meshNormalHandle >= DirectXCommon::kMaxSrvCount) &&
             meshMaterial && meshMaterial->hasNormalMap &&
             meshMaterial->normalMapHandle > 0 && meshMaterial->normalMapHandle < DirectXCommon::kMaxSrvCount) {
             meshNormalHandle = meshMaterial->normalMapHandle;
         }
 
+        // どちらの法線画像も利用できなければ、共有の白画像をSRVとして使用する。
         if (meshNormalHandle == 0 || meshNormalHandle >= DirectXCommon::kMaxSrvCount) {
             meshNormalHandle = GetDefaultWhiteTextureHandle();
         }
 
-        SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 9, meshNormalHandle);
+        engine::SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 9, meshNormalHandle);
 
         uint32_t meshOrmHandle = ormMapHandle;
+        // オブジェクト側のORM画像を使えない場合は、メッシュ材質のORM画像を確認する。
         if ((meshOrmHandle == 0 || meshOrmHandle >= DirectXCommon::kMaxSrvCount) &&
             meshMaterial && meshMaterial->hasOrmMap &&
             meshMaterial->ormMapHandle > 0 && meshMaterial->ormMapHandle < DirectXCommon::kMaxSrvCount) {
             meshOrmHandle = meshMaterial->ormMapHandle;
         }
 
+        // 両方のORM画像が無効なら、記述子を空にしないよう共有の白画像を使う。
         if (meshOrmHandle == 0 || meshOrmHandle >= DirectXCommon::kMaxSrvCount) {
             meshOrmHandle = GetDefaultWhiteTextureHandle();
         }
 
-        SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 10, meshOrmHandle);
+        engine::SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 10, meshOrmHandle);
 
+        // 利用可能なら計算スキニング済みの頂点を使い、描画に必要な元のインデックスを対にする。
         const D3D12_VERTEX_BUFFER_VIEW& activeVertexBufferView = GetActiveVertexBufferView(mesh);
         commandList->IASetVertexBuffers(0, 1, &activeVertexBufferView);
         commandList->IASetIndexBuffer(&mesh.indexBufferView);
 
+        // 上書きテクスチャが有効であれば、メッシュ固有の画像より先に採用する。
         if (overrideTextureHandle > 0 && overrideTextureHandle < DirectXCommon::kMaxSrvCount) {
-            // エディタで画像が選ばれていたら、そっちを優先して貼る！
-            SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 2, overrideTextureHandle);
+            engine::SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 2, overrideTextureHandle);
         }
+        // 有効な上書きがなく、メッシュの材質が存在する場合は、インポートした画像を使う。
         else if (mesh.materialIndex < modelData_.materials.size()) {
-            // 選ばれていない場合は、モデル本来のテクスチャを貼る
             uint32_t handle = modelData_.materials[mesh.materialIndex].textureHandle;
-            SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 2, handle);
+            engine::SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 2, handle);
         }
 
         commandList->DrawIndexedInstanced(UINT(mesh.indices.size()), instanceCount, 0, 0, startInstanceLocation);
@@ -676,8 +698,5 @@ uint32_t Model::GetPolygonCount() const {
     return count;
 }
 
-// ==========================================
-// 読み込み: Assimpのメッシュごとにデータを分ける
-// ==========================================
 
 } // namespace engine

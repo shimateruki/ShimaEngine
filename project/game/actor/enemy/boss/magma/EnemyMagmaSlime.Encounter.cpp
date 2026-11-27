@@ -19,37 +19,40 @@
 #include <cassert>
 #include <cmath>
 
-using namespace EnemyMagmaSlimeImplementation;
+using namespace enemyMagmaSlimeImplementation;
 
 // 遭遇制御中は通常AIに先行し、Editor復帰・待機・登場の状態を処理します。
 bool EnemyMagmaSlime::UpdateEncounterState(float deltaTime) {
     // 配置が遭遇イベント制御を指定していなければ、通常の敵更新に処理を返します。
     if (!IsEncounterControlled()) {
-        encounterState_ = EncounterState::Normal;
+        encounterState_ = EncounterState::kNormal;
         encounterInitializedForPlay_ = false;
         return false;
     }
 
     SceneManager* sceneManager = SceneManager::GetInstance();
 
+    // シーン管理を使えないか再生中でなければ、編集状態へ戻して戦闘AIを止める。
     if (!sceneManager || !sceneManager->IsPlaying()) {
         ResetEncounterStateForEditor();
         return true;
     }
 
+    // 今回のPlayで遭遇を初期化していなければ、配置値と起動要求を参照して準備する。
     if (!encounterInitializedForPlay_) {
         InitializeEncounterState();
     }
 
     // 起動待ちでは速度と攻撃表示を止めます。登場自体の更新は Appearing の間だけ実行します。
-    if (encounterState_ == EncounterState::Dormant) {
+    if (encounterState_ == EncounterState::kDormant) {
         SetVelocity({0.0f, 0.0f, 0.0f});
         ClearTransientVisuals();
         HideAttackTelegraph();
         return true;
     }
 
-    if (encounterState_ != EncounterState::Appearing) {
+    // 休眠にも登場にも該当しない状態では、通常の敵更新に処理を返す。
+    if (encounterState_ != EncounterState::kAppearing) {
         return false;
     }
 
@@ -101,6 +104,7 @@ bool EnemyMagmaSlime::UpdateEncounterState(float deltaTime) {
 
 // PlayとEditorの切り替えに備え、配置時の姿勢・マテリアル・衝突設定を保持します。
 void EnemyMagmaSlime::CaptureEncounterAuthoredState(bool refreshVisualTransform) {
+    // 配置値を保存済みで再取得の指定も無ければ、現在の演出姿勢で基準値を上書きしない。
     if (encounterAuthoredStateCaptured_ && !refreshVisualTransform) {
         return;
     }
@@ -114,17 +118,20 @@ void EnemyMagmaSlime::CaptureEncounterAuthoredState(bool refreshVisualTransform)
     const uint32_t collisionAttribute = GetCollisionAttribute();
     const uint32_t collisionMask = GetCollisionMask();
 
-    // 待機中に保存された衝突無効値を、登場後へ持ち越さないよう補います。
+    // 衝突属性が0以外なら、登場後に復元する戦闘用の配置値として保存する。
     if (collisionAttribute != 0) {
         encounterCollisionAttribute_ = collisionAttribute;
+    // 属性が0で配置の初回取得なら、休眠時の無効値を引き継がず敵属性を使う。
     } else if (!encounterAuthoredStateCaptured_) {
-        encounterCollisionAttribute_ = CollisionCategories::Get("enemy");
+        encounterCollisionAttribute_ = engine::collisionCategories::Get("enemy");
     }
 
+    // 衝突マスクが0以外の場合は、配置で指定された相手を戦闘開始後も使う。
     if (collisionMask != 0) {
         encounterCollisionMask_ = collisionMask;
+    // マスクが0で配置の初回取得なら、戦闘用のプレイヤー、地面、攻撃、弾を既定で登録する。
     } else if (!encounterAuthoredStateCaptured_) {
-        encounterCollisionMask_ = CollisionCategories::Get("player") | CollisionCategories::Get("ground") | CollisionCategories::Get("player_attack") | CollisionCategories::Get("player_bullet");
+        encounterCollisionMask_ = engine::collisionCategories::Get("player") | engine::collisionCategories::Get("ground") | engine::collisionCategories::Get("player_attack") | engine::collisionCategories::Get("player_bullet");
     }
 
     baseScale_ = encounterBaseScale_;
@@ -138,12 +145,13 @@ void EnemyMagmaSlime::InitializeEncounterState() {
     encounterInitializedForPlay_ = true;
     CaptureEncounterAuthoredState();
     attackCycleIndex_ = attackCycle_.size();
-    lastAutomaticAttack_ = AttackKind::None;
+    lastAutomaticAttack_ = AttackKind::kNone;
     const bool startActive = GetParameters().has_value() && GetParameters()->startActive;
 
     // 初回更新より先に起動イベントが届いていれば、配置時の開始フラグが無効でも登場します。
     if (startActive || encounterRequestedActive_) {
         BeginEncounterAppearance();
+    // 配置の開始フラグと起動要求のどちらも無ければ、イベントを待つ休眠状態にする。
     } else {
         ApplyDormantEncounterState();
     }
@@ -163,13 +171,14 @@ void EnemyMagmaSlime::ResetEncounterStateForEditor() {
         SyncCollisionRadius();
     }
 
+    // 編集で姿勢を変更できるよう基準値を取り直し、休眠または次のPlay開始に備える。
     CaptureEncounterAuthoredState(true);
-    encounterState_ = EncounterState::Dormant;
+    encounterState_ = EncounterState::kDormant;
     encounterTimer_ = 0.0f;
     encounterInitializedForPlay_ = false;
     encounterRequestedActive_ = false;
     attackCycleIndex_ = attackCycle_.size();
-    lastAutomaticAttack_ = AttackKind::None;
+    lastAutomaticAttack_ = AttackKind::kNone;
     SetVelocity({0.0f, 0.0f, 0.0f});
     SetCollisionAttribute(0);
     SetCollisionMask(0);
@@ -183,7 +192,7 @@ void EnemyMagmaSlime::ResetEncounterStateForEditor() {
 void EnemyMagmaSlime::BeginEncounterAppearance() {
     locomotion_.Reset();
     // 出現VFX中の被弾を避けるため、戦闘用の衝突を一時的に無効にする。
-    encounterState_ = EncounterState::Appearing;
+    encounterState_ = EncounterState::kAppearing;
     encounterTimer_ = 0.0f;
     attackCooldown_ = 1.1f;
     SetIsVisible(true);
@@ -199,7 +208,7 @@ void EnemyMagmaSlime::BeginEncounterAppearance() {
 void EnemyMagmaSlime::ApplyDormantEncounterState() {
     locomotion_.Reset();
     // ステージから起動されるまで非表示にし、前回攻撃の演出を残さない。
-    encounterState_ = EncounterState::Dormant;
+    encounterState_ = EncounterState::kDormant;
     encounterTimer_ = 0.0f;
     SetTranslate(encounterBasePosition_);
     SetScale(encounterBaseScale_);
@@ -217,8 +226,8 @@ void EnemyMagmaSlime::ApplyDormantEncounterState() {
 
 // 登場完了時に配置時の衝突設定を戻し、戦闘状態へ切り替えます。
 void EnemyMagmaSlime::FinishEncounterAppearance() {
-    // 配置時の材質・姿勢・判定を復元してから戦闘状態へ移る。
-    encounterState_ = EncounterState::Active;
+    // 戦闘開始の状態を設定し、そのフレームで配置時の材質・姿勢・判定を復元する。
+    encounterState_ = EncounterState::kActive;
     encounterTimer_ = 0.0f;
     SetTranslate(encounterBasePosition_);
     SetScale(encounterBaseScale_);
@@ -249,7 +258,7 @@ bool EnemyMagmaSlime::IsEncounterHudActive() const {
         return false;
     }
 
-    return encounterState_ == EncounterState::Appearing || encounterState_ == EncounterState::Active;
+    return encounterState_ == EncounterState::kAppearing || encounterState_ == EncounterState::kActive;
 }
 
 float EnemyMagmaSlime::GetEncounterCurrentHp() const {
@@ -264,11 +273,12 @@ float EnemyMagmaSlime::GetEncounterMaximumHp() const {
 
 float EnemyMagmaSlime::GetEncounterAppearanceProgress() const {
     // 休眠・登場中・戦闘中を0から1の進行率としてHUDへ渡す。
-    if (encounterState_ == EncounterState::Active) {
+    if (encounterState_ == EncounterState::kActive) {
         return 1.0f;
     }
 
-    if (encounterState_ != EncounterState::Appearing) {
+    // 休眠など、戦闘前で登場も進んでいない場合は進行率を0として返す。
+    if (encounterState_ != EncounterState::kAppearing) {
         return 0.0f;
     }
 

@@ -7,8 +7,8 @@
 struct Transform {
     // scale・rotate・translateは親に対するローカル値。Euler回転の単位はラジアン。
     engine::Vector3 scale = { 1.0f, 1.0f, 1.0f };
-    engine::Vector3 rotate = engine::Vector3::ZERO; // インスペクター表示・操作用
-    engine::Vector3 translate = engine::Vector3::ZERO;
+    engine::Vector3 rotate = engine::Vector3::kZero; // インスペクター表示・操作用
+    engine::Vector3 translate = engine::Vector3::kZero;
 
     engine::Quaternion quaternion = { 0.0f, 0.0f, 0.0f, 1.0f };
     bool isQuaternionMaster = true; // falseの場合、次のUpdateMatrixでEuler角から再計算する。
@@ -23,8 +23,8 @@ struct Transform {
         engine::Math math;
         engine::Matrix4x4 matScale = math.MakeScaleMatrix(scale);
 
+        // オイラー角を設定してそちらが優先になっている間だけ、回転クォータニオンを作り直す。
         if (!isQuaternionMaster) {
-            // スライダー等で手動変更された瞬間だけ、オイラー角から作り直す
             quaternion = math.EulerToQuaternion(rotate);
             isQuaternionMaster = true; // 一度作ったらクォータニオン優先に戻す
         }
@@ -36,8 +36,10 @@ struct Transform {
         matLocal = math.Multiply(math.Multiply(matScale, matRot), matTrans);
 
         // 行ベクトルの順序に合わせ、ローカル姿勢の後ろへ親のワールド姿勢を掛ける。
+        // 親が設定されていれば、先に更新済みの親行列を合成してワールド姿勢へ変換する。
         if (parent) {
             matWorld = math.Multiply(matLocal, parent->matWorld);
+        // 親を持たないときは、ローカル姿勢がそのままワールド姿勢になる。
         } else {
             matWorld = matLocal;
         }

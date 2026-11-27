@@ -17,7 +17,7 @@ struct DecalSpawnDesc {
     std::string texturePath = "Resources/sprite/effect/thunder/thunder_ground_scorch.dds";
 
     engine::Vector2 size = { 2.0f, 2.0f };
-    engine::Vector4 color = engine::Colors::White;
+    engine::Vector4 color = engine::colors::kWhite;
     float rotationRadians = 0.0f; // 面の法線を軸とした回転（ラジアン）。
     float depthOffset = 0.012f; // 面から浮かせる距離。重なりのちらつきを抑える。
 
@@ -26,7 +26,7 @@ struct DecalSpawnDesc {
     float fadeOut = 0.35f; // 消失フェードの秒数。
 
     float emissive = 1.0f;
-    int blendMode = 1;
+    std::int32_t blendMode = 1;
 
     bool transient = false; // 一時的な描画物として扱うか。
 };

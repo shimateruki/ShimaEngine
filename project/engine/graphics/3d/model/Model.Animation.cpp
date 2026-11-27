@@ -21,9 +21,6 @@ namespace engine {
 
 
 
-// ==========================================
-// 初期化: メッシュごとにバッファを作る
-// ==========================================
 
 // ========================================================================
 // Model アニメーション制御
@@ -43,7 +40,7 @@ void Model::Update(bool force) {
 
     // 同じModelが一フレームの複数の描画経路から参照されても、通常は行列とボーンバッファを一度だけ更新します。
     if (!force && lastUpdateFrame_ == currentFrame) {
-        return; // すでにこのフレームで更新済み
+        return;
     }
 
     lastUpdateFrame_ = currentFrame;
@@ -51,7 +48,6 @@ void Model::Update(bool force) {
     // 呼び出し元が選んだ関節姿勢を反映する。クリップの選択や時刻の進行はここでは行わない。
     UpdateSkeleton(modelData_.skeleton);
 
-    //  ボーン情報の更新
     // 関節の親子変換が最新になってから、GPUスキニングに使う行列を更新します。
     UpdateBoneBuffer();
 }
@@ -62,7 +58,7 @@ void Model::Update(bool force) {
 // =========================================================
 // Vector3キーを現在時刻に合わせて線形補間し、位置やスケールの値を求める。
 engine::Vector3 Model::CalculateValue(const std::vector<KeyframeVector3>& keyframes, float time) {
-    // キーがない場合
+    // 座標キーが一件もなければ、補間結果としてゼロベクトルを返す。
     if (keyframes.empty()) {
         return { 0.0f, 0.0f, 0.0f };
     }
@@ -74,7 +70,7 @@ engine::Vector3 Model::CalculateValue(const std::vector<KeyframeVector3>& keyfra
 
     // 時間の範囲を探す (線形探索)
     for (size_t i = 0; i < keyframes.size() - 1; ++i) {
-        // 現在の時間が、このキーと次のキーの間にあるか？
+        // 指定時刻を含む区間が見つかった時点で、先頭から末尾までの補間率を求める。
         if (time >= keyframes[i].time && time <= keyframes[i + 1].time) {
             // 0.0～1.0 の割合(t)を計算
             float t = (time - keyframes[i].time) / (keyframes[i + 1].time - keyframes[i].time);
@@ -97,7 +93,7 @@ engine::Vector3 Model::CalculateValue(const std::vector<KeyframeVector3>& keyfra
 // =========================================================
 // Quaternionキーを現在時刻に合わせて球面線形補間し、回転値を求める。
 engine::Quaternion Model::CalculateValue(const std::vector<KeyframeQuaternion>& keyframes, float time) {
-    // キーがない場合
+    // 回転キーを持たない場合は、回転なしを示す単位クォータニオンを返す。
     if (keyframes.empty()) {
         return { 0.0f, 0.0f, 0.0f, 1.0f }; // 単位クォータニオン
     }
@@ -109,6 +105,7 @@ engine::Quaternion Model::CalculateValue(const std::vector<KeyframeQuaternion>& 
 
     // 時間の範囲を探す
     for (size_t i = 0; i < keyframes.size() - 1; ++i) {
+        // 前後の回転キーが指定時刻を挟む場合だけ、その2姿勢を球面補間する。
         if (time >= keyframes[i].time && time <= keyframes[i + 1].time) {
             float t = (time - keyframes[i].time) / (keyframes[i + 1].time - keyframes[i].time);
 
@@ -117,15 +114,18 @@ engine::Quaternion Model::CalculateValue(const std::vector<KeyframeQuaternion>& 
         }
     }
 
+    // 補間区間が見つからなければ、末尾の回転を維持する。
     return keyframes.back().value;
 }
 
 // ノード階層から指定名のノードを再帰的に探し、アニメーション適用先を見つける。
 Model::Node* Model::FindNode(Node& node, const std::string& name) {
+    // 現在のノード名が一致した場合は、子の探索を行わずそのノードを返す。
     if (node.name == name)
         return &node;
     for (auto& child : node.children) {
         Node* result = FindNode(child, name);
+        // 子階層から最初の一致が返ったら、そのノードをそのまま呼び出し側へ返す。
         if (result)
             return result;
     }
@@ -141,6 +141,7 @@ void Model::ApplyAnimation(const Animation& animation, float time) {
 // アニメーション名からAnimationデータを探し、見つからない場合はnullptrを返す。
 const Model::Animation* Model::GetAnimation(const std::string& name) const {
     for (const auto& animation : modelData_.animations) {
+        // クリップ名が一致した場合だけ、モデル所有のデータへの借用参照を返す。
         if (animation.name == name) {
             return &animation;
         }

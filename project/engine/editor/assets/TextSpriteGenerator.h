@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "IEditable.h"
 #include "engine/utility/math/Math.h"
@@ -53,7 +54,7 @@ private:
     void RefreshFonts();
 
     /// 現在の設定を外部PNG生成ツールへ渡し、実際の画像ファイルを書き出す。
-    bool RenderToFile(const std::string& fullPath, int& outWidth, int& outHeight);
+    bool RenderToFile(const std::string& fullPath, std::int32_t& outWidth, std::int32_t& outHeight);
 
     /// 入力変更後すぐに重い生成を走らせず、短い待ち時間を挟んでプレビュー更新する。
     void TickPreviewAutoUpdate();
@@ -89,7 +90,7 @@ private:
     std::vector<std::wstring> fontNamesWide_;
     std::vector<std::string> fontNamesUtf8_;
     std::vector<std::string> fontPaths_;
-    int selectedFontIndex_ = 0;
+    std::int32_t selectedFontIndex_ = 0;
 
     // UI入力とPNG生成パラメータ。
     char textBuffer_[1024] = "Text";
@@ -101,8 +102,8 @@ private:
     bool bold_ = true;
     float padding_ = 20.0f;
     bool autoCanvas_ = true;
-    int canvasWidth_ = 512;
-    int canvasHeight_ = 160;
+    std::int32_t canvasWidth_ = 512;
+    std::int32_t canvasHeight_ = 160;
     float textColor_[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
 
     bool outlineEnabled_ = true;
@@ -124,21 +125,21 @@ private:
     bool previewDirty_ = false;
     bool previewRequestPending_ = false;
     float previewDelayTimer_ = 0.0f; // 文字入力後のプレビュー更新待ち秒数。
-    int previewSerial_ = 0;
+    std::int32_t previewSerial_ = 0;
 
-    int previewWidth_ = 1;
-    int previewHeight_ = 1;
+    std::int32_t previewWidth_ = 1;
+    std::int32_t previewHeight_ = 1;
     uint32_t previewTextureHandle_ = 0;
 
-    engine::Vector2 gameViewOffset_ = engine::Vector2::ZERO;
-    engine::Vector2 gameViewSize_ = engine::Vector2::ZERO;
+    engine::Vector2 gameViewOffset_ = engine::Vector2::kZero;
+    engine::Vector2 gameViewSize_ = engine::Vector2::kZero;
 
     // 書き出し後にシーンへ追加するSprite情報。
     bool pendingAddSprite_ = false;
     std::string pendingSpriteFullPath_;
     std::string pendingSpriteRelativePath_;
-    int pendingSpriteWidth_ = 1;
-    int pendingSpriteHeight_ = 1;
+    std::int32_t pendingSpriteWidth_ = 1;
+    std::int32_t pendingSpriteHeight_ = 1;
 
     std::string exportNoticeMessage_;
     float exportNoticeTimer_ = 0.0f; // 書出し結果の通知を表示する残り秒数。

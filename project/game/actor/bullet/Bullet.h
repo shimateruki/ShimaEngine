@@ -24,7 +24,7 @@ class Bullet : public engine::Object3D {
     /// <param name="mask">衝突対象の属性マスク</param>
     void Fire(const engine::Vector3& position, const engine::Vector3& velocity, float life, uint32_t attribute, uint32_t mask,
               float damage = 1.0f, const StatusEffectApplication& statusEffect = {},
-              DamageType damageType = DamageType::Physical);
+              DamageType damageType = DamageType::kPhysical);
 
     // 弾へ追従する軌跡と、衝突時に一度だけ再生する演出を設定します。
     void ConfigureVfx(const std::string& trailPreset, const std::string& trailSecondaryPreset,
@@ -68,13 +68,13 @@ class Bullet : public engine::Object3D {
 
     float explosionRadius_ = 0.0f;
 
-    engine::Vector3 velocity_ = engine::Vector3::ZERO;
-    engine::Vector3 impactNormal_ = engine::Vector3::ZERO;
+    engine::Vector3 velocity_ = engine::Vector3::kZero;
+    engine::Vector3 impactNormal_ = engine::Vector3::kZero;
     float lifeTimer_ = 0.0f;
     float gravity_ = 0.0f;
 
     float damage_ = 1.0f;
-    DamageType damageType_ = DamageType::Physical;
+    DamageType damageType_ = DamageType::kPhysical;
     StatusEffectApplication statusEffect_;
 
     std::string trailPreset_;

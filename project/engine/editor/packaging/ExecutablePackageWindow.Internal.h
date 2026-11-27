@@ -7,7 +7,7 @@
 #include <filesystem>
 #include <string>
 
-namespace ExecutablePackageInternal {
+namespace executablePackageInternal {
 // UI で選べるビルド構成と、配布時に残すテクスチャの組み合わせ。
 constexpr std::array<const char*, 3> kConfigurations = {
     "Debug",
@@ -17,9 +17,9 @@ constexpr std::array<const char*, 3> kConfigurations = {
 
 /// 同名 DDS/PNG ペアを配布セットへコピーする際の優先順。
 enum class TexturePackageMode {
-    CompactPng = 0,
-    FastDds,
-    Complete
+    kCompactPng = 0,
+    kFastDds,
+    kComplete
 };
 
 constexpr std::array<const char*, 3> kTextureModeLabels = {
@@ -41,4 +41,4 @@ std::filesystem::path PreviewPathFromUtf8(const std::string& text);
 /// Windows のパスを UI 表示用の UTF-8 文字列へ変換します。
 std::string PreviewPathToUtf8(const std::filesystem::path& path);
 
-} // namespace ExecutablePackageInternal
+} // namespace executablePackageInternal

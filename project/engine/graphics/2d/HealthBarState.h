@@ -11,7 +11,9 @@ namespace engine {
 struct HealthBarState {
     // 被弾判定の前回値と遅延ゲージの残量率を別々に保持する。
     float previousHp = 0.0f, previousRate = 0.0f;
+    // 点滅、被弾アイコン、遅延ゲージを止めておく時間の残り秒数。
     float damagePulseTimer = 0.0f, hurtIconTimer = 0.0f, damageHoldTimer = 0.0f;
+    // 実際の残量に追従する表示上の割合と、表示の周期に使う経過秒数。
     float delayedRate = 0.0f, animationTimer = 0.0f;
 
     // 最大HPは1以上として除算し、表示用の残量率を0〜1へ収める。
@@ -34,8 +36,10 @@ struct HealthBarState {
         // 既存の本編はHP値、簡素表示は残量率で被弾を検出する。
         const bool damaged = visible && (animated ? hp < previousHp - 0.01f
                                                     : rate < previousRate - 0.001f);
+        // 表示中に設定方式の差分しきい値を超えてHPが減ったら、遅延ゲージを一時停止する。
         if (damaged) {
             damageHoldTimer = 0.18f;
+            // 本編の演出あり表示では、被弾の点滅とアイコンを再生し、直前の残量も残す。
             if (animated) {
                 damagePulseTimer = 0.42f;
                 hurtIconTimer = 0.48f;
@@ -43,10 +47,12 @@ struct HealthBarState {
                 delayedRate = (std::max)(delayedRate, Rate(previousHp, maxHp));
             }
         }
+        // 今回のHPと割合を次フレームの被弾判定に使うため保存し、表示演出の時計を更新する。
         previousHp = hp;
         previousRate = rate;
         damagePulseTimer = (std::max)(0.0f, damagePulseTimer - frameDeltaTime);
         hurtIconTimer = (std::max)(0.0f, hurtIconTimer - frameDeltaTime);
+        // 演出あり表示でゲージが隠れた場合は、遅延表示と保持時間を解除する。
         if (!visible && animated) {
             delayedRate = 0.0f;
             damageHoldTimer = 0.0f;
@@ -54,8 +60,10 @@ struct HealthBarState {
         } else if (rate >= delayedRate) {
             delayedRate = rate;
             damageHoldTimer = 0.0f;
+        // 減少時に保持時間が残っていれば、割合を維持したまま時間だけ減らす。
         } else if (damageHoldTimer > 0.0f) {
             damageHoldTimer = (std::max)(0.0f, damageHoldTimer - frameDeltaTime);
+        // 保持の終了後は、遅延ゲージを現在のHP割合へ近づける。
         } else {
             // 遅延ゲージを毎秒0.62の割合で減らし、実HPの表示を下回る手前で止めます。
             delayedRate = (std::max)(rate, delayedRate - frameDeltaTime * 0.62f);

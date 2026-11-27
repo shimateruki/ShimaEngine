@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "game/system/cinematic/GateEntryPresentation.h"
 #include "BaseScene.h"
 #include "game/system/scene/SceneGameplayAccess.h"
@@ -52,10 +53,10 @@ class GameSelectScene : public BaseScene, public ISceneGameplayAccess {
     /// <returns>すべての初期化段階が終わった場合はtrue。</returns>
     bool InitializeLoadingStep() override;
 
-    /// <summary>段階的な初期化の進捗を返す。</summary>
+    /// <summary>完了作業単位を総数で割った0〜1の進捗を返す。総数が0なら1を返す。</summary>
     float GetLoadingInitializeProgress() const override;
 
-    /// <summary>シーンが表示対象になった時点の状態を整える。</summary>
+    /// <summary>シーンの有効化時に、共有ライトへこのシーンの設定を適用する。</summary>
     void OnActivated() override;
 
     /// <summary>非同期で用意するステージ選択画面の素材を列挙する。</summary>
@@ -101,13 +102,13 @@ class GameSelectScene : public BaseScene, public ISceneGameplayAccess {
     /// <summary>シーンが所有するSpriteの一覧を返す。</summary>
     const std::vector<std::unique_ptr<engine::Sprite>>& GetSprites() const override { return sprites_; }
 
-    /// <summary>3D描画基盤、Skybox、Sprite描画基盤、粒子システムをそれぞれ返す。</summary>
-    /// <remarks>いずれも所有権を移さない。</remarks>
+    /// <summary>ステージ選択シーンが所有する Skybox を、所有権を移さず返す。</summary>
 
 
     Skybox* GetSkybox() override { return skybox_.get(); }
 
 
+    // CPU 粒子の更新・描画に使うシステムを、所有権を移さず返す。
     engine::ParticleSystem* GetParticleSystem() override { return particleSystem_.get(); }
 
     /// <summary>シーン内のプレイヤー参照を取得・設定する。所有権は移さない。</summary>
@@ -129,14 +130,14 @@ class GameSelectScene : public BaseScene, public ISceneGameplayAccess {
     void ApplyStageGateStates();
 
     /// <summary>指定番号のステージが解放済みか返す。</summary>
-    bool IsStageUnlocked(int stageIndex) const;
+    bool IsStageUnlocked(std::int32_t stageIndex) const;
 
     /// <summary>選択中のステージへの入場遷移を要求する。</summary>
     void EnterSelectedStage();
 
     /// <summary>ゲートへ入るカメラ演出と画面遷移を開始します。</summary>
     /// <param name="stageIndex">入場するステージの番号。</param>
-    void StartGateEntryCinematic(int stageIndex);
+    void StartGateEntryCinematic(std::int32_t stageIndex);
 
     /// <summary>ゲート入場のカメラ演出を進める。</summary>
     void UpdateGateEntryCinematic(float deltaTime);
@@ -164,21 +165,21 @@ class GameSelectScene : public BaseScene, public ISceneGameplayAccess {
     /// <summary>指定オブジェクトがステージゲートか判定する。</summary>
     bool IsStageGateObject(const engine::Object3D* object) const;
 
-    /// <summary>ゲートの名前などからステージ番号を返す。</summary>
-    int GetStageGateIndex(const engine::Object3D* object) const;
+    /// <summary>専用ゲートのステージ番号か、旧形式の Target ID を返す。対象がない場合は-1。</summary>
+    std::int32_t GetStageGateIndex(const engine::Object3D* object) const;
 
     /// <summary>指定ステージ番号のゲートを探す。見つからなければnullptr。</summary>
-    engine::Object3D* FindStageGateByIndex(int stageIndex) const;
+    engine::Object3D* FindStageGateByIndex(std::int32_t stageIndex) const;
 
     /// <summary>プレイヤーに最も近いステージゲートを探す。</summary>
-    /// <param name="outDistance">見つかったゲートまでの距離を受け取る任意の出力先。</param>
+    /// <param name="outDistance">見つかったゲートまでの水平距離を受け取る任意の出力先。見つからなければ float の最大値。</param>
     engine::Object3D* FindNearestStageGate(float* outDistance) const;
 
     /// <summary>プレイヤーが指定ゲートの判定範囲に触れているか返す。</summary>
     bool IsPlayerTouchingStageGate(engine::Object3D* gate) const;
 
-    /// <summary>解放条件を満たし、まだ演出していないステージ番号を返す。</summary>
-    int FindPendingUnlockStage() const;
+    /// <summary>解放済みで未視聴のゲートをステージ番号順に探す。対象がなければ-1。</summary>
+    std::int32_t FindPendingUnlockStage() const;
 
     /// <summary>新たに解放されたステージの演出を開始する。</summary>
     void BeginUnlockPresentation();
@@ -186,7 +187,7 @@ class GameSelectScene : public BaseScene, public ISceneGameplayAccess {
     /// <summary>ステージ解放演出を一フレーム進める。</summary>
     void UpdateUnlockPresentation(float deltaTime);
 
-    /// <summary>ステージ解放演出を完了し、通常表示へ戻す。</summary>
+    /// <summary>操作権と視点を復元し、markSeen が真かつ本番の演出だった場合だけ視聴済みにする。</summary>
     void FinishUnlockPresentation(bool markSeen = true);
 
     /// <summary>演出とデバッグ中断に共通する操作権・視点の復元。</summary>
@@ -195,20 +196,20 @@ class GameSelectScene : public BaseScene, public ISceneGameplayAccess {
 #ifdef USE_IMGUI
 
     /// <summary>指定ステージの解放演出をデバッグ用に強制開始する。</summary>
-    void StartDebugUnlockPresentation(int stageIndex);
+    void StartDebugUnlockPresentation(std::int32_t stageIndex);
 #endif
 
     /// <summary>ステージ選択画面の装飾を更新する。</summary>
     void UpdateStageSelectDecorations(float deltaTime);
 
     /// <summary>指定ステージへの道の表示を、解放・選択状態に合わせて更新する。</summary>
-    void UpdatePathDisplay(int stageIndex, bool active, bool unlocking, float pulse);
+    void UpdatePathDisplay(std::int32_t stageIndex, bool active, bool unlocking, float pulse);
 
     /// <summary>取得済みスターコインの表示を更新する。</summary>
     void UpdateStarCoinDisplays(float deltaTime);
 
     /// <summary>指定ステージのクリア王冠を探すか生成する。</summary>
-    engine::Object3D* EnsureStageClearCrown(int stageIndex);
+    engine::Object3D* EnsureStageClearCrown(std::int32_t stageIndex);
 
     /// <summary>ステージごとのクリア王冠の見た目を更新する。</summary>
     void UpdateStageClearCrownDisplays(float deltaTime);
@@ -220,22 +221,22 @@ class GameSelectScene : public BaseScene, public ISceneGameplayAccess {
     void UpdateStageClearRewardPresentation(float deltaTime);
 
     /// <summary>演出対象の王冠の位置と姿勢を更新する。</summary>
-    void UpdateStageClearRewardCrown(engine::Object3D* crown, int stageIndex, float deltaTime);
+    void UpdateStageClearRewardCrown(engine::Object3D* crown, std::int32_t stageIndex, float deltaTime);
 
     /// <summary>王冠獲得数をHUDの演出へ反映する。</summary>
     void UpdateStageSelectCrownHudReward();
 
     /// <summary>HUDに表示する王冠数を返す。</summary>
-    int GetDisplayedCrownCount() const;
+    std::int32_t GetDisplayedCrownCount() const;
 
     /// <summary>指定ステージの王冠表示位置を返す。</summary>
-    engine::Vector3 GetStageClearCrownPosition(int stageIndex) const;
+    engine::Vector3 GetStageClearCrownPosition(std::int32_t stageIndex) const;
 
     /// <summary>名前が一致するシーン内オブジェクトを返す。見つからなければnullptr。</summary>
     engine::Object3D* FindObjectByName(const std::string& name) const;
 
     /// <summary>指定ステージの選択画面上のノード位置を返す。</summary>
-    engine::Vector3 GetStageNodePosition(int stageIndex) const;
+    engine::Vector3 GetStageNodePosition(std::int32_t stageIndex) const;
 
     /// <summary>王冠、スター、コインなど選択画面のHUDを初期化する。</summary>
     void InitializeStageSelectHUD();
@@ -258,9 +259,9 @@ class GameSelectScene : public BaseScene, public ISceneGameplayAccess {
     // HUD の Sprite 名と基準位置・サイズ・色。Sprite はシーン側が所有する。
     struct StageSelectHudSprite {
         std::string name;
-        engine::Vector2 basePosition = engine::Vector2::ZERO;
-        engine::Vector2 baseSize = engine::Vector2::ZERO;
-        engine::Vector4 baseColor = engine::Colors::White;
+        engine::Vector2 basePosition = engine::Vector2::kZero;
+        engine::Vector2 baseSize = engine::Vector2::kZero;
+        engine::Vector4 baseColor = engine::colors::kWhite;
     };
 
     /// <summary>配置JSONの名前でHUD Spriteを結び、演出前の基準値を保存する。</summary>
@@ -269,21 +270,21 @@ class GameSelectScene : public BaseScene, public ISceneGameplayAccess {
     /// <summary>HUD Sprite を現在のシーン所有一覧から取得する。</summary>
     engine::Sprite* ResolveStageSelectHUDSprite(const StageSelectHudSprite& state);
 
-    /// <summary>3桁のHUD数字Spriteへ値、色、表示状態を反映する。</summary>
-    void SetStageSelectHUDNumber(std::array<StageSelectHudSprite, 3>& digits, int value, bool visible);
+    /// <summary>0〜999を数字Spriteに割り当てる。先頭の不要なゼロは隠し、visible が偽なら全桁を隠す。</summary>
+    void SetStageSelectHUDNumber(std::array<StageSelectHudSprite, 3>& digits, std::int32_t value, bool visible);
 
   private:
     // 入力基盤への非所有参照。描画基盤はBaseSceneの共通窓口を利用する。
     engine::InputManager* inputManager_ = nullptr;
 
     // 配置読込、照準、Object一覧をこのシーンが所有する。
-    std::unique_ptr<LevelLoader> levelLoader_ = nullptr;
-    std::unique_ptr<LockOnSystem> lockOnSystem_ = nullptr;
-    std::unique_ptr<ObjectManager> objectManager_ = nullptr;
+    std::unique_ptr<LevelLoader> levelLoader_;
+    std::unique_ptr<LockOnSystem> lockOnSystem_;
+    std::unique_ptr<ObjectManager> objectManager_;
 
     // 配置SpriteとCPU粒子の実行インスタンスを所有する。
     std::vector<std::unique_ptr<engine::Sprite>> sprites_;
-    std::unique_ptr<engine::ParticleSystem> particleSystem_ = nullptr;
+    std::unique_ptr<engine::ParticleSystem> particleSystem_;
     std::unique_ptr<Text> debugText_;
     std::unique_ptr<GameRule> gameRule_;
 
@@ -308,8 +309,8 @@ class GameSelectScene : public BaseScene, public ISceneGameplayAccess {
 
     // --- ステージゲート選択状態 ---
     // 選択中と前回のゲートを比較し、距離・決定待ち時間・遷移中状態を管理する。
-    int selectedStageIndex_ = 0;
-    int previousSelectedStageIndex_ = -1;
+    std::int32_t selectedStageIndex_ = 0;
+    std::int32_t previousSelectedStageIndex_ = -1;
     float gateSelectRadius_ = 8.0f;
     float stageDecisionCooldown_ = 0.0f;
     bool isChangingStage_ = false;
@@ -323,7 +324,7 @@ class GameSelectScene : public BaseScene, public ISceneGameplayAccess {
     bool gateReturnPresentationActive_ = false;
     float gateReturnPresentationTimer_ = 0.0f;
 
-    int gateReturnStageIndex_ = -1;
+    std::int32_t gateReturnStageIndex_ = -1;
     engine::Object3D* gateReturnTargetGate_ = nullptr;
 
     engine::Vector3 gateReturnDirection_{0.0f, 0.0f, 1.0f};
@@ -358,7 +359,7 @@ class GameSelectScene : public BaseScene, public ISceneGameplayAccess {
     GameDataManager::StageClearRewardPresentation pendingStageClearRewardPresentation_;
 
     // 新ステージ解放の対象、Director の再生時計と JSON の節目。
-    int unlockingStageIndex_ = -1;
+    std::int32_t unlockingStageIndex_ = -1;
     engine::TimerView unlockTime_; // 再生器の秒数を参照し、ゲートの点灯と演出を同期する。
     CinematicPlayer unlockPlayer_;
     bool unlockTimelineLoaded_ = false;
@@ -367,7 +368,7 @@ class GameSelectScene : public BaseScene, public ISceneGameplayAccess {
     bool unlockPresentationInitialized_ = false;
     bool unlockPresentationDebugReplay_ = false;
     bool unlockHadPlayerControl_ = true;
-    int unlockDebugPreviousSelectedStageIndex_ = -1;
+    std::int32_t unlockDebugPreviousSelectedStageIndex_ = -1;
 
     // 解放演出で操作するゲート・鍵・錠は配置済みObjectを借用する。
     engine::Object3D* unlockTargetGate_ = nullptr;
@@ -385,9 +386,9 @@ class GameSelectScene : public BaseScene, public ISceneGameplayAccess {
     // 保存値の変更前後を保持し、加算表示と粒子を時刻で進める。
     bool crownCountPresentationActive_ = false;
     bool crownCountPresentationImpactDone_ = false;
-    int crownCountPresentationStageIndex_ = -1;
-    int crownCountPresentationFrom_ = 0;
-    int crownCountPresentationTo_ = 0;
+    std::int32_t crownCountPresentationStageIndex_ = -1;
+    std::int32_t crownCountPresentationFrom_ = 0;
+    std::int32_t crownCountPresentationTo_ = 0;
     float crownCountPresentationTimer_ = 0.0f;
     float crownCountPresentationParticleTimer_ = 0.0f;
 
@@ -417,7 +418,7 @@ class GameSelectScene : public BaseScene, public ISceneGameplayAccess {
     float gateNameHeightOffset_ = 1.5f; // ゲート上端から名札までの高さ（m）。
 
     // ロード画面中の段階初期化フェーズと完了/総作業単位。
-    int loadingInitializePhase_ = 0;
+    std::int32_t loadingInitializePhase_ = 0;
     size_t loadingInitializeCompletedUnits_ = 0;
     size_t loadingInitializeTotalUnits_ = 9;
 };

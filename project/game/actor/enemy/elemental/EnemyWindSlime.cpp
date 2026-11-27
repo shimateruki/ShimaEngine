@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "EnemyWindSlime.h"
 #include "Easing.h"
 #include <numbers>
@@ -20,7 +21,7 @@
 namespace {
 constexpr const char* kGustAttackId = "gust_breath";
 constexpr const char* kVolleyAttackId = "aerial_wind_volley";
-constexpr int kWindOrbMaterialType = 26;
+constexpr std::int32_t kWindOrbMaterialType = 26;
 constexpr float kWindSlimeModelYawOffset = std::numbers::pi_v<float>;
 constexpr float kGroundCollisionWorldRadius = 0.82f;
 constexpr float kThrownCollisionWorldRadius = 1.18f;
@@ -43,7 +44,7 @@ constexpr float kVolleyFirstShotDelay = 0.52f;
 constexpr float kVolleyPreferredHoverHeight = 3.10f;
 constexpr float kVolleyCeilingClearance = 2.25f;
 constexpr float kVolleyOrbVisualScale = 0.46f;
-constexpr int kVolleyOrbCount = 3;
+constexpr std::int32_t kVolleyOrbCount = 3;
 constexpr float kVolleyImpactLateralSpacing = 1.05f;
 constexpr float kVolleyImpactForwardSpacing = 0.38f;
 constexpr const char* kIdlePreset = "enemy/wind_slime/wind_slime_idle_wisp";
@@ -70,7 +71,7 @@ BulletVisualConfig MakeWindOrbVisual(const EnemyAttackDefinition& attack) {
     // 発射後も手持ち時の材質と色を使い、軌跡と着弾は攻撃設定から選ぶ。
     BulletVisualConfig visual;
     visual.materialType = kWindOrbMaterialType;
-    visual.blendMode = BlendMode::Normal;
+    visual.blendMode = BlendMode::kNormal;
     visual.color = {0.42f, 1.0f, 0.80f, 0.96f};
     visual.emissive = 1.9f;
     visual.visualScale = 0.82f;
@@ -84,11 +85,15 @@ BulletVisualConfig MakeWindOrbVisual(const EnemyAttackDefinition& attack) {
     visual.billboardScale = 1.0f;
     visual.trailPreset = attack.activeVfx;
     visual.impactPreset = attack.impactVfx;
+    // 軌跡か着弾のプリセットが空の場合は、風スライムの既定設定を参照します。
     if (visual.trailPreset.empty() || visual.impactPreset.empty()) {
         // 旧設定や保存前のプレビューの空欄でも、従来の弾の見た目を保つ。
-        static const auto defaults = EnemyAttackProfile::CreateDefault("WindSlime");
-        if (const auto* volley = defaults.FindAttack(kVolleyAttackId)) {
+        static const auto kDefaults = EnemyAttackProfile::CreateDefault("WindSlime");
+        // 既定の連射技が見つかった場合だけ、その設定から不足分を補います。
+        if (const auto* volley = kDefaults.FindAttack(kVolleyAttackId)) {
+            // 軌跡が空欄の場合にだけ、既定の軌跡を使います。
             if (visual.trailPreset.empty()) visual.trailPreset = volley->activeVfx;
+            // 着弾が空欄の場合にだけ、既定の着弾効果を使います。
             if (visual.impactPreset.empty()) visual.impactPreset = volley->impactVfx;
         }
     }
@@ -102,6 +107,7 @@ engine::Vector3 NormalizePlanar(engine::Vector3 value) {
     value.y = 0.0f;
     const float length = std::sqrt(value.x * value.x + value.z * value.z);
 
+    // 水平成分の長さが閾値以下なら、正規化の代わりにZ正方向を返します。
     if (length <= 0.001f) {
         return {0.0f, 0.0f, 1.0f};
     }
@@ -112,6 +118,7 @@ engine::Vector3 NormalizePlanar(engine::Vector3 value) {
 engine::Object3D* FindEnemyRoot(engine::Object3D* object) {
     // 子オブジェクトへの接触から被弾すべき親の敵を探す。
     for (engine::Object3D* current = object; current; current = current->GetParent()) {
+        // 接触した実体自身か祖先に敵を見つけた時点で、その実体を返します。
         if (dynamic_cast<BaseEnemy*>(current)) {
             return current;
         }
@@ -129,14 +136,15 @@ void EnemyWindSlime::Initialize(engine::Object3DCommon* common, const std::strin
     ReloadAttackProfile();
     SetColor({0.78f, 1.0f, 0.92f, 1.0f});
     SetDefaultColor(GetColor());
-    SetCollisionAttribute(CollisionCategories::Get("enemy"));
-    SetCollisionMask(CollisionCategories::Get("player") | CollisionCategories::Get("ground") | CollisionCategories::Get("player_attack") | CollisionCategories::Get("player_bullet"));
-    SetColliderType(ColliderType::Sphere);
+    SetCollisionAttribute(engine::collisionCategories::Get("enemy"));
+    SetCollisionMask(engine::collisionCategories::Get("player") | engine::collisionCategories::Get("ground") | engine::collisionCategories::Get("player_attack") | engine::collisionCategories::Get("player_bullet"));
+    SetColliderType(engine::ColliderType::kSphere);
     SyncGroundCollisionRadius();
 }
 
 void EnemyWindSlime::Update(float deltaTime) {
     // 非活動時の演出を先に整理し、通常時だけ攻撃・移動・風弾表示を進める。
+    // 死亡、非表示、撃破演出、運搬または投擲後の復帰で処理済みなら、通常行動は進めません。
     if (UpdateInactiveState(deltaTime)) {
         return;
     }
@@ -154,13 +162,14 @@ void EnemyWindSlime::Update(float deltaTime) {
         ambientParticleTimer_ = 0.18f;
     }
 
+    // 前フレームの縦速度は保持し、水平移動は現在の行動で決め直します。
     engine::Vector3 velocity = GetVelocity();
     velocity.x = 0.0f;
     velocity.z = 0.0f;
     UpdateWildBehavior(deltaTime, velocity);
 
     // 攻撃が指定した高度や速度に通常の跳ねを重ねないよう、待機中だけ接地から跳ぶ。
-    if (attackState_ == AttackState::Idle && SlimeBounceAnimator::StepGroundHop(groundHopTimer_, velocity, IsGrounded(),
+    if (attackState_ == AttackState::kIdle && slimeBounceAnimator::StepGroundHop(groundHopTimer_, velocity, IsGrounded(),
                                                                                 deltaTime, kMoveHopInterval, 0.10f)) {
         velocity.y = (std::max)(velocity.y, kMoveHopPower);
     }
@@ -175,6 +184,7 @@ void EnemyWindSlime::Update(float deltaTime) {
 bool EnemyWindSlime::HasOwnedSpecialMaterialVisuals() const {
     // 手持ち風弾が一つでも見えていれば、専用材質の描画パスを要求する。
     for (const auto& orb : heldWindOrbVisuals_) {
+        // 作成済みで表示中の手持ち弾が一つでも見つかれば、特殊描画が必要です。
         if (orb && orb->GetIsVisible()) {
             return true;
         }
@@ -186,6 +196,7 @@ bool EnemyWindSlime::HasOwnedSpecialMaterialVisuals() const {
 void EnemyWindSlime::DrawOwnedSpecialMaterialVisuals(uint32_t depthSrvHandle, uint32_t grabSrvHandle) {
     // 風弾の特殊材質を通常の本体描画と分け、必要な画面テクスチャを渡す。
     for (const auto& orb : heldWindOrbVisuals_) {
+        // 用意済みで表示中の手持ち弾だけを特殊材質のパスへ送ります。
         if (orb && orb->GetIsVisible()) {
             orb->DrawWindOrb(depthSrvHandle, grabSrvHandle);
         }
@@ -193,11 +204,12 @@ void EnemyWindSlime::DrawOwnedSpecialMaterialVisuals(uint32_t depthSrvHandle, ui
 }
 
 bool EnemyWindSlime::UpdateInactiveState(float deltaTime) {
+    // 死亡または非表示になった場合、通常行動に入る前に攻撃の状態を初期化します。
     if (IsDead() || !GetIsVisible()) {
         // 非表示・死亡時は予告と手持ち弾を消し、復帰時に攻撃の途中から再開しない。
         HideAttackTelegraph();
         HideHeldWindOrbs();
-        attackState_ = AttackState::Idle;
+        attackState_ = AttackState::kIdle;
         attackStateTimer_ = 0.0f;
         SetVelocity({0.0f, 0.0f, 0.0f});
         return true;
@@ -223,12 +235,15 @@ bool EnemyWindSlime::UpdateInactiveState(float deltaTime) {
 
 bool EnemyWindSlime::UpdateThrowRecoveryState(float deltaTime) {
     // 投擲中と復帰中でワールド判定半径を切り替えてから共通物理を進める。
+    // 投擲の復帰期間外なら、この経路では処理せず通常行動へ返します。
     if (!IsThrowRecovering()) {
         return false;
     }
 
+    // まだ投擲物の物理で動く間は広い衝突半径を使います。
     if (IsThrownPhysics()) {
         SyncThrownCollisionRadius();
+    // 投擲中の物理が終わり、復帰だけ残る間は通常の衝突半径に戻します。
     } else {
         SyncGroundCollisionRadius();
     }
@@ -250,18 +265,21 @@ void EnemyWindSlime::UpdateWildBehavior(float deltaTime, engine::Vector3& veloci
     engine::Vector3 direction = lockedAttackDirection_;
     float distance = lockedTargetDistance_;
 
+    // 追跡対象と自身の行動パラメーターがある場合にだけ、現在の水平距離と方向を測り直します。
     if (GetTarget() && GetParameters().has_value()) {
         const engine::Vector3 toTarget = GetTarget()->GetWorldPosition() - GetWorldPosition();
         direction = NormalizePlanar(toTarget);
         distance = std::sqrt(toTarget.x * toTarget.x + toTarget.z * toTarget.z);
     }
 
-    if (attackState_ != AttackState::Idle) {
+    // 攻撃フェーズが進行中なら、索敵と移動の代わりに攻撃の更新を呼びます。
+    if (attackState_ != AttackState::kIdle) {
         // 攻撃中は通常の追跡移動を止め、攻撃フェーズごとに向きと予告を制御する。
         UpdateAttackState(deltaTime, velocity, direction, distance);
         return;
     }
 
+    // 対象かパラメーターが無い場合は追跡せず、徘徊速度とその方向を適用します。
     if (!GetTarget() || !GetParameters().has_value()) {
         const float speed = GetParameters().has_value() ? (std::max)(0.55f, GetParameters()->speed * 0.45f) : 0.8f;
         velocity = CalculateWanderVelocity(deltaTime, speed, 0.72f);
@@ -269,6 +287,7 @@ void EnemyWindSlime::UpdateWildBehavior(float deltaTime, engine::Vector3& veloci
         return;
     }
 
+    // 発見リアクションが続く間は水平移動をせず、対象の方を向きます。
     if (UpdateNoticeReaction(deltaTime, distance, GetDetectionRange(), direction)) {
         velocity.x = 0.0f;
         velocity.z = 0.0f;
@@ -283,16 +302,20 @@ void EnemyWindSlime::UpdateWildBehavior(float deltaTime, engine::Vector3& veloci
     const bool allowVolley = debugPreviewAttackId_.empty() || debugPreviewAttackId_ == kVolleyAttackId;
     UpdateFacing(direction);
 
+    // ブレスが許可され、射程内で再使用待ちが無ければ近距離攻撃を優先します。
     if (allowGust && distance >= gust.minRange && distance <= gust.maxRange && attackCooldown_ <= 0.0f) {
         StartGustBreath(direction);
+    // ブレスを開始せず、連射が許可され射程と再使用条件を満たすなら三連風弾を選びます。
     } else if (allowVolley && distance >= volley.minRange && distance <= volley.maxRange && attackCooldown_ <= 0.0f) {
         StartAerialWindVolley(direction, distance);
+    // 攻撃できなくても索敵範囲内なら、ブレスの間合いに向けて前後に移動します。
     } else if (distance <= GetDetectionRange()) {
         // 近付き過ぎた場合は後退し、息攻撃に適した距離を取り直す。
         const float speed = (std::max)(0.0f, GetParameters()->speed) * 1.12f;
         const float approach = distance > gust.maxRange * 0.78f ? 1.0f : -0.46f;
         velocity.x = direction.x * speed * approach;
         velocity.z = direction.z * speed * approach;
+    // 索敵範囲の外にいる場合は、目標への追跡をやめて徘徊します。
     } else {
         velocity = CalculateWanderVelocity(deltaTime, (std::max)(0.55f, GetParameters()->speed * 0.48f), 0.72f);
         UpdateFacing(velocity);
@@ -305,12 +328,13 @@ void EnemyWindSlime::UpdateAttackState(float deltaTime, engine::Vector3& velocit
     velocity.z = 0.0f;
 
     // 後隙では予告を消し、タイマー終了で待機へ戻る。
-    if (attackState_ == AttackState::Recover) {
+    if (attackState_ == AttackState::kRecover) {
         HideAttackTelegraph();
         attackStateTimer_ = (std::max)(0.0f, attackStateTimer_ - deltaTime);
 
+        // 硬直タイマーがゼロになった時点で、次の更新から待機行動に戻れるようにします。
         if (attackStateTimer_ <= 0.0f) {
-            attackState_ = AttackState::Idle;
+            attackState_ = AttackState::kIdle;
         }
 
         return;
@@ -318,13 +342,15 @@ void EnemyWindSlime::UpdateAttackState(float deltaTime, engine::Vector3& velocit
 
     // 空中連射は離陸・発射・着地まで同じ技として進める。
     switch (attackState_) {
-    case AttackState::VolleyTakeoff:
-    case AttackState::VolleyActive:
-    case AttackState::VolleyLanding:
+    case AttackState::kVolleyTakeoff:
+    case AttackState::kVolleyActive:
+    case AttackState::kVolleyLanding:
+        // 空中連射の各段階は、発射と予告を一緒に管理する処理に任せます。
         UpdateAerialVolley(deltaTime, velocity, direction, distance);
         break;
 
     default:
+        // ここへ来るブレスの溜めと発動は、方向を固定する共通処理に任せます。
         UpdateGustAttack(deltaTime, direction, distance);
         break;
     }
@@ -332,7 +358,7 @@ void EnemyWindSlime::UpdateAttackState(float deltaTime, engine::Vector3& velocit
 
 void EnemyWindSlime::UpdateGustAttack(float deltaTime, const engine::Vector3& direction, float distance) {
     // ブレス中は固定した方向へ周期的に押し出し判定と風粒子を出す。
-    if (attackState_ == AttackState::GustActive) {
+    if (attackState_ == AttackState::kGustActive) {
         const EnemyAttackDefinition& attack = GetAttackDefinition(kGustAttackId);
         attackStateTimer_ = (std::max)(0.0f, attackStateTimer_ - deltaTime);
         breathParticleTimer_ -= deltaTime;
@@ -370,6 +396,7 @@ void EnemyWindSlime::UpdateGustAttack(float deltaTime, const engine::Vector3& di
     breathParticleTimer_ -= deltaTime;
     const float progress = std::clamp(1.0f - attackStateTimer_ / duration, 0.0f, 1.0f);
 
+    // 溜めの進行率が58%に達する前だけ、対象方向と距離を更新します。
     if (progress < 0.58f) {
         lockedAttackDirection_ = direction;
         lockedTargetDistance_ = distance;
@@ -384,6 +411,7 @@ void EnemyWindSlime::UpdateGustAttack(float deltaTime, const engine::Vector3& di
         warningTriggered_ = true;
     }
 
+    // 溜め用の粒子を出す周期に達したら、進行度に応じた速度で本体の方へ風を出します。
     if (breathParticleTimer_ <= 0.0f) {
         EmitDirectedWindPreset(kChargePreset, GetWorldPosition() + engine::Vector3{0.0f, 0.72f, 0.0f},
                                lockedAttackDirection_ * -1.0f + engine::Vector3{0.0f, 0.18f, 0.0f}, 0.82f + progress * 0.75f);
@@ -392,7 +420,7 @@ void EnemyWindSlime::UpdateGustAttack(float deltaTime, const engine::Vector3& di
 
     // 溜めが終わったら吹き出しを開始し、次の更新ですぐ風と外力を出せるよう時計をゼロにする。
     if (attackStateTimer_ <= 0.0f) {
-        attackState_ = AttackState::GustActive;
+        attackState_ = AttackState::kGustActive;
         attackStateTimer_ = (std::max)(0.18f, attack.activeDuration);
         breathParticleTimer_ = 0.0f;
         breathPushTimer_ = 0.0f;
@@ -403,13 +431,14 @@ void EnemyWindSlime::UpdateGustAttack(float deltaTime, const engine::Vector3& di
 
 void EnemyWindSlime::UpdateAerialVolley(float deltaTime, engine::Vector3& velocity, const engine::Vector3& direction, float distance) {
     // 弾幕の準備中は上昇しながら着弾地点を示し、後半に狙いを固定する。
-    if (attackState_ == AttackState::VolleyTakeoff) {
+    if (attackState_ == AttackState::kVolleyTakeoff) {
         const EnemyAttackDefinition& attack = GetAttackDefinition(kVolleyAttackId);
         const float duration = (std::max)(0.01f, attack.windupDuration);
         attackStateTimer_ = (std::max)(0.0f, attackStateTimer_ - deltaTime);
         breathParticleTimer_ -= deltaTime;
         const float progress = std::clamp(1.0f - attackStateTimer_ / duration, 0.0f, 1.0f);
 
+        // 離陸準備の64%までは対象の位置を追い、三つの着弾地点を更新します。
         if (progress < 0.64f) {
             // 離陸前半だけ追尾し、後半は着弾予告の中心を固定する。
             lockedAttackDirection_ = direction;
@@ -443,7 +472,7 @@ void EnemyWindSlime::UpdateAerialVolley(float deltaTime, engine::Vector3& veloci
 
         // 上昇完了後に弾の保持演出を発射段階へ移す。
         if (attackStateTimer_ <= 0.0f) {
-            attackState_ = AttackState::VolleyActive;
+            attackState_ = AttackState::kVolleyActive;
             // 設定の発動時間が短くても、全弾の発射間隔と最後の余韻に必要な時間を確保する。
             const float minimumActive = kVolleyFirstShotDelay + kVolleyShotInterval * 2.0f + 0.28f;
             attackStateTimer_ = (std::max)(minimumActive, attack.activeDuration);
@@ -457,7 +486,7 @@ void EnemyWindSlime::UpdateAerialVolley(float deltaTime, engine::Vector3& veloci
     }
 
     // 空中では次弾の予告を保ち、発射数が尽きた後に着地へ進む。
-    if (attackState_ == AttackState::VolleyActive) {
+    if (attackState_ == AttackState::kVolleyActive) {
         const EnemyAttackDefinition& attack = GetAttackDefinition(kVolleyAttackId);
         attackStateTimer_ = (std::max)(0.0f, attackStateTimer_ - deltaTime);
         volleyShotTimer_ -= deltaTime;
@@ -474,6 +503,7 @@ void EnemyWindSlime::UpdateAerialVolley(float deltaTime, engine::Vector3& veloci
                                                              : (std::max)(kVolleyShotInterval, 0.01f);
             const float shotProgress = 1.0f - std::clamp(volleyShotTimer_ / shotInterval, 0.0f, 1.0f);
             ShowVolleyImpactTelegraphs(shotProgress);
+        // 三発が発射済みなら、地上に残っている着弾予告を隠します。
         } else {
             HideAttackTelegraph();
         }
@@ -497,7 +527,7 @@ void EnemyWindSlime::UpdateAerialVolley(float deltaTime, engine::Vector3& veloci
     }
 
     // 着地中は保持弾を隠し、地面に戻った時点で接地状態と衝撃演出を確定する。
-    if (attackState_ == AttackState::VolleyLanding) {
+    if (attackState_ == AttackState::kVolleyLanding) {
         const EnemyAttackDefinition& attack = GetAttackDefinition(kVolleyAttackId);
         const float duration = (std::max)(0.16f, attack.recoveryDuration);
         attackStateTimer_ = (std::max)(0.0f, attackStateTimer_ - deltaTime);
@@ -508,11 +538,13 @@ void EnemyWindSlime::UpdateAerialVolley(float deltaTime, engine::Vector3& veloci
         HideHeldWindOrbs();
         breathParticleTimer_ -= deltaTime;
 
+        // 下降中に粒子の周期を迎えたら、足元から下向きの風を出します。
         if (breathParticleTimer_ <= 0.0f) {
             EmitDirectedWindPreset(kUpdraftPreset, GetWorldPosition(), {0.0f, -1.0f, 0.0f}, 0.78f);
             breathParticleTimer_ += 0.09f;
         }
 
+        // 下降タイマーが満了したら、接地位置を確定して硬直へ移ります。
         if (attackStateTimer_ <= 0.0f) {
             // 下降が完了したら地面へ座標を固定し、衝撃を出して短い硬直へ移る。
             engine::Vector3 position = GetTranslate();
@@ -521,7 +553,7 @@ void EnemyWindSlime::UpdateAerialVolley(float deltaTime, engine::Vector3& veloci
             velocity.y = 0.0f;
             SetGrounded(true);
             EmitWindPreset(kImpactPreset, position + engine::Vector3{0.0f, 0.16f, 0.0f});
-            attackState_ = AttackState::Recover;
+            attackState_ = AttackState::kRecover;
             recoveryDuration_ = 0.18f;
             attackStateTimer_ = recoveryDuration_;
         }
@@ -533,7 +565,7 @@ void EnemyWindSlime::UpdateAerialVolley(float deltaTime, engine::Vector3& veloci
 void EnemyWindSlime::StartGustBreath(const engine::Vector3& direction) {
     // ブレスの方向を記録し、予告を出す時間を攻撃プロフィールから取得する。
     const EnemyAttackDefinition& attack = GetAttackDefinition(kGustAttackId);
-    attackState_ = AttackState::GustWindup;
+    attackState_ = AttackState::kGustWindup;
     attackStateTimer_ = (std::max)(0.01f, attack.windupDuration);
     lockedAttackDirection_ = NormalizePlanar(direction);
     warningTriggered_ = false;
@@ -543,7 +575,7 @@ void EnemyWindSlime::StartGustBreath(const engine::Vector3& direction) {
 void EnemyWindSlime::StartAerialWindVolley(const engine::Vector3& direction, float distance) {
     // 離陸前の地面高さと着弾方向を保存し、三連風弾の予告を準備する。
     const EnemyAttackDefinition& attack = GetAttackDefinition(kVolleyAttackId);
-    attackState_ = AttackState::VolleyTakeoff;
+    attackState_ = AttackState::kVolleyTakeoff;
     attackStateTimer_ = (std::max)(0.01f, attack.windupDuration);
     lockedAttackDirection_ = NormalizePlanar(direction);
     lockedTargetDistance_ = distance;
@@ -564,7 +596,7 @@ void EnemyWindSlime::StartAerialWindVolley(const engine::Vector3& direction, flo
 
 void EnemyWindSlime::BeginRecover(const EnemyAttackDefinition& attack) {
     // 攻撃表示を終え、プロフィールの硬直と再使用待ちへ移る。
-    attackState_ = AttackState::Recover;
+    attackState_ = AttackState::kRecover;
     recoveryDuration_ = (std::max)(0.05f, attack.recoveryDuration);
     attackStateTimer_ = recoveryDuration_;
     attackCooldown_ = attack.cooldown;
@@ -573,7 +605,7 @@ void EnemyWindSlime::BeginRecover(const EnemyAttackDefinition& attack) {
 
 void EnemyWindSlime::BeginVolleyLanding(const EnemyAttackDefinition& attack) {
     // 最後の弾を放した後に予告と手持ち弾を消し、現在高度から降下する。
-    attackState_ = AttackState::VolleyLanding;
+    attackState_ = AttackState::kVolleyLanding;
     attackStateTimer_ = (std::max)(0.16f, attack.recoveryDuration);
     recoveryDuration_ = attackStateTimer_;
     attackCooldown_ = attack.cooldown;
@@ -584,19 +616,21 @@ void EnemyWindSlime::BeginVolleyLanding(const EnemyAttackDefinition& attack) {
     HideHeldWindOrbs();
 }
 
-void EnemyWindSlime::FireAerialWindOrb(int orbIndex) {
+void EnemyWindSlime::FireAerialWindOrb(std::int32_t orbIndex) {
     const EnemyAttackDefinition& attack = GetAttackDefinition(kVolleyAttackId);
     // 見た目の弾が浮かんでいた座標から実弾を放つ。
     const engine::Vector3 spawnPosition = ComputeHeldWindOrbPosition(orbIndex);
     engine::Vector3 aim = lockedAttackDirection_ + engine::Vector3{0.0f, -0.08f, 0.0f};
     float targetDistance = lockedTargetDistance_;
 
-    if (orbIndex >= 0 && orbIndex < static_cast<int>(volleyImpactCenters_.size())) {
+    // 弾番号が予告配列の範囲内なら、その着弾点を使って発射方向と距離を決めます。
+    if (orbIndex >= 0 && orbIndex < static_cast<std::int32_t>(volleyImpactCenters_.size())) {
         // 地上の予告円と実際の弾着点を一致させます。
         aim = volleyImpactCenters_[orbIndex] + engine::Vector3{0.0f, 0.24f, 0.0f} - spawnPosition;
         targetDistance = engine::Math::Length(aim);
     }
 
+    // 発射位置と着弾点が近すぎる場合は、固定していた攻撃方向を少し下に向けます。
     if (engine::Math::Length(aim) <= 0.001f) {
         aim = {lockedAttackDirection_.x, -0.08f, lockedAttackDirection_.z};
     }
@@ -609,14 +643,15 @@ void EnemyWindSlime::FireAerialWindOrb(int orbIndex) {
     const float speed = std::clamp(targetDistance * 1.65f, minimumSpeed, maximumSpeed);
     const float lifetime = attack.lifetime > 0.0f ? attack.lifetime : 2.8f;
     const float radius = (std::max)(0.32f, attack.radius);
-    BulletManager::GetInstance()->Fire(spawnPosition, aim * speed, CollisionCategories::Get("enemy_attack"), CollisionCategories::Get("player") | CollisionCategories::Get("ground"),
+    BulletManager::GetInstance()->Fire(spawnPosition, aim * speed, engine::collisionCategories::Get("enemy_attack"), engine::collisionCategories::Get("player") | engine::collisionCategories::Get("ground"),
                                        "Primitives/sphere", radius, lifetime, MakeWindOrbVisual(attack), attack.damage, {},
-                                       DamageType::Physical);
+                                       DamageType::kPhysical);
 
     // 弾への切り替えと同時に発射口へ風を出し、発射済みの手持ち表示を消す。
     EmitDirectedWindPreset(kBurstPreset, spawnPosition, aim, 1.12f);
 
-    if (orbIndex >= 0 && orbIndex < static_cast<int>(heldWindOrbVisuals_.size()) && heldWindOrbVisuals_[orbIndex]) {
+    // 発射した番号に対応する表示用の弾がある場合だけ、その弾を隠します。
+    if (orbIndex >= 0 && orbIndex < static_cast<std::int32_t>(heldWindOrbVisuals_.size()) && heldWindOrbVisuals_[orbIndex]) {
         heldWindOrbVisuals_[orbIndex]->SetIsVisible(false);
     }
 }
@@ -631,6 +666,7 @@ void EnemyWindSlime::UpdateVolleyImpactCenters() {
         GetWorldPosition() + forward * std::clamp(lockedTargetDistance_, attack.minRange, attack.maxRange);
     engine::Vector3 targetVelocity = {};
 
+    // 追跡対象が Character なら、現在座標と水平速度を先読みの基準に使います。
     if (const Character* targetCharacter = dynamic_cast<const Character*>(GetTarget())) {
         targetPosition = targetCharacter->GetWorldPosition();
         targetVelocity = targetCharacter->GetVelocity();
@@ -639,12 +675,13 @@ void EnemyWindSlime::UpdateVolleyImpactCenters() {
         const float speed = engine::Math::Length(targetVelocity);
         constexpr float kMaximumPredictionSpeed = 6.0f;
 
+        // 走行が速い対象でも予告が遠くへ飛ばないよう、速度の大きさが6を超えるときに制限します。
         if (speed > kMaximumPredictionSpeed && speed > 0.001f) {
             targetVelocity = targetVelocity * (kMaximumPredictionSpeed / speed);
         }
     }
 
-    for (int index = 0; index < kVolleyOrbCount; ++index) {
+    for (std::int32_t index = 0; index < kVolleyOrbCount; ++index) {
         const float centeredIndex = static_cast<float>(index - 1);
         const float leadTime = kVolleyFirstShotDelay + kVolleyShotInterval * static_cast<float>(index);
         engine::Vector3 impact = targetPosition + targetVelocity * (leadTime * 0.42f);
@@ -671,16 +708,17 @@ float EnemyWindSlime::ResolveVolleyHoverY() {
     // 頭上を球で調べ、天井と重ならない高さまで浮遊目標を下げる。
     constexpr float kProbeHeight = 0.92f;
     const engine::Vector3 origin = GetWorldPosition() + engine::Vector3{0.0f, kProbeHeight, 0.0f};
-    PhysicsQueryFilter filter;
-    filter.mask = CollisionCategories::Get("ground");
+    engine::PhysicsQueryFilter filter;
+    filter.mask = engine::collisionCategories::Get("ground");
     filter.ignoredObject = this;
     filter.ignoreDescendants = true;
     filter.includeTriggers = false;
-    const RaycastHit hit = CollisionManager::GetInstance()->SphereCast(
+    const engine::RaycastHit hit = engine::CollisionManager::GetInstance()->SphereCast(
         origin, 0.46f, {0.0f, 1.0f, 0.0f}, kVolleyPreferredHoverHeight + kVolleyCeilingClearance, filter);
 
     float hoverHeight = kVolleyPreferredHoverHeight;
 
+    // 頭上の球キャストが地形に当たった場合は、天井までの距離から安全な浮遊目標を求めます。
     if (hit.isHit) {
         const float availableHeight = kProbeHeight + hit.distance - kVolleyCeilingClearance;
         hoverHeight = (std::min)(hoverHeight, (std::max)(0.42f, availableHeight));
@@ -700,11 +738,13 @@ void EnemyWindSlime::HoldVolleyAltitude(float height, float deltaTime, engine::V
 
 void EnemyWindSlime::EnsureHeldWindOrbs() {
     // 発射前の三つの風弾は表示専用とし、接触判定を持つ実弾は発射時に作る。
+    // 描画の共通設定を取得できなければ、風弾のダミーは生成しません。
     if (!GetObjectCommon()) {
         return;
     }
 
-    for (int index = 0; index < static_cast<int>(heldWindOrbVisuals_.size()); ++index) {
+    for (std::int32_t index = 0; index < static_cast<std::int32_t>(heldWindOrbVisuals_.size()); ++index) {
+        // 作成済みのスロットは使い回すため、空いているものだけ初期化します。
         if (heldWindOrbVisuals_[index]) {
             continue;
         }
@@ -716,13 +756,15 @@ void EnemyWindSlime::EnsureHeldWindOrbs() {
         orb->SetCollisionAttribute(0);
         orb->SetCollisionMask(0);
         orb->SetMaterialType(kWindOrbMaterialType);
-        orb->SetBlendMode(BlendMode::Normal);
+        orb->SetBlendMode(BlendMode::kNormal);
         orb->SetColor({0.46f, 1.0f, 0.82f, 0.94f});
         orb->SetEmissive(1.8f);
         orb->SetMetallic(0.0f);
         orb->SetRoughness(0.24f);
 
+        // 描画実体を取得できる場合は、特殊材質用の領域を調べます。
         if (engine::MeshRenderer* renderer = orb->GetMeshRenderer()) {
+            // 領域がある場合は、波の設定と弾番号に応じた効果タイプを設定します。
             if (auto* param = renderer->GetWaterParamData()) {
                 param->waveSpeed = 2.35f;
                 param->waveHeight = 0.62f;
@@ -745,9 +787,10 @@ void EnemyWindSlime::UpdateHeldWindOrbs(float deltaTime, float appearProgress) {
     EnsureHeldWindOrbs();
     volleyVisualTimer_ -= deltaTime;
 
-    for (int index = 0; index < static_cast<int>(heldWindOrbVisuals_.size()); ++index) {
+    for (std::int32_t index = 0; index < static_cast<std::int32_t>(heldWindOrbVisuals_.size()); ++index) {
         engine::Object3D* orb = heldWindOrbVisuals_[index].get();
 
+        // 表示用の弾が作られていないスロットは、更新を飛ばします。
         if (!orb) {
             continue;
         }
@@ -756,6 +799,7 @@ void EnemyWindSlime::UpdateHeldWindOrbs(float deltaTime, float appearProgress) {
         const bool isReady = appearProgress >= appearThreshold && index >= volleyShotCount_;
         orb->SetIsVisible(isReady);
 
+        // 出現順に達していない弾と発射済みの弾は、非表示にして姿勢の更新も省きます。
         if (!isReady) {
             continue;
         }
@@ -770,6 +814,7 @@ void EnemyWindSlime::UpdateHeldWindOrbs(float deltaTime, float appearProgress) {
         orb->SetRotation({idleTimer_ * 1.8f, idleTimer_ * 2.7f + static_cast<float>(index), idleTimer_ * 1.2f});
         orb->Update(deltaTime);
 
+        // 粒子更新の周期に達したフレームでは、準備できた弾すべてから風を出します。
         if (volleyVisualTimer_ <= 0.0f) {
             const engine::Vector3 tangent =
                 NormalizePlanar(lockedAttackDirection_ + engine::Vector3{static_cast<float>(index - 1) * 0.28f, 0.22f,
@@ -778,6 +823,7 @@ void EnemyWindSlime::UpdateHeldWindOrbs(float deltaTime, float appearProgress) {
         }
     }
 
+    // 全スロットの処理後に共通タイマーを戻し、次の粒子発生まで間を空けます。
     if (volleyVisualTimer_ <= 0.0f) {
         volleyVisualTimer_ = 0.075f;
     }
@@ -786,13 +832,14 @@ void EnemyWindSlime::UpdateHeldWindOrbs(float deltaTime, float appearProgress) {
 void EnemyWindSlime::HideHeldWindOrbs() {
     // 攻撃中断・着地時に表示用の弾だけを隠す。
     for (auto& orb : heldWindOrbVisuals_) {
+        // 作成済みの表示用の弾だけを対象にし、実弾は操作しません。
         if (orb) {
             orb->SetIsVisible(false);
         }
     }
 }
 
-engine::Vector3 EnemyWindSlime::ComputeHeldWindOrbPosition(int orbIndex) const {
+engine::Vector3 EnemyWindSlime::ComputeHeldWindOrbPosition(std::int32_t orbIndex) const {
     // 三つの風弾を進行方向に対して左右へ並べ、中央だけ少し高く置く。
     const engine::Vector3 direction = NormalizePlanar(lockedAttackDirection_);
     const engine::Vector3 right = {direction.z, 0.0f, -direction.x};
@@ -807,6 +854,7 @@ void EnemyWindSlime::DispatchEnemyBreathPush(const engine::Vector3& direction, f
     const EnemyAttackDefinition& attack = GetAttackDefinition(kGustAttackId);
     Character* character = dynamic_cast<Character*>(GetTarget());
 
+    // 外力を受けるキャラクターがいないか、余裕を含めた距離の上限を超えるときは押しません。
     if (!character || distance > attack.maxRange + 0.75f) {
         return;
     }
@@ -815,6 +863,7 @@ void EnemyWindSlime::DispatchEnemyBreathPush(const engine::Vector3& direction, f
     const engine::Vector3 targetDirection = NormalizePlanar(toTarget);
     const float facingDot = engine::Math::Dot(direction, targetDirection);
 
+    // 攻撃の正面と対象方向の内積が0.24未満なら、ブレスの角度外として外力を与えません。
     if (facingDot < 0.24f) {
         return;
     }
@@ -829,7 +878,7 @@ void EnemyWindSlime::DispatchEnemyBreathPush(const engine::Vector3& direction, f
 void EnemyWindSlime::BeginThrown(const engine::Vector3& initialVelocity) {
     // 風攻撃を止めて予告と手持ち弾を消し、投擲時の判定半径へ切り替える。
     EnsureBaseScale();
-    attackState_ = AttackState::Idle;
+    attackState_ = AttackState::kIdle;
     attackStateTimer_ = 0.0f;
     warningTriggered_ = false;
     HideAttackTelegraph();
@@ -853,7 +902,7 @@ void EnemyWindSlime::SetDebugPreviewAttackId(const std::string& attackId) {
     // プレビュー対象の変更時は前の攻撃を破棄し、選択した技をすぐ確認できるようにする。
     debugPreviewAttackId_ = attackId;
     attackCooldown_ = 0.0f;
-    attackState_ = AttackState::Idle;
+    attackState_ = AttackState::kIdle;
     attackStateTimer_ = 0.0f;
     volleyShotCount_ = 0;
     HideHeldWindOrbs();
@@ -862,22 +911,22 @@ void EnemyWindSlime::SetDebugPreviewAttackId(const std::string& attackId) {
 const char* EnemyWindSlime::GetDebugAttackPhaseName() const {
     // 実行中の段階をプレビューのタイムラインに表示する名前へ変換する。
     switch (attackState_) {
-    case AttackState::GustWindup:
+    case AttackState::kGustWindup:
         return "暴風ブレス・溜め";
 
-    case AttackState::GustActive:
+    case AttackState::kGustActive:
         return "暴風ブレス・吹き飛ばし中";
 
-    case AttackState::VolleyTakeoff:
+    case AttackState::kVolleyTakeoff:
         return "三連風弾・風で上昇";
 
-    case AttackState::VolleyActive:
+    case AttackState::kVolleyActive:
         return volleyShotCount_ == 0 ? "三連風弾・頭上に形成" : "三連風弾・順番に投射";
 
-    case AttackState::VolleyLanding:
+    case AttackState::kVolleyLanding:
         return "三連風弾・着地";
 
-    case AttackState::Recover:
+    case AttackState::kRecover:
         return "攻撃後・反動";
 
     default:
@@ -894,6 +943,7 @@ void EnemyWindSlime::ApplyManagedScale(const engine::Vector3& scale) {
 
 void EnemyWindSlime::UpdateFacing(const engine::Vector3& direction) {
     // モデルの正面補正を加え、標的方向へ最短角で振り向く。
+    // 水平移動の向きがほぼゼロの場合は、向きの補間を進めません。
     if (direction.x * direction.x + direction.z * direction.z <= 0.0001f) {
         return;
     }
@@ -907,7 +957,8 @@ void EnemyWindSlime::ApplySlimeAnimation(float deltaTime) {
     engine::Vector3 targetScale = baseScale_;
     engine::Vector3 targetRotation = {0.0f, GetRotation().y, 0.0f};
 
-    if (attackState_ == AttackState::GustWindup) {
+    // ブレスの溜めでは押しつぶした姿勢を徐々に強め、体を震わせます。
+    if (attackState_ == AttackState::kGustWindup) {
         const EnemyAttackDefinition& attack = GetAttackDefinition(kGustAttackId);
         const float duration = (std::max)(0.01f, attack.windupDuration);
         // ブレスの溜めは高さをつぶし、進行度に合わせて小さく震わせる。
@@ -920,7 +971,8 @@ void EnemyWindSlime::ApplySlimeAnimation(float deltaTime) {
         };
 
         targetRotation.z = flutter * 1.4f;
-    } else if (attackState_ == AttackState::VolleyTakeoff) {
+    // 連射の上昇準備では、縮んでから伸びる離陸姿勢を作ります。
+    } else if (attackState_ == AttackState::kVolleyTakeoff) {
         const EnemyAttackDefinition& attack = GetAttackDefinition(kVolleyAttackId);
         const float duration = (std::max)(0.01f, attack.windupDuration);
         const float progress = std::clamp(1.0f - attackStateTimer_ / duration, 0.0f, 1.0f);
@@ -934,7 +986,8 @@ void EnemyWindSlime::ApplySlimeAnimation(float deltaTime) {
         };
 
         targetRotation.x = -std::sin(progress * std::numbers::pi_v<float>) * 0.10f;
-    } else if (attackState_ == AttackState::VolleyActive) {
+    // 滞空連射中は、浮遊と発射直後の反動を同じ姿勢に合成します。
+    } else if (attackState_ == AttackState::kVolleyActive) {
         // 滞空中は周期的な揺れに、弾を放った瞬間からの反動を重ねる。
         const float hoverWave = std::sin(idleTimer_ * 6.2f);
         const float recoilRate = std::clamp(volleyRecoilTimer_ / 0.18f, 0.0f, 1.0f);
@@ -947,7 +1000,8 @@ void EnemyWindSlime::ApplySlimeAnimation(float deltaTime) {
 
         targetRotation.x = -recoil * 0.72f;
         targetRotation.z = hoverWave * 0.055f;
-    } else if (attackState_ == AttackState::VolleyLanding) {
+    // 着地フェーズでは、下降の途中だけ体を縦に伸ばします。
+    } else if (attackState_ == AttackState::kVolleyLanding) {
         const EnemyAttackDefinition& attack = GetAttackDefinition(kVolleyAttackId);
         const float duration = (std::max)(0.16f, attack.recoveryDuration);
         const float progress = std::clamp(1.0f - attackStateTimer_ / duration, 0.0f, 1.0f);
@@ -960,7 +1014,8 @@ void EnemyWindSlime::ApplySlimeAnimation(float deltaTime) {
         };
 
         targetRotation.x = 0.08f * progress;
-    } else if (attackState_ == AttackState::GustActive) {
+    // ブレス発動中は、奥行き方向へ伸ばして周期的な脈動を重ねます。
+    } else if (attackState_ == AttackState::kGustActive) {
         const float activeDuration = (std::max)(0.01f, GetAttackDefinition(kGustAttackId).activeDuration);
         const float progress = 1.0f - std::clamp(attackStateTimer_ / activeDuration, 0.0f, 1.0f);
         // 吹き出している間は奥行きを伸ばした姿勢を保ち、風の脈動を重ねる。
@@ -972,7 +1027,8 @@ void EnemyWindSlime::ApplySlimeAnimation(float deltaTime) {
         };
 
         targetRotation.x = -0.08f;
-    } else if (attackState_ == AttackState::Recover) {
+    // 硬直中は、解除までの進行率で反動から通常姿勢へ寄せます。
+    } else if (attackState_ == AttackState::kRecover) {
         const float duration = (std::max)(0.01f, recoveryDuration_ > 0.0f ? recoveryDuration_ : 0.28f);
         const float remaining = std::clamp(attackStateTimer_ / duration, 0.0f, 1.0f);
         // 硬直時間に合わせて縦へ弾み、次の通常姿勢へ戻す。
@@ -982,9 +1038,10 @@ void EnemyWindSlime::ApplySlimeAnimation(float deltaTime) {
             baseScale_.y * (1.0f + rebound * 0.16f),
             baseScale_.z * (1.0f + rebound * 0.12f),
         };
+    // 攻撃や硬直中でなければ、移動と接地に応じた通常の弾みを使います。
     } else {
         // 攻撃していない間は接地と移動速度を使って通常の弾みを作る。
-        SlimeBounceAnimator::Params params;
+        slimeBounceAnimator::Params params;
         params.speedForFullBounce = 1.9f;
         params.idleAmplitude = 0.09f;
         params.moveAmplitude = 0.31f;
@@ -992,7 +1049,7 @@ void EnemyWindSlime::ApplySlimeAnimation(float deltaTime) {
         params.horizontalSquash = 0.30f;
         params.verticalStretch = 0.39f;
         params.airborneStretch = 0.40f;
-        targetScale = SlimeBounceAnimator::MakeScale(baseScale_, GetVelocity(), idleTimer_, IsGrounded(), params);
+        targetScale = slimeBounceAnimator::MakeScale(baseScale_, GetVelocity(), idleTimer_, IsGrounded(), params);
     }
 
     // 姿勢に被弾反応を重ねて補間する。水平の向きは行動側が決めた角度を保つ。
@@ -1020,6 +1077,7 @@ void EnemyWindSlime::EmitWindBreathParticles(const engine::Vector3& origin, cons
     streamDirection = engine::Math::Normalize(streamDirection);
     EmitDirectedWindPreset(kBreathStreamPreset, position, streamDirection, 1.25f + step * 1.05f);
 
+    // 風粒子の3回に1回だけ射程の奥にも砂ぼこりを足します。
     if (breathParticleCursor_ % 3 == 0) {
         const engine::Vector3 dustPosition = origin + planarDirection * (range * (0.48f + step * 0.42f));
         EmitDirectedWindPreset(kBreathDustPreset, dustPosition, streamDirection, 1.0f + step * 0.65f);
@@ -1032,6 +1090,7 @@ void EnemyWindSlime::EmitWindPreset(const char* presetName, const engine::Vector
     // GPU粒子が未初期化なら演出だけ省き、攻撃処理は続ける。
     GpuParticleManager* particles = GpuParticleManager::GetInstance();
 
+    // GPU粒子が初期化され、空でないプリセット名を受け取った場合に発生させます。
     if (particles && particles->IsInitialized() && presetName && presetName[0] != '\0') {
         particles->Emit(presetName, position);
     }
@@ -1042,6 +1101,7 @@ void EnemyWindSlime::EmitDirectedWindPreset(const char* presetName, const engine
     // 吹き出す方向と速度倍率をプリセットへ渡し、攻撃ごとに粒子の向きを揃える。
     GpuParticleManager* particles = GpuParticleManager::GetInstance();
 
+    // GPU粒子が使え、指定名が空でないときに方向付きの発生を依頼します。
     if (particles && particles->IsInitialized() && presetName && presetName[0] != '\0') {
         particles->EmitDirected(presetName, position, direction, speedScale);
     }
@@ -1060,6 +1120,6 @@ void EnemyWindSlime::SyncGroundCollisionRadius() {
 }
 
 void EnemyWindSlime::SyncThrownCollisionRadius() {
-    // 投擲中は回転した体を拾いやすい半径へ広げる。
+    // 投擲中は、地上の待機・攻撃時より大きいワールド半径を使います。
     SyncWorldCollisionRadius(kThrownCollisionWorldRadius);
 }

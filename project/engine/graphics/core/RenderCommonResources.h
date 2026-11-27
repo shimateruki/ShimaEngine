@@ -10,7 +10,7 @@ class ParticleCommon;
 class SceneRenderCommands;
 
 /// <summary>シーンが必要とする共有描画基盤の準備範囲。通常シーンはFullを使う。</summary>
-enum class RenderPreparation { SpritesOnly, Minimal, Full };
+enum class RenderPreparation { kSpritesOnly, kMinimal, kFull };
 
 // 担当：エンジン存続中に使う3D・Sprite・CPU粒子の共通描画基盤を所有する。
 // 関連：Framework（所有）、SceneManager（準備要求）、各CommonとSceneRenderCommands（描画命令の窓口）

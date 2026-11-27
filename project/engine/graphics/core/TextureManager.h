@@ -15,6 +15,8 @@
 #include "DirectXCommon.h"
 #include "DirectXTex.h"
 
+namespace engine {
+
 // 担当：画像デコード、DDSキャッシュ、GPU転送とSRV番号を管理する。
 // 関連：DirectXCommon（転送）、SrvManager（記述子）、ScenePreloader（事前準備）
 // 主な入口：Initialize / Load / BeginAsyncUploadBatch / PollAsyncUploadBatch
@@ -22,9 +24,9 @@ class TextureManager {
 public:
     /// <summary>テクスチャをsRGBとして読むか、線形色として読むか。</summary>
     enum class TextureColorSpace {
-        Auto,
-        SRGB,
-        Linear,
+        kAuto,
+        kSRGB,
+        kLinear,
     };
 
     /// <summary>一枚のテクスチャのパス、メタデータ、GPUリソースとSRV番号。</summary>
@@ -84,7 +86,7 @@ public:
     // 画像ファイルのデコードだけを先行し、GPU生成は次回Loadまで遅延します。
     bool Prepare(
         const std::string& fileName,
-        TextureColorSpace colorSpace = TextureColorSpace::Auto,
+        TextureColorSpace colorSpace = TextureColorSpace::kAuto,
         bool allowDdsCache = true);
 
     /// <summary>テクスチャの寸法・フォーマットなどのメタデータを返す。</summary>
@@ -165,7 +167,9 @@ private:
     bool asyncUploadBatchActive_ = false; // 画像転送をまとめて記録中か。
 
     // 転送バッチへの記録指定は呼び出し元スレッドごとに保持します。
-    static thread_local bool asyncUploadRecording_;
+    static thread_local bool sAsyncUploadRecording;
     bool asyncUploadBatchSubmitted_ = false; // 記録した転送をGPUへ送信済みか。
     mutable std::mutex mutex_;
 };
+
+} // namespace engine

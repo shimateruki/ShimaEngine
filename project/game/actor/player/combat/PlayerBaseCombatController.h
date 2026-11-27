@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "engine/utility/math/Math.h"
 #include <unordered_set>
@@ -20,14 +21,14 @@ class PlayerBaseCombatController {
     // 中断時に一時演出を片付け、既定ではプレイヤー操作も戻します。
     void Cancel(Player& player, bool restoreControl = true);
 
-    bool IsActive() const { return phase_ != Phase::Idle; }
+    bool IsActive() const { return phase_ != Phase::kIdle; }
 
     // 実際に勢いが乗っている突進と落下区間だけゲート破壊を許す。
     bool CanBreakImpactGate() const;
 
     // 再生位置の復元に必要な数値状態。ポインタ集合 hitTargets_ は保存対象外です。
     struct ReplayState {
-        int phase = 0;
+        std::int32_t phase = 0;
         engine::Vector3 direction{0.0f, 0.0f, 1.0f};
         float timer = 0.0f;
         float effectTimer = 0.0f;
@@ -41,7 +42,7 @@ class PlayerBaseCombatController {
     void RestoreReplayState(const ReplayState& state);
 
   private:
-    enum class Phase { Idle, BashWindup, BashActive, BashRecovery, PressWindup, PressFall, PressRecovery };
+    enum class Phase { kIdle, kBashWindup, kBashActive, kBashRecovery, kPressWindup, kPressFall, kPressRecovery };
 
     // ロックオン方向を攻撃開始時に固定し、予備動作中の入力で判定が跳ねないようにする。
     void BeginBash(Player& player);
@@ -64,7 +65,7 @@ class PlayerBaseCombatController {
     // 入力猶予中の追加入力は、通常操作へ戻した後に次の攻撃へつなぐ。
     void Finish(Player& player);
 
-    Phase phase_ = Phase::Idle;
+    Phase phase_ = Phase::kIdle;
     engine::Vector3 direction_{0.0f, 0.0f, 1.0f};
     std::unordered_set<engine::Object3D*> hitTargets_;
     float timer_ = 0.0f;

@@ -40,9 +40,9 @@ class PlayerStateFallingOut : public IAnimationState {
     void Exit(Player* player) override;
 
   private:
-    enum class Phase { LifeLost, Waiting, IrisOut, IrisIn };
+    enum class Phase { kLifeLost, kWaiting, kIrisOut, kIrisIn };
 
-    Phase phase_ = Phase::Waiting;
+    Phase phase_ = Phase::kWaiting;
     float waitTimer_ = 0.0f;
     engine::Vector2 irisCenter_ = {0.5f, 0.5f};
 };

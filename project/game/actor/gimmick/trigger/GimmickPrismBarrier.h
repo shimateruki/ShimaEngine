@@ -2,8 +2,8 @@
 
 #include "BaseGimmick.h"
 
-// 中ボス戦中だけ立ち上がる、当たり判定付きのプリズム障壁です。
-// 関連：BaseGimmickの配置・衝突基盤を使い、固有の状態と表示をこのクラスで更新する。調整項目はInitializeでProperty登録する。
+// 遭遇イベントに応じて展開・解除する発光障壁。展開中は高さによって衝突を有効にする。
+// 遭遇管理からBaseScene経由の起動・解除を受け、壁の変形、材質、衝突を更新する。
 // 主な入口：Initialize / Update / OnTrigger / OnSwitchEvent
 class GimmickPrismBarrier : public BaseGimmick {
   public:
@@ -11,6 +11,7 @@ class GimmickPrismBarrier : public BaseGimmick {
     static constexpr const char* kTypeId = "PrismBarrier";
     static constexpr const char* kModelPath = "Gimmicks/portal_surface";
 
+    // 障壁の材質と薄いOBBを初期化し、開閉と発光の編集項目を登録する。
     void Initialize(engine::Object3DCommon* common, const std::string& modelName) override;
 
     // 再生停止時は編集配置を復元し、実行時のみ開閉補間を進めます。
@@ -26,17 +27,19 @@ class GimmickPrismBarrier : public BaseGimmick {
     std::unique_ptr<engine::Object3D> Clone() const override;
 
   private:
-    // 再生中の変形値で編集時の基準を上書きしないよう、初回のみ記録します。
+    // 編集位置・色・衝突を退避する。forceがtrueなら、退避済みでも編集側の値を取り直す。
     void CaptureAuthoredState(bool force = false);
 
-    // 再生中の高さや衝突を持ち越さず、保存された配置へ戻します。
+    // 保存した位置・大きさ・色へ戻し、編集用に障壁の表示と衝突を消す。
     void ResetForEditor();
 
-    // 壁の底辺を固定して上へ伸ばし、開閉中の見た目と衝突を同期します。
+    // 底辺を固定して上へ伸ばす。解除は衝突を先に外し、縮む表示はしきい値まで残す。
     void ApplyRuntimeVisual();
 
+    // 保存している属性とマスクを復元するか、両方を0にする。
     void SetCollisionEnabled(bool enabled);
 
+    // 開閉にかかる秒数を返す。設定は0.05〜3.0秒、設定なしなら0.42秒。
     float GetTransitionDuration() const;
 
     engine::Vector3 authoredPosition_{}; // Editorで指定した位置。Play終了時の復元に使う。

@@ -1,8 +1,9 @@
+#include <cstdint>
 #include "game/actor/enemy/spawn/EnemySpawner.h"
 #include "game/actor/enemy/spawn/EnemyFactory.h"
 
-void EnemySpawner::Initialize(engine::Object3DCommon* common, const std::string& enemyType, float interval, int maxCount) {
-    // 配置物として初期化し、敵種別と通知間隔を保持します。
+void EnemySpawner::Initialize(engine::Object3DCommon* common, const std::string& enemyType, float interval, std::int32_t maxCount) {
+    // 配置物として初期化し、生成する敵の種類と通知間隔を秒で保持する。
     engine::Object3D::Initialize(common);
     common_ = common;
     enemyType_ = enemyType;
@@ -15,14 +16,14 @@ void EnemySpawner::Initialize(engine::Object3DCommon* common, const std::string&
 }
 
 void EnemySpawner::Update(float deltaTime) {
-    // 最大生成数に達したら、それ以上は発生させない
+    // 正の上限があり、通知回数がその上限に達したら更新を打ち切る。0以下の設定では回数を制限しない。
     if (maxCount_ > 0 && spawnCount_ >= maxCount_) {
         return;
     }
 
     timer_ += deltaTime;
 
-    // 指定間隔を超えたらスポーン位置を通知する
+    // 経過秒が間隔に達したらこのフレームで一度だけSpawnを呼び、余った時間は持ち越さない。
     if (timer_ >= spawnInterval_) {
         timer_ = 0.0f;
         Spawn();
@@ -36,8 +37,9 @@ void EnemySpawner::Spawn() {
     // 生成は登録されたコールバックの担当です。通知先が無ければ何も行いません。
     if (onSpawnCallback_) {
         // 自分の配置座標をスポーン位置として使う
-        engine::Vector3 spawnPos = engine::Vector3::ZERO;
+        engine::Vector3 spawnPos = engine::Vector3::kZero;
 
+        // 配置用のTransformがあれば、その移動成分を通知位置に使う。なければ原点のまま通知する。
         if (GetTransform()) {
             spawnPos = GetTransform()->translate;
         }

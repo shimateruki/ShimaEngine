@@ -1,4 +1,5 @@
 ﻿#define NOMINMAX
+#include <cstdint>
 #include "GimmickCopyMemoryStation.h"
 #include "Easing.h"
 #include <numbers>
@@ -35,12 +36,13 @@ constexpr float kCoreVisualScale = 0.92f;
 constexpr float kSelectionCooldown = 0.28f;
 constexpr float kPulseDuration = 0.85f;
 
-// 記憶台の子モデルはシーンの特殊マテリアル一覧へ直接登録されないため、
-// 通常PBRで確実に描画し、台座と3つの能力見本を一体として読めるようにします。
-constexpr int kCorePreviewMaterialType = 0;
+// 内部のコアモデルは特殊材質用の描画対象としてシーンへ登録しないため、
+// 台座にコアが一つ・三つ・四つのいずれでも、見本は通常PBRで描く。
+constexpr std::int32_t kCorePreviewMaterialType = 0;
 constexpr const char* kActivationCue = "shared/copy_memory_station_activate_cue";
 } // namespace
 
+// 台座の検知範囲を設定し、コアと光を表示用に確保してから編集項目を登録する。
 void GimmickCopyMemoryStation::Initialize(engine::Object3DCommon* common, const std::string& modelName) {
     BaseGimmick::Initialize(common, modelName);
 
@@ -58,16 +60,17 @@ void GimmickCopyMemoryStation::Initialize(engine::Object3DCommon* common, const 
     SetEnvIntensity(0.35f);
     SetMetallic(0.18f);
     SetRoughness(0.34f);
-    SetCollisionAttribute(CollisionCategories::Get("trigger"));
-    SetCollisionMask(CollisionCategories::Get("player"));
+    SetCollisionAttribute(engine::collisionCategories::Get("trigger"));
+    SetCollisionMask(engine::collisionCategories::Get("player"));
 
     // 台座の接触を拾う箱だけを作り、どの見本を取得するかは FindTouchedCore() で個別に調べます。
     engine::Object3D::ColliderConfig collider;
-    collider.type = ColliderType::Obb;
+    collider.type = engine::ColliderType::kObb;
     collider.center = {0.0f, 0.95f, 0.0f};
     collider.size = {3.1f, 1.6f, 1.85f};
     SetColliderConfig(collider);
 
+    // 保存値を持たない状態なら、コアの既定設定を書けるように作成する。
     if (!GetParameters().has_value()) {
         ResetParameters();
     }
@@ -87,7 +90,7 @@ void GimmickCopyMemoryStation::Initialize(engine::Object3DCommon* common, const 
         coreVisuals_[index]->Initialize(common);
         coreVisuals_[index]->SetName("CopyMemoryStation_Core_" + std::to_string(index + 1));
         coreVisuals_[index]->SetClassName("Object");
-        coreVisuals_[index]->SetColliderType(ColliderType::None);
+        coreVisuals_[index]->SetColliderType(engine::ColliderType::kNone);
         coreVisuals_[index]->SetCollisionAttribute(0);
         coreVisuals_[index]->SetCollisionMask(0);
         coreVisuals_[index]->SetMaterialType(kCorePreviewMaterialType);
@@ -104,19 +107,19 @@ void GimmickCopyMemoryStation::Initialize(engine::Object3DCommon* common, const 
         coreVisuals_[index]->SetIsVisible(false);
         displayedTypes_[index].clear();
 
-        // 常駐する小数の描画物を使い回し、取得を繰り返しても粒を増殖させません。
+        // 各枠に三つの光点と一つの輪を確保し、取得のたびに表示物を増やさず使い回す。
         for (size_t part = 0; part < 4; ++part) {
             auto& effect = effects_[index * 4 + part];
             effect = std::make_unique<engine::Object3D>();
             effect->Initialize(common);
             effect->SetModel(part == 3 ? "Gimmicks/copy_essence_halo" : "Gimmicks/copy_essence_spark");
-            effect->SetColliderType(ColliderType::None);
+            effect->SetColliderType(engine::ColliderType::kNone);
             effect->SetCollisionAttribute(0);
             effect->SetCollisionMask(0);
             effect->SetEnableLighting(false);
             effect->SetEnableEnvMap(false);
             effect->SetCastShadow(false);
-            effect->SetBlendMode(BlendMode::Add);
+            effect->SetBlendMode(BlendMode::kAdd);
             effect->SetEmissive(1.0f);
             effect->SetIsVisible(false);
         }
@@ -124,7 +127,7 @@ void GimmickCopyMemoryStation::Initialize(engine::Object3DCommon* common, const 
 
     UpdateCoreVisuals(0.0f);
 
-    // 編集項目の宣言です。動作処理と旧paramの保存キーは変更しません。
+    // 台座に置く能力と、触れられる範囲や浮遊・発光の値をInspectorの入力に結び付ける。
     using Self = GimmickCopyMemoryStation;
     engine::ObjectPropertyDefinition<Self> properties(*this, kTypeId, "コピー記憶台",
         "操作キー不要で、浮いている能力エッセンスへ触れると変身します。");
@@ -134,6 +137,7 @@ void GimmickCopyMemoryStation::Initialize(engine::Object3DCommon* common, const 
     properties.Accessor<std::string>("コピー能力", "copyMemoryTypeA", "param.copyMemoryTypeA",
         [](const Self& object) { return object.GetParameters() ? object.GetParameters()->copyMemoryTypeA : std::string(); },
         [](Self& object, const std::string& value) {
+            // 古い配置でparamが未作成の場合でも、選んだ能力を書き込めるようにする。
             if (!object.GetParameters()) object.ResetParameters();
             object.SetParameter(&engine::EntityParameter::copyMemoryTypeA, value);
             object.SetParameter(&engine::EntityParameter::copyMemoryTypeB, {});
@@ -146,10 +150,20 @@ void GimmickCopyMemoryStation::Initialize(engine::Object3DCommon* common, const 
                  ? "旧式の複数台設定です。能力を選び直した時だけ一台へ変更します。" : "";
          },
          .displayValue = +[](const Self& object) -> nlohmann::json {
+             // paramがない場合は、編集欄に現在の能力名を表示しない。
              if (!object.GetParameters()) return "";
              const auto& p = *object.GetParameters();
-             return !p.copyMemoryTypeA.empty() ? p.copyMemoryTypeA : !p.copyMemoryTypeB.empty() ? p.copyMemoryTypeB
-                 : !p.copyMemoryTypeC.empty() ? p.copyMemoryTypeC : p.copyMemoryTypeD;
+             // 旧複数枠では最初に設定された枠の能力名を表示する。
+             if (!p.copyMemoryTypeA.empty()) {
+                 return p.copyMemoryTypeA;
+             }
+             if (!p.copyMemoryTypeB.empty()) {
+                 return p.copyMemoryTypeB;
+             }
+             if (!p.copyMemoryTypeC.empty()) {
+                 return p.copyMemoryTypeC;
+             }
+             return p.copyMemoryTypeD;
          }});
     properties.Parameter("コア接触半径", "copyMemoryActivationRadius", &Parameter::copyMemoryActivationRadius, 0.35f, 1.4f);
     properties.Parameter("能力エッセンスの大きさ", "copyMemoryEssenceScale", &Parameter::copyMemoryEssenceScale, 0.25f, 2.0f);
@@ -165,22 +179,27 @@ void GimmickCopyMemoryStation::Update(float deltaTime) {
     SceneManager* sceneManager = SceneManager::GetInstance();
     const bool isPlaying = sceneManager && sceneManager->IsPlaying();
 
+    // プレイ中にだけ、取得できる状態と接触継続を更新する。
     if (isPlaying) {
+        // 最初のプレイ更新で、開始時の有効設定と初期の接触状態を反映する。
         if (!initializedForPlay_) {
             BeginPlayState();
         }
 
         selectionCooldown_ = (std::max)(0.0f, selectionCooldown_ - (std::max)(0.0f, deltaTime));
 
+        // 直前の衝突走査で台座との接触がなければ、次の入場で取得できるようラッチを解除する。
         if (!collisionObserved_) {
             latchedCore_ = -1;
         }
 
         collisionObserved_ = false;
+    // 編集中は取得履歴を消し、初期の有効設定で見本を表示する。
     } else {
         ResetEditorState();
     }
 
+    // 台座を更新してから、台座の座標を基準にコアと光の位置を決める。
     BaseGimmick::Update(deltaTime);
     UpdateCoreVisuals(deltaTime);
 }
@@ -189,17 +208,20 @@ void GimmickCopyMemoryStation::Draw(ID3D12Resource* pointLightResource, ID3D12Re
     // 台座が隠れている間は子の見本や演出だけが浮かないよう描画を止めます。
     BaseGimmick::Draw(pointLightResource, spotLightResource);
 
+    // 台座を表示しない場合は、子のコアと光も描画しない。
     if (!GetIsVisible()) {
         return;
     }
 
     for (const std::unique_ptr<engine::Object3D>& core : coreVisuals_) {
+        // 生成済みで表示状態のコアだけを描画する。
         if (core && core->GetIsVisible()) {
             core->Draw(pointLightResource, spotLightResource);
         }
     }
 
     for (const auto& effect : effects_) {
+        // 生成済みで表示状態の光点と輪だけを描画する。
         if (effect && effect->GetIsVisible())
             effect->Draw(pointLightResource, spotLightResource);
     }
@@ -210,18 +232,21 @@ bool GimmickCopyMemoryStation::OnCollision(engine::Object3D* other) {
     auto* player = dynamic_cast<Player*>(other);
     SceneManager* sceneManager = SceneManager::GetInstance();
 
+    // プレイ中に有効な台座とプレイヤーが接触した場合にだけ、コアの選択へ進む。
     if (!player || !sceneManager || !sceneManager->IsPlaying() || !runtimeEnabled_) {
         return false;
     }
 
     collisionObserved_ = true;
-    const int touchedCore = FindTouchedCore(player->GetWorldPosition());
+    const std::int32_t touchedCore = FindTouchedCore(player->GetWorldPosition());
 
+    // 台座の判定内でもコアに近くなければ、前回のコアへの接触を解除する。
     if (touchedCore < 0) {
         latchedCore_ = -1;
         return false;
     }
 
+    // 再取得待ちが終わり、前回の接触を続けているコアと違う場合にだけ取得する。
     if (selectionCooldown_ <= 0.0f && touchedCore != latchedCore_) {
         ActivateCore(*player, static_cast<size_t>(touchedCore));
     }
@@ -238,6 +263,7 @@ void GimmickCopyMemoryStation::OnSwitchEvent(bool active) {
     // 無効化時は直前に触れていたコアと取得パルスを消します。
     runtimeEnabled_ = active;
 
+    // 台座の選択を無効にする場合にだけ、接触状態と発生中の取得パルスを破棄する。
     if (!active) {
         latchedCore_ = -1;
         collisionObserved_ = false;
@@ -257,6 +283,7 @@ std::unique_ptr<engine::Object3D> GimmickCopyMemoryStation::Clone() const {
 GimmickCopyMemoryStation::Settings GimmickCopyMemoryStation::ReadSettings() const {
     // ステーション固有の保存値を読み、未設定項目は既定値で補う。
     Settings settings;
+    // paramがない場合は、保存値を読まず記憶台用の既定設定を返す。
     if (!GetParameters())
         return settings;
     settings.types = {GetParameters()->copyMemoryTypeA, GetParameters()->copyMemoryTypeB,
@@ -280,7 +307,7 @@ void GimmickCopyMemoryStation::BeginPlayState() {
 }
 
 void GimmickCopyMemoryStation::ResetEditorState() {
-    // 前回再生での選択とアニメーションを編集画面へ持ち越しません。
+    // 編集中は初期の有効状態へ戻し、取得パルス・クールダウン・接触履歴を消す。
     initializedForPlay_ = false;
     corePulseTimers_.fill(0.0f);
     runtimeEnabled_ = ReadSettings().startActive;
@@ -297,6 +324,7 @@ void GimmickCopyMemoryStation::UpdateCoreVisuals(float deltaTime) {
     Player* player = manager && manager->IsPlaying() && manager->GetCurrentScene()
                          ? GetScenePlayer(manager->GetCurrentScene())
                          : nullptr;
+    // 死亡中や演出で操作を制限されているプレイヤーは、接近による見た目の変化に使わない。
     if (player && (player->IsDead() || player->IsCinematicLocked()))
         player = nullptr;
     const Settings settings = ReadSettings();
@@ -315,10 +343,11 @@ void GimmickCopyMemoryStation::UpdateCoreVisuals(float deltaTime) {
         SetModel(desiredModel);
     }
 
-    // JSONに残る旧3台のトリガーも、新しい左右のコアまで届くよう更新します。
+    // 単一・四枠・旧三枠それぞれの横幅に合わせて、台座の接触範囲を整える。
     auto trigger = GetColliderConfig();
     const float triggerWidth = single ? 1.3f : four ? 4.6f : 3.1f;
 
+    // 保存された横幅が表示方式の幅と異なる場合だけ、コライダーを設定し直す。
     if (trigger.size.x != triggerWidth) {
         trigger.size.x = triggerWidth;
         SetColliderConfig(trigger);
@@ -330,12 +359,14 @@ void GimmickCopyMemoryStation::UpdateCoreVisuals(float deltaTime) {
             effects_[index * 4 + part]->SetIsVisible(false);
         const std::string configuredType = GetConfiguredType(index);
 
+        // 保存された能力名が前に表示した名前と違う場合、そのコアのモデルと可視状態を再設定する。
         if (displayedTypes_[index] != configuredType) {
             ConfigureCore(index, configuredType);
         }
 
         engine::Object3D* core = coreVisuals_[index].get();
 
+        // 未生成のコアや無効な能力で非表示のコアには、浮遊と光を適用しない。
         if (!core || !core->GetIsVisible()) {
             continue;
         }
@@ -346,9 +377,10 @@ void GimmickCopyMemoryStation::UpdateCoreVisuals(float deltaTime) {
         engine::Vector3 position = GetCoreWorldPosition(index);
         position.y += bounce * std::abs(GetScale().y);
 
-        // 接近時は選んだ能力だけが少し伸び上がり、取得物であることを伝えます。
+        // プレイヤーが近いコアほど、水平距離に応じて少し持ち上げて明るくする。
         float approach = 0.0f;
 
+        // 操作できるプレイヤーを取得済みで台座も有効な場合に、水平距離から接近度を求める。
         if (player && runtimeEnabled_) {
             const engine::Vector3 delta = player->GetWorldPosition() - position;
             const float range = 2.1f * (std::max)(0.1f, std::abs(GetScale().x));
@@ -370,9 +402,11 @@ void GimmickCopyMemoryStation::UpdateCoreVisuals(float deltaTime) {
         // 取得直後はコア自身が短い弧を描いて移り、縮んでから台座上に復帰します。
         float transferScale = 1.0f;
 
+        // 能力取得後のパルスが続く間は、担当コアの移動と縮尺を変える。
         if (corePulseTimers_[index] > 0.0f) {
             const float elapsed = kPulseDuration - corePulseTimers_[index];
 
+            // 取得後0.32秒までは、プレイヤーの現在位置か最後に保存した位置へコアを移しながら縮める。
             if (elapsed < 0.32f) {
                 const float t = elapsed / 0.32f;
                 const float eased = Easing::SmoothStep(t);
@@ -382,6 +416,7 @@ void GimmickCopyMemoryStation::UpdateCoreVisuals(float deltaTime) {
                 position = position * (1.0f - eased) + target * eased;
                 position.y += std::sin(t * std::numbers::pi_v<float>) * 0.35f;
                 transferScale = (std::max)(0.015f, 1.0f - eased);
+            // 移動区間が終わるとコアを台座へ戻し、0.40秒以降に徐々に元の大きさへ戻す。
             } else {
                 transferScale = std::clamp((elapsed - 0.40f) / 0.35f, 0.015f, 1.0f);
             }
@@ -408,9 +443,11 @@ void GimmickCopyMemoryStation::UpdateCoreVisuals(float deltaTime) {
 
 void GimmickCopyMemoryStation::UpdateCoreEffects(size_t index, float deltaTime, float approach, float scale) {
     // 各コアに固定数の粒と光輪を割り当て、毎フレーム生成しません。
+    // 台座の選択が無効なら、先に非表示にした光を再表示しない。
     if (!runtimeEnabled_)
         return;
-    const auto* descriptor = PlayerCopyTypeCatalog::Find(GetConfiguredType(index));
+    const auto* descriptor = playerCopyTypeCatalog::Find(GetConfiguredType(index));
+    // 能力がカタログに登録されていない場合は、色を決められないので光の更新を省く。
     if (!descriptor)
         return;
     engine::Vector4 color = descriptor->displayColor;
@@ -457,12 +494,14 @@ void GimmickCopyMemoryStation::UpdateCoreEffects(size_t index, float deltaTime, 
             }
 
             rotation.z += visualTimer_ * 0.7f + seed;
+        // 最後の1要素は光輪なので、台座のコア直下を基準に位置を決める。
         } else {
             const engine::Vector3 local = GetCoreLocalPosition(index);
             position = engine::Math::Transform({local.x, 0.835f, local.z}, GetWorldMatrix());
             radius = scale * 0.72f;
             alpha = 0.12f + approach * 0.45f;
 
+            // 取得パルス中の光輪は、一時的に広がりながら暗くなる。
             if (active) {
                 alpha = (1.0f - elapsed / kPulseDuration) * 0.65f;
                 radius *= 1.0f + std::sin(elapsed / kPulseDuration * std::numbers::pi_v<float>) * 0.20f;
@@ -472,6 +511,7 @@ void GimmickCopyMemoryStation::UpdateCoreEffects(size_t index, float deltaTime, 
         // 台座の発光設定を適用し、十分な明るさがある光だけ姿勢と描画を更新します。
         alpha *= GetParameters() ? std::clamp(ReadSettings().glow * 2.0f, 0.0f, 1.5f) : 0.9f;
         effect->SetIsVisible(alpha > 0.015f);
+        // 不透明度が0.015以下で非表示になった光は、姿勢と行列を更新しない。
         if (!effect->GetIsVisible())
             continue;
         effect->SetTranslate(position);
@@ -487,9 +527,11 @@ void GimmickCopyMemoryStation::ConfigureCore(size_t index, const std::string& en
     // 能力カタログに登録された型だけ対応モデルを表示します。
     displayedTypes_[index] = enemyType;
     engine::Object3D* core = coreVisuals_[index].get();
-    const PlayerCopyTypeDescriptor* descriptor = PlayerCopyTypeCatalog::Find(enemyType);
+    const PlayerCopyTypeDescriptor* descriptor = playerCopyTypeCatalog::Find(enemyType);
 
+    // 見本用モデルの入れ物か対応する能力がない場合は、コアを表示しない。
     if (!core || !descriptor) {
+        // 入れ物が生成されていれば可視フラグを落とし、旧モデルが残らないようにする。
         if (core) {
             core->SetIsVisible(false);
         }
@@ -497,7 +539,7 @@ void GimmickCopyMemoryStation::ConfigureCore(size_t index, const std::string& en
         return;
     }
 
-    core->SetModel(std::string(PlayerCopyTypeCatalog::GetEssenceModel(enemyType)));
+    core->SetModel(std::string(playerCopyTypeCatalog::GetEssenceModel(enemyType)));
     core->SetTexture("");
 
     // モデルの能力色と明るい記号を、そのまま読みやすく表示します。
@@ -511,7 +553,8 @@ bool GimmickCopyMemoryStation::IsSingleCore() const {
     size_t count = 0;
 
     for (size_t i = 0; i < kCoreCount; ++i)
-        if (PlayerCopyTypeCatalog::IsSupported(GetConfiguredType(i)))
+        // 能力カタログが対応している枠だけを数え、空欄と未対応の能力を除く。
+        if (playerCopyTypeCatalog::IsSupported(GetConfiguredType(i)))
             ++count;
     return count == 1;
 }
@@ -520,6 +563,7 @@ engine::Vector3 GimmickCopyMemoryStation::GetCoreLocalPosition(size_t index) con
     // 1能力だけなら空の台座を並べず、取得判定と光も中央へ揃える。
     if (IsSingleCore())
         return {0.0f, 1.8f, 0.0f};
+    // 四枠目がある場合は四枠用の座標を使う。旧三枠では最後の添字を端の座標に収める。
     return !ReadSettings().types[3].empty() ? kFourCoreLocalPositions[index]
                                                       : kCoreLocalPositions[(std::min)(index, size_t{2})];
 }
@@ -531,6 +575,7 @@ engine::Vector3 GimmickCopyMemoryStation::GetCoreWorldPosition(size_t index) con
 
 std::string GimmickCopyMemoryStation::GetConfiguredType(size_t index) const {
     // 設定されたスロット番号を能力名へ変換します。
+    // 保存されたパラメーターがなければ、コアに表示する能力は空とする。
     if (!GetParameters().has_value()) {
         return {};
     }
@@ -538,17 +583,18 @@ std::string GimmickCopyMemoryStation::GetConfiguredType(size_t index) const {
     return index < kCoreCount ? std::string(ReadSettings().types[index]) : std::string{};
 }
 
-int GimmickCopyMemoryStation::FindTouchedCore(const engine::Vector3& playerPosition) const {
+std::int32_t GimmickCopyMemoryStation::FindTouchedCore(const engine::Vector3& playerPosition) const {
     // 水平方向だけで最も近い有効コアを探し、見た目と取得先を一致させます。
     const float configuredRadius = ReadSettings().activationRadius;
     const float scaleRadius = (std::max)(std::abs(GetScale().x), std::abs(GetScale().z));
     const float radius = (std::max)(0.1f, configuredRadius) * scaleRadius;
     const float radiusSquared = radius * radius;
-    int nearest = -1;
+    std::int32_t nearest = -1;
     float nearestDistanceSquared = radiusSquared;
 
     for (size_t index = 0; index < kCoreCount; ++index) {
-        if (!PlayerCopyTypeCatalog::IsSupported(GetConfiguredType(index))) {
+        // 現在の保有設定が能力カタログに未登録なら、その枠を取得候補から外す。
+        if (!playerCopyTypeCatalog::IsSupported(GetConfiguredType(index))) {
             continue;
         }
 
@@ -557,9 +603,10 @@ int GimmickCopyMemoryStation::FindTouchedCore(const engine::Vector3& playerPosit
         const float deltaZ = playerPosition.z - corePosition.z;
         const float distanceSquared = deltaX * deltaX + deltaZ * deltaZ;
 
+        // 接触半径内でこれまでの候補と同距離か近い場合に置き換える。同距離なら後の枠が優先。
         if (distanceSquared <= nearestDistanceSquared) {
             nearestDistanceSquared = distanceSquared;
-            nearest = static_cast<int>(index);
+            nearest = static_cast<std::int32_t>(index);
         }
     }
 
@@ -568,6 +615,7 @@ int GimmickCopyMemoryStation::FindTouchedCore(const engine::Vector3& playerPosit
 
 void GimmickCopyMemoryStation::ActivateCore(Player& player, size_t index) {
     // 能力適用に成功したときだけ再取得制限と吸い込み演出を始めます。
+    // 枠番号が範囲外か、プレイヤーが死亡・演出中の場合は能力を適用しない。
     if (index >= kCoreCount || player.IsDead() || player.IsCinematicLocked()) {
         return;
     }
@@ -575,12 +623,13 @@ void GimmickCopyMemoryStation::ActivateCore(Player& player, size_t index) {
     const std::string enemyType = GetConfiguredType(index);
     const bool unlimitedDuration = ReadSettings().unlimitedDuration;
 
+    // 指定の能力への切り替えを拒否された場合、ラッチや取得の表示を更新しない。
     if (!player.ApplyStoredCopy(enemyType, unlimitedDuration)) {
         return;
     }
 
-    // 適用後は同じコアを連続で取得できないよう記録し、吸い込み演出の行き先を取得時の位置に固定します。
-    latchedCore_ = static_cast<int>(index);
+    // 能力が適用された後にだけ同じコアの連続取得を抑え、吸い込み演出の初期の到達点を保存する。
+    latchedCore_ = static_cast<std::int32_t>(index);
     selectionCooldown_ = kSelectionCooldown;
     corePulseTimers_[index] = kPulseDuration;
     transferTargets_[index] = player.GetWorldPosition() + engine::Vector3{0.0f, 0.5f, 0.0f};

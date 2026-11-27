@@ -1,15 +1,16 @@
 ﻿#include "engine/editor/core/GameEditorController.Internal.h"
 
 #ifdef USE_IMGUI
-using namespace GameEditorControllerImplementation;
+using namespace gameEditorControllerImplementation;
 
 // 補助処理の定義を一か所に保持し、共有状態と呼び出し順を維持します。
-namespace GameEditorControllerImplementation {
+namespace gameEditorControllerImplementation {
 // キャンバス内へ固定縦横比のGame Viewを収め、余白を均等に配分します。
 GameViewArea CalculateFixedAspectArea(const ImVec2& canvasScreenPos, const ImVec2& canvasSize) {
 	// キャンバス内に固定アスペクト比のゲーム画面を収め、余白を左右または上下へ均等に配分する。
 	GameViewArea area{};
 
+	// キャンバスの一辺でも0以下なら、配置できる描画領域が無いため空の領域を返す。
 	if (canvasSize.x <= 0.0f || canvasSize.y <= 0.0f) {
 		return area;
 	}
@@ -17,11 +18,13 @@ GameViewArea CalculateFixedAspectArea(const ImVec2& canvasScreenPos, const ImVec
 	float width = canvasSize.x;
 	float height = width / kEditorViewportAspect;
 
+	// 幅に合わせると高さがはみ出す場合は、逆に高さを基準として幅を求める。
 	if (height > canvasSize.y) {
 		height = canvasSize.y;
 		width = height * kEditorViewportAspect;
 	}
 
+	// 余った幅と高さの半分を原点に足し、描画領域をキャンバスの中央へ置く。
 	area.screenX = canvasScreenPos.x + (canvasSize.x - width) * 0.5f;
 	area.screenY = canvasScreenPos.y + (canvasSize.y - height) * 0.5f;
 	area.width = width;
@@ -46,6 +49,7 @@ bool IsObjectInCurrentScene(SceneManager* sceneManager, engine::Object3D* object
 
 	BaseScene* currentScene = sceneManager ? sceneManager->GetCurrentScene() : nullptr;
 
+	// シーン管理または現在のシーンを取得できない場合は、所有物を確認できない。
 	if (!currentScene) {
 		return false;
 	}
@@ -65,6 +69,7 @@ float Length2D(const ImVec2& value) {
 ImVec2 Normalize2D(const ImVec2& value) {
 	const float length = Length2D(value);
 
+	// 長さが0.0001以下なら安全に正規化できないため、方向をゼロにする。
 	if (length <= 0.0001f) {
 		return ImVec2(0.0f, 0.0f);
 	}
@@ -84,12 +89,13 @@ float GetLargestAbsScale(const engine::Vector3& scale) {
 	return std::max(std::max(std::abs(scale.x), std::abs(scale.y)), std::abs(scale.z));
 }
 
-// ワールド位置をGame Viewへ投影します。画面外ならfalseを返します。
+// ワールド点をGame Viewへ投影し、深度と外周32ピクセルの余裕を含む表示範囲に入るかを返します。
 bool ProjectWorldToGameView(const engine::Vector3& worldPos, const engine::Matrix4x4& viewProjection, const GameViewArea& area, ImVec2& outScreen) {
 	// ワールド座標をゲーム画面の固定比率領域へ投影し、画面外なら選択表示を省く。
 	engine::Math math;
 	const engine::Vector3 ndc = math.Transform(worldPos, viewProjection);
 
+	// 正規化した深度が0〜1の外にあれば、カメラの描画範囲外として省く。
 	if (ndc.z < 0.0f || ndc.z > 1.0f) {
 		return false;
 	}
@@ -109,6 +115,7 @@ void DrawArrow2D(ImDrawList* drawList, const ImVec2& start, const ImVec2& end, I
 
 	const ImVec2 direction = Normalize2D(ImVec2(end.x - start.x, end.y - start.y));
 
+	// 線分の方向が得られない場合は、矢印の先端を円で表す。
 	if (Length2D(direction) <= 0.0001f) {
 		drawList->AddCircleFilled(end, thickness * 1.5f, color, 12);
 		return;
@@ -132,6 +139,7 @@ void DrawTextWithOutline(ImDrawList* drawList, const ImVec2& pos, ImU32 color, c
 
 // カメラ方向からワールド軸を求め、Game Viewの方位ギズモへ描画します。
 void DrawSceneDirectionGizmo(const GameViewArea& area, engine::Camera* camera) {
+	// カメラが無いか表示領域の一辺が1ピクセル以下なら、方位を描けない。
 	if (!camera || area.width <= 1.0f || area.height <= 1.0f) {
 		return;
 	}
@@ -146,8 +154,6 @@ void DrawSceneDirectionGizmo(const GameViewArea& area, engine::Camera* camera) {
 	DrawTextWithOutline(drawList, ImVec2(center.x - 39.0f, center.y - radius - 20.0f), IM_COL32(230, 240, 255, 230), "Scene Gizmo");
 
 	// 画面隅の方位表示用。worldAxis をビュー空間へ投影し、length は画面上の軸長に使う。
-	// 担当：ワールド方向ギズモの軸・ラベル・色と表示長をまとめる。
-	// 関連：GameEditorControllerの内部処理だけで使う補助型。
 	struct AxisInfo {
 		engine::Vector3 worldAxis;
 		const char* label;
@@ -170,6 +176,7 @@ void DrawSceneDirectionGizmo(const GameViewArea& area, engine::Camera* camera) {
 		const bool nearlyFacingCamera = Length2D(screenDir) <= 0.0001f;
 		const ImVec2 end(center.x + screenDir.x * axis.length, center.y + screenDir.y * axis.length);
 
+		// 視線とほぼ平行な軸は画面内で方向を表せないため、点と名前だけを描く。
 		if (nearlyFacingCamera) {
 			drawList->AddCircleFilled(center, 5.0f, axis.color, 16);
 			DrawTextWithOutline(drawList, ImVec2(center.x + 8.0f, center.y - 7.0f), axis.color, axis.label);
@@ -183,6 +190,7 @@ void DrawSceneDirectionGizmo(const GameViewArea& area, engine::Camera* camera) {
 
 // 選択Objectの向きをGame View上に投影して表示します。
 void DrawSelectedObjectOrientation(const GameViewArea& area, engine::Camera* camera, engine::Object3D* selectedObject) {
+	// 選択対象、カメラ、表示領域のいずれかを使えないときは、方位表示を省く。
 	if (!camera || !selectedObject || area.width <= 1.0f || area.height <= 1.0f) {
 		return;
 	}
@@ -197,13 +205,12 @@ void DrawSelectedObjectOrientation(const GameViewArea& area, engine::Camera* cam
 
 	ImVec2 originScreen;
 
+	// 選択対象の原点を画面へ投影できない場合は、そこから伸びる軸も描かない。
 	if (!ProjectWorldToGameView(origin, viewProjection, area, originScreen)) {
 		return;
 	}
 
 	// 選択 Object のローカル軸をワールドへ変換して表示するための色・長さ倍率。
-	// 担当：選択Objectのローカル方向ギズモの軸と表示条件。
-	// 関連：GameEditorControllerの内部処理だけで使う補助型。
 	struct LocalAxisInfo {
 		engine::Vector3 localAxis;
 		const char* label;
@@ -228,6 +235,7 @@ void DrawSelectedObjectOrientation(const GameViewArea& area, engine::Camera* cam
 
 		ImVec2 endpointScreen;
 
+		// この軸の終点を投影できない場合は、その軸だけを飛ばす。
 		if (!ProjectWorldToGameView(endpoint, viewProjection, area, endpointScreen)) {
 			continue;
 		}

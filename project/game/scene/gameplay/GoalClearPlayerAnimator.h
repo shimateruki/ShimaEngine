@@ -10,7 +10,7 @@
 #include <cmath>
 
 // 王冠取得時のプレイヤー勝利モーションを管理します。
-// 位置と拡縮は滑らかな5次補間、回転はクォータニオン補間で接続します。
+// 取得時の接地と復元を担当し、王冠装着後の姿勢は相対トラックへ引き継ぎます。
 // 関連：ゴール演出の進行と基準姿勢を受け取り、Playerの見た目と動作を更新する。
 // 主な入口：Start / Update / Reset
 class GoalClearPlayerAnimator {
@@ -26,22 +26,15 @@ class GoalClearPlayerAnimator {
         float readyTime = 5.55f;
 
         float settleDuration = 0.45f;
-        float jumpHeight = 2.20f;
-        float forwardDistance = 0.35f;
 
-        float anticipationDepth = 0.28f;
-        float landingSquash = 0.26f;
-        float anticipationSquash = 0.42f;
-        float takeoffStretch = 0.45f;
 
-        float resultStretch = 0.12f;
-        float resultYawBias = 0.12f;
     };
 
     // プレイヤーの操作権と開始姿勢を保存し、王冠または指定方向へ向けて勝利演出を開始します。
     // player がない場合は開始せず false を返します。
     bool Start(Player* player, const engine::Vector3& crownPosition, const engine::Vector3& preferredForward = engine::Vector3{}) {
         player_ = player;
+        // プレイヤーが渡されていない場合は、演出を非アクティブにして開始に失敗したことを返す。
         if (!player_) {
             isActive_ = false;
             return false;
@@ -56,15 +49,13 @@ class GoalClearPlayerAnimator {
         baseRotation_ = player_->GetRotation();
         // 通常の姿勢安定化後にも空中で取った高さは残るため、足元だけを地面へなじませる。
         modelBottom_ = player_->GetModel() ? player_->GetModel()->GetLocalAabbMin().y : -0.5f;
-        modelHeight_ = player_->GetModel() ? (std::max)(0.1f, player_->GetModel()->GetLocalAabbMax().y - modelBottom_) : 1.0f;
         const auto world = player_->GetWorldPosition();
         const float footY = world.y + modelBottom_ * baseScale_.y;
         auto grounded = world;
-        grounded.y = CombatGroundQuery::FindGroundPoint(world, player_, {1.0f, 33.0f}, footY).y - modelBottom_ * baseScale_.y;
+        grounded.y = combatGroundQuery::FindGroundPoint(world, player_, {1.0f, 33.0f}, footY).y - modelBottom_ * baseScale_.y;
+        // 親がある場合は、求めた接地位置を Player の SetTranslate() が使う親ローカル座標に戻す。
         if (player_->GetParent()) grounded = engine::Math::Transform(grounded, engine::Math::Inverse(player_->GetParent()->GetWorldMatrix()));
         basePosition_ = grounded;
-        posePosition_ = restorePosition_;
-        currentScale_ = baseScale_;
 
         player_->SetIsControlActive(false);
         player_->SetVelocity({0.0f, 0.0f, 0.0f});
@@ -76,8 +67,6 @@ class GoalClearPlayerAnimator {
         const engine::Vector3 desiredForward = NormalizePlanarDirection(preferredForward, crownForward);
         const float faceYaw = std::atan2(desiredForward.x, desiredForward.z);
         baseRotation_.y = NormalizeYaw(faceYaw + player_->GetVisualYawOffset());
-        resultRotation_ = baseRotation_;
-        resultRotation_.y = NormalizeYaw(resultRotation_.y + tuning_.resultYawBias);
         moveForward_ = desiredForward;
         moveRight_ = RightFromForward(moveForward_);
 
@@ -94,15 +83,13 @@ class GoalClearPlayerAnimator {
         basePosition_ = {};
         baseScale_ = {1.0f, 1.0f, 1.0f};
         baseRotation_ = {};
-        resultRotation_ = {};
-        posePosition_ = basePosition_;
-        currentScale_ = baseScale_;
         moveForward_ = {0.0f, 0.0f, 1.0f};
         moveRight_ = {1.0f, 0.0f, 0.0f};
     }
 
     // 中断時に保存済みの開始姿勢をモデルへ戻し、ワールド行列まで更新します。
     void RestoreInitialPose() {
+        // 演出対象がなく開始姿勢が有効でない場合は、復元できる物体がない。
         if (!player_ || !isActive_) {
             return;
         }
@@ -118,7 +105,7 @@ class GoalClearPlayerAnimator {
 
     // 演出開始前の操作可能状態を戻します。
     void RestoreControl() {
-        // 演出前に操作不能だった状態も尊重し、無条件に操作を有効にはしません。
+        // 演出対象が残っている場合だけ、開始時に退避した操作許可を復元する。
         if (player_) {
             player_->SetIsControlActive(savedControlActive_);
         }
@@ -126,143 +113,32 @@ class GoalClearPlayerAnimator {
 
     // 演出開始からの絶対時刻で姿勢を評価します。シークしても前フレームには依存しません。
     void Update(float time) {
-        if (!player_ || !isActive_) {
+        // 相対トラックの開始前にだけ、取得高度から接地位置へ滑らかに下ろす。
+        if (!player_ || !isActive_ || time >= tuning_.crownLandTime) {
             return;
         }
 
-        // 絶対時刻からポーズを計算し、シークやプレビューで前のフレームに依存しないようにします。
-        const Tuning& c = tuning_;
-        engine::Vector3 position = basePosition_;
-        engine::Vector3 scale = baseScale_;
-        engine::Vector3 rotation = baseRotation_;
-
-        if (time < c.crownLandTime) {
-            // 王冠へ注目している間も、ごく弱い呼吸で静止画に見えないようにします。
-            const float breathe = std::sin(time * 3.8f) * 0.5f + 0.5f;
-            scale.x = baseScale_.x * (1.0f + breathe * 0.012f);
-            scale.y = baseScale_.y * (1.0f - breathe * 0.009f);
-            scale.z = baseScale_.z * (1.0f + breathe * 0.012f);
-        } else if (time < c.anticipationStartTime) {
-            // 王冠が落ちた衝撃だけを短く見せ、次の踏み切り姿勢へつなぎます。
-            const float p = AnimationInterpolation::SegmentRate(time, c.crownLandTime, c.anticipationStartTime);
-            const float impact = std::sin(p * kPi) * (1.0f - p * 0.45f);
-            // 潰れは拡縮で表し、最後にモデル下端を足元へ固定する。
-            scale.x = baseScale_.x * (1.0f + c.landingSquash * impact);
-            scale.y = baseScale_.y * (1.0f - c.landingSquash * 0.78f * impact);
-            scale.z = baseScale_.z * (1.0f + c.landingSquash * impact);
-        } else if (time < c.jumpStartTime) {
-            // 跳躍前は沈み込みと前傾を同時に増やし、離陸の予備動作にします。
-            const float p = AnimationInterpolation::ApplyEasing(
-                AnimationInterpolation::SegmentRate(time, c.anticipationStartTime, c.jumpStartTime),
-                AnimationInterpolation::EasingType::SmootherStep);
-            // 沈み込みの距離も拡縮へ変換し、床へ原点ごと押し込まない。
-            scale.x = baseScale_.x * (1.0f + c.anticipationSquash * p);
-            scale.y = (std::max)(baseScale_.y * 0.35f, baseScale_.y * (1.0f - c.anticipationSquash * 0.92f * p) - c.anticipationDepth / modelHeight_ * p);
-            scale.z = baseScale_.z * (1.0f + c.anticipationSquash * p);
-            rotation.x += moveForward_.z * 0.070f * p;
-            rotation.z -= moveForward_.x * 0.070f * p;
-        } else if (time < c.apexTime) {
-            // 上昇中は王冠へ前進し、横方向の弧を加えて正面から立体的に見せます。
-            const float raw = AnimationInterpolation::SegmentRate(time, c.jumpStartTime, c.apexTime);
-            const float travel =
-                AnimationInterpolation::ApplyEasing(raw, AnimationInterpolation::EasingType::SmootherStep);
-            position.x += moveForward_.x * c.forwardDistance * travel;
-            position.z += moveForward_.z * c.forwardDistance * travel;
-            const float sideArc = std::sin(raw * kPi * 0.5f) * c.forwardDistance * 0.18f;
-            position.x += moveRight_.x * sideArc;
-            position.z += moveRight_.z * sideArc;
-            position.y += AnimationInterpolation::Lerp(0.0f, c.jumpHeight, travel);
-
-            engine::Vector3 squashScale = {baseScale_.x * (1.0f + c.anticipationSquash),
-                                   (std::max)(baseScale_.y * 0.35f, baseScale_.y * (1.0f - c.anticipationSquash * 0.92f) - c.anticipationDepth / modelHeight_),
-                                   baseScale_.z * (1.0f + c.anticipationSquash)};
-            engine::Vector3 stretchScale = {baseScale_.x * (1.0f - c.takeoffStretch * 0.48f),
-                                    baseScale_.y * (1.0f + c.takeoffStretch),
-                                    baseScale_.z * (1.0f - c.takeoffStretch * 0.48f)};
-            engine::Vector3 resultScale = {baseScale_.x * (1.0f - c.resultStretch * 0.36f),
-                                   baseScale_.y * (1.0f + c.resultStretch),
-                                   baseScale_.z * (1.0f - c.resultStretch * 0.36f)};
-
-            // 離陸直後は潰れから縦伸びへ、残りは結果画面用の姿勢へ収束させます。
-            if (raw < 0.24f) {
-                const float stretchRate =
-                    AnimationInterpolation::ApplyEasing(raw / 0.24f, AnimationInterpolation::EasingType::EaseOut);
-                scale = AnimationInterpolation::Lerp(squashScale, stretchScale, stretchRate);
-            } else {
-                const float settleRate = AnimationInterpolation::ApplyEasing(
-                    (raw - 0.24f) / 0.76f, AnimationInterpolation::EasingType::SmootherStep);
-                scale = AnimationInterpolation::Lerp(stretchScale, resultScale, settleRate);
-            }
-
-            // 回転の本体はQuaternion補間とし、踏み切りと空中の傾きだけ後から足します。
-            rotation = AnimationInterpolation::SlerpEuler(baseRotation_, resultRotation_, travel);
-            const float takeoffLean = (1.0f - travel) * 0.070f;
-            rotation.x += moveForward_.z * takeoffLean;
-            rotation.z -= moveForward_.x * takeoffLean;
-            const float airLean = std::sin(raw * kPi) * 0.075f;
-            rotation.x -= moveForward_.z * airLean;
-            rotation.z += moveForward_.x * airLean;
-            rotation.y = NormalizeYaw(rotation.y + std::sin(raw * kPi) * 0.20f);
-        } else if (time < c.victoryLandTime) {
-            // 頂点から着地までは高度と横弧を消し、結果姿勢を保ちながら接地で潰します。
-            const float raw = AnimationInterpolation::SegmentRate(time, c.apexTime, c.victoryLandTime);
-            const float fall =
-                AnimationInterpolation::ApplyEasing(raw, AnimationInterpolation::EasingType::SmootherStep);
-            position.x += moveForward_.x * c.forwardDistance;
-            position.z += moveForward_.z * c.forwardDistance;
-            const float sideArc = (1.0f - fall) * c.forwardDistance * 0.18f;
-            position.x += moveRight_.x * sideArc;
-            position.z += moveRight_.z * sideArc;
-            position.y += AnimationInterpolation::Lerp(c.jumpHeight, 0.0f, fall);
-            // 着地後の足元はモデル下端から補正する。
-
-            const engine::Vector3 resultScale = {baseScale_.x * (1.0f - c.resultStretch * 0.36f),
-                                         baseScale_.y * (1.0f + c.resultStretch),
-                                         baseScale_.z * (1.0f - c.resultStretch * 0.36f)};
-            const engine::Vector3 landingScale = {baseScale_.x * (1.0f + c.landingSquash * 0.45f),
-                                          baseScale_.y * (1.0f - c.landingSquash * 0.40f),
-                                          baseScale_.z * (1.0f + c.landingSquash * 0.45f)};
-            scale = AnimationInterpolation::Lerp(resultScale, landingScale, fall);
-            rotation = resultRotation_;
-            const float descentLean = std::sin(raw * kPi) * 0.055f;
-            rotation.x += moveForward_.z * descentLean;
-            rotation.z -= moveForward_.x * descentLean;
-        } else {
-            // 一度の喜びジャンプの後は短く着地を収め、結果を読める決め姿勢へ移す。
-            position.x += moveForward_.x * c.forwardDistance;
-            position.z += moveForward_.z * c.forwardDistance;
-            const float holdTime = (std::max)(time - c.victoryLandTime, 0.0f);
-            const float settle = AnimationInterpolation::ApplyEasing(
-                (std::min)(holdTime / 0.38f, 1.0f), AnimationInterpolation::EasingType::SmootherStep);
-            const engine::Vector3 landingScale = {baseScale_.x * (1.0f + c.landingSquash * 0.45f),
-                baseScale_.y * (1.0f - c.landingSquash * 0.40f), baseScale_.z * (1.0f + c.landingSquash * 0.45f)};
-            const float breath = std::sin(holdTime * 3.2f) * 0.008f * settle;
-            const engine::Vector3 resultScale = {baseScale_.x * (1.0f - c.resultStretch * 0.36f + breath),
-                baseScale_.y * (1.0f + c.resultStretch - breath), baseScale_.z * (1.0f - c.resultStretch * 0.36f + breath)};
-            scale = AnimationInterpolation::Lerp(landingScale, resultScale, settle);
-            rotation = resultRotation_;
-        }
-
-        // 空中取得の高さは短く補間し、拡縮による底面の上下は打ち消す。
-        const float entry = AnimationInterpolation::ApplyEasing(
-            (std::min)(time / (std::max)(0.05f, c.settleDuration), 1.0f), AnimationInterpolation::EasingType::SmootherStep);
-        position.y += (restorePosition_.y - basePosition_.y) * (1.0f - entry);
+        const float settle = animationInterpolation::ApplyEasing(
+            time / (std::max)(0.05f, tuning_.settleDuration), animationInterpolation::EasingType::kSmootherStep);
+        const float breathe = std::sin(time * 3.8f) * 0.5f + 0.5f;
+        const engine::Vector3 scale = {baseScale_.x * (1.0f + breathe * 0.012f),
+            baseScale_.y * (1.0f - breathe * 0.009f), baseScale_.z * (1.0f + breathe * 0.012f)};
+        auto position = basePosition_;
+        position.y += (restorePosition_.y - basePosition_.y) * (1.0f - settle);
         position.y += modelBottom_ * (baseScale_.y - scale.y);
-
-        // 計算済みポーズをPlayerへまとめて反映し、描画が参照する行列も同フレームで更新します。
-        posePosition_ = position;
-        currentScale_ = scale;
         player_->SetTranslate(position);
-        player_->SetRotation(rotation);
+        player_->SetRotation(baseRotation_);
         player_->SetScale(scale);
         player_->UpdateLocalMatrix();
         player_->UpdateWorldMatrix();
     }
 
+    // 次の姿勢評価に使うタイミングと形状の設定を差し替える。
     void SetTuning(const Tuning& tuning) { tuning_ = tuning; }
 
     const Tuning& GetTuning() const { return tuning_; }
 
+    // エディターなどから設定をその場で更新できるよう、変更可能な参照を返す。
     Tuning& EditTuning() { return tuning_; }
 
     bool IsActive() const { return isActive_; }
@@ -275,9 +151,8 @@ class GoalClearPlayerAnimator {
 
     const engine::Vector3& GetBaseRotation() const { return baseRotation_; }
 
-    const engine::Vector3& GetPosePosition() const { return posePosition_; }
+    // 直近に反映した姿勢の位置を親ローカル座標で返す。
 
-    const engine::Vector3& GetCurrentScale() const { return currentScale_; }
 
     const engine::Vector3& GetMoveForward() const { return moveForward_; }
 
@@ -287,6 +162,7 @@ class GoalClearPlayerAnimator {
     static constexpr float kPi = std::numbers::pi_v<float>;
     static constexpr float kTwoPi = kPi * 2.0f;
 
+    // ヨーをラジアンの −π〜π に折り返し、同じ向きの角度を揃える。
     static float NormalizeYaw(float yaw) {
         while (yaw > kPi)
             yaw -= kTwoPi;
@@ -295,17 +171,21 @@ class GoalClearPlayerAnimator {
         return yaw;
     }
 
+    // ヨーを水平単位ベクトルへ変換する。角度ゼロは +Z を正面にする。
     static engine::Vector3 DirectionFromYaw(float yaw) { return {std::sin(yaw), 0.0f, std::cos(yaw)}; }
 
+    // 高さ成分を捨て、XZ 平面の方向を単位ベクトルにする。
     static engine::Vector3 NormalizePlanarDirection(const engine::Vector3& direction, const engine::Vector3& fallback) {
         engine::Vector3 result = {direction.x, 0.0f, direction.z};
         const float length = std::sqrt(result.x * result.x + result.z * result.z);
+        // 水平成分がほぼゼロなら正規化できないので、呼出側で指定した予備方向を使う。
         if (length <= 0.0001f) {
             return fallback;
         }
         return {result.x / length, 0.0f, result.z / length};
     }
 
+    // 水平な前方を 90 度回し、ジャンプの横弧を作る右方向を求める。
     static engine::Vector3 RightFromForward(const engine::Vector3& forward) { return {forward.z, 0.0f, -forward.x}; }
 
   private:
@@ -316,14 +196,11 @@ class GoalClearPlayerAnimator {
     bool savedControlActive_ = true;
 
     engine::Vector3 restorePosition_{}, restoreRotation_{};
-    float modelBottom_ = -0.5f, modelHeight_ = 1.0f;
+    float modelBottom_ = -0.5f;
     engine::Vector3 basePosition_{};
     engine::Vector3 baseScale_ = {1.0f, 1.0f, 1.0f};
     engine::Vector3 baseRotation_{};
-    engine::Vector3 resultRotation_{};
 
-    engine::Vector3 posePosition_{};
-    engine::Vector3 currentScale_ = {1.0f, 1.0f, 1.0f};
 
     engine::Vector3 moveForward_ = {0.0f, 0.0f, 1.0f};
     engine::Vector3 moveRight_ = {1.0f, 0.0f, 0.0f};

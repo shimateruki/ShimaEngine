@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <map>
@@ -87,7 +88,7 @@ private:
     };
 
     // 直近フレームの計測値をリングバッファに保持する。
-    static const int kHistorySize = 120;
+    static const std::int32_t kHistorySize = 120;
 
     /// <summary>現在値、平滑化値、直近フレームの履歴を保持する。</summary>
     // 関連：ProfilerManager（この型を使う機能の本体）
@@ -95,7 +96,7 @@ private:
         float current = 0.0f;        // 今フレームの生値
         float smoothed = 0.0f;       // スムージング後の値
         std::array<float, kHistorySize> history = {}; // 履歴リングバッファ
-        int historyIndex = 0;
+        std::int32_t historyIndex = 0;
     };
 
     std::map<std::string, std::vector<LoadData>> loadDataMap_; // カテゴリごとの読込時間一覧。
@@ -105,14 +106,14 @@ private:
     mutable std::recursive_mutex mutex_;
     const std::vector<std::unique_ptr<engine::Object3D>>* currentObjects_ = nullptr; // Object別計測に使う外部所有の一覧。
     bool isOpen_ = false;
-    int selectedIndex_ = 0;
+    std::int32_t selectedIndex_ = 0;
 
     // 複数フレームのGPU計測値から平均を求める際の一時状態。
     bool isGpuSampling_ = false;
-    int remainingSamplingFrames_ = 0;
-    const int kMaxSamplingFrames = 60;
+    std::int32_t remainingSamplingFrames_ = 0;
+    const std::int32_t kMaxSamplingFrames = 60;
     std::map<std::string, float> gpuSampleAccum_; // 複数フレームのGPU時間の合計。
-    std::map<std::string, int> gpuSampleCount_; // 計測名ごとの採取件数。
+    std::map<std::string, std::int32_t> gpuSampleCount_; // 計測名ごとの採取件数。
     std::map<std::string, float> gpuSampleResult_; // 採取完了後の平均GPU時間（ミリ秒）。
 };
 

@@ -1,6 +1,7 @@
+#include <cstdint>
 #include "game/actor/enemy/boss/false_king/EnemyFalseKingSlime.Internal.h"
 
-using namespace EnemyFalseKingSlimeImplementation;
+using namespace enemyFalseKingSlimeImplementation;
 
 namespace {
 constexpr const char* kUmbraFlameRedEnergyPreset = "enemy/false_king/false_king_umbra_flame_charge_red";
@@ -55,9 +56,11 @@ void EnemyFalseKingSlime::PrepareUmbraFlames() {
     umbraFlameNetwork_ = std::make_unique<EffectObject3D>();
     umbraFlameNetwork_->Initialize(GetObjectCommon());
 
+    // 接続模様を読み込めない場合は破棄し、六点の作成へ進む。
     if (!umbraFlameNetwork_->LoadFromJson(kUmbraFlameNetworkEffect)) {
         umbraFlameNetwork_.reset();
     } else {
+        // 読み込めた接続模様は、開く進行率をゼロにして非表示から再生する。
         umbraFlameNetwork_->SetName("FalseKing_UmbraFlameNetwork");
         umbraFlameNetwork_->SetRevealProgress(0.0f);
         umbraFlameNetwork_->SetIsVisible(false);
@@ -74,10 +77,11 @@ void EnemyFalseKingSlime::PrepareUmbraFlames() {
         portal.sigil = std::make_unique<EffectObject3D>();
         portal.sigil->Initialize(GetObjectCommon());
 
-        // 個別の魔法陣を読めた場合だけ、非表示の状態で再生を始めます。
+        // 個別の魔法陣を読み込めなかった地点は、素材参照を破棄して粒子の起点だけ残す。
         if (!portal.sigil->LoadFromJson(kUmbraFlameSigilEffect)) {
             portal.sigil.reset();
         } else {
+            // 読み込めた魔法陣はこの地点の名前を付け、非表示から再生する。
             portal.sigil->SetName("FalseKing_UmbraFlameSigil_" + std::to_string(index));
             portal.sigil->SetRevealProgress(0.0f);
             portal.sigil->SetIsVisible(false);
@@ -92,10 +96,12 @@ void EnemyFalseKingSlime::PrepareUmbraFlames() {
 
         // 扇全体を覆う火炎材質を初期化します。炎の前縁は UpdateUmbraFlames() が進めます。
         if (portal.flame) {
-            portal.flame->SetBlendMode(BlendMode::Normal);
+            portal.flame->SetBlendMode(BlendMode::kNormal);
             portal.flame->SetIsVisible(false);
 
+            // 炎のレンダラーが作られている場合に、材質の GPU 用設定を取得する。
             if (engine::MeshRenderer* renderer = portal.flame->GetMeshRenderer()) {
+                // 火炎と共用する材質パラメーターを取得できた場合だけ、扇の寸法や初期値を書き込む。
                 if (auto* fire = renderer->GetWaterParamData()) {
                     fire->effectType = 7.0f;
                     fire->waveSpeed = 1.45f;
@@ -161,8 +167,10 @@ void EnemyFalseKingSlime::UpdateUmbraFlames(float deltaTime, bool active) {
 
     for (UmbraFlamePortal& portal : umbraFlames_) {
         // 点灯待ちを含む詠唱の時計と、発動後の時計を分けます。
+        // 発動中は各地点の発動後の経過秒だけを進める。
         if (active)
             portal.activeAge += deltaTime;
+        // 詠唱中は点ごとの点灯遅延を含む時計を進める。
         else
             portal.age += deltaTime;
         const float age = active ? portal.activeAge : portal.age;
@@ -170,6 +178,7 @@ void EnemyFalseKingSlime::UpdateUmbraFlames(float deltaTime, bool active) {
         const float fade = active ? SmoothStep01(std::clamp(attackTimer_ / 0.70f, 0.0f, 1.0f)) : 1.0f;
 
         // 予兆の魔法陣は準備の進行に合わせて広げ、攻撃の終盤で薄くします。
+        // 魔法陣の素材を読み込めた地点だけ、表示・展開率・姿勢を更新する。
         if (portal.sigil) {
             portal.sigil->Update(deltaTime);
             portal.sigil->SetIsVisible((active || age >= 0.0f) && fade > 0.01f);
@@ -192,6 +201,7 @@ void EnemyFalseKingSlime::UpdateUmbraFlames(float deltaTime, bool active) {
         if (!active) {
             portal.particleTimer -= deltaTime;
 
+            // 生成間隔に達し、魔法陣が一定まで開いてから、収束する光を放つ。
             if (portal.particleTimer <= 0.0f && assembly > 0.18f) {
                 // 赤と青の光を上空の別方向から魔法陣へ収束させます。
                 const float orbit = age * 1.7f + portal.delay * 7.0f;
@@ -212,6 +222,7 @@ void EnemyFalseKingSlime::UpdateUmbraFlames(float deltaTime, bool active) {
         const float rise = SmoothStep01(std::clamp(age / 0.34f, 0.0f, 1.0f));
         const float height = 9.6f * rise;
 
+        // 扇全体の描画を担当する最初の地点に炎オブジェクトがあれば、座標と材質を更新する。
         if (portal.flame) {
             portal.flame->SetIsVisible(rise > 0.01f && fade > 0.01f);
             const engine::Vector3 fanCenter =
@@ -222,7 +233,9 @@ void EnemyFalseKingSlime::UpdateUmbraFlames(float deltaTime, bool active) {
             portal.flame->SetColor({0.72f, 0.38f, 1.0f, fade * 0.86f});
 
             // 炎の表示と命中判定が同じ前縁を使うよう、進行率をシェーダーへ渡します。
+            // レンダラーを取得できる場合だけ、描画へ炎の前縁を渡す。
             if (engine::MeshRenderer* renderer = portal.flame->GetMeshRenderer()) {
+                // 火炎用の材質データが有効な場合だけ、当たり判定と共通の前縁を設定する。
                 if (auto* fire = renderer->GetWaterParamData()) {
                     fire->effectSoftness = waveFront;
                 }
@@ -234,15 +247,17 @@ void EnemyFalseKingSlime::UpdateUmbraFlames(float deltaTime, bool active) {
     }
 
     // 火の粉も六つの魔法陣ではなく、扇を進む炎の前縁から湧かせます。
+    // 発動後に前縁が少し進み、終了まで0.70秒より長く残る間だけ火の粉を出す。
     if (active && waveFront > 0.03f && attackTimer_ > 0.70f) {
         effectTimer_ -= deltaTime;
 
+        // 次の発生時刻に達したら、前縁に沿う横5点から火の粉を立ち上げる。
         if (effectTimer_ <= 0.0f) {
             const engine::Vector3 right{forward.z, 0.0f, -forward.x};
             const float frontDistance = nearDistance + fanLength * waveFront;
             const float frontHalfWidth = (nearWidth + (farWidth - nearWidth) * waveFront) * 0.42f;
 
-            for (int lane = -2; lane <= 2; ++lane) {
+            for (std::int32_t lane = -2; lane <= 2; ++lane) {
                 const engine::Vector3 ground = FindGroundPoint(attackStartPosition_ + forward * frontDistance +
                                                        right * (frontHalfWidth * lane * 0.5f));
                 EmitDirectedPreset(kUmbraFlameFlamePreset, ground + engine::Vector3{0.0f, 0.18f, 0.0f}, {0.0f, 1.0f, 0.0f},
@@ -253,7 +268,7 @@ void EnemyFalseKingSlime::UpdateUmbraFlames(float deltaTime, bool active) {
         }
     }
 
-    // 炎の前縁が届いた時だけ判定し、画面に見える進行と被弾を一致させます。
+    // 詠唱中、命中済み、または対象が不在・死亡・非表示の場合は、今回の命中判定を行わない。
     if (!active || umbraFlameFanHit_ || !GetTarget() || GetTarget()->IsDead() || !GetTarget()->GetIsVisible())
         return;
     // 対象を扇の前後方向と横方向へ分解し、前縁の到達・扇の横幅・足元からの高さを調べます。
@@ -266,14 +281,14 @@ void EnemyFalseKingSlime::UpdateUmbraFlames(float deltaTime, bool active) {
     const float fanRate = std::clamp((along - nearDistance) / fanLength, 0.0f, 1.0f);
     const float halfWidth = (nearWidth + (farWidth - nearWidth) * fanRate) * 0.5f;
     const engine::Vector3 ground = FindGroundPoint(targetPosition);
-    // 横幅には対象の半径をそのまま足し、前縁の比較では半径を扇の長さで割ってから足します。
+    // 近端・遠端・炎の前縁・横幅・接地面からの高さのどれかが許容範囲外なら、命中処理を行わない。前縁の比較では対象半径を扇の長さで割る。
     if (along < nearDistance - collisionRadius || along > farDistance + collisionRadius ||
         fanRate > waveFront + collisionRadius / fanLength || side > halfWidth + collisionRadius ||
         std::abs(targetPosition.y - ground.y) > 4.0f)
         return;
     // 命中したら術者から離れる向きへ吹き飛ばし、今回の扇で再度当たらないようにします。
     const engine::Vector3 knockback = NormalizePlanar(targetPosition - attackStartPosition_) * 5.5f;
-    DamageTargetAt(ground, collisionRadius + 0.05f, 4.0f, attack.damage, DamageType::Explosion,
+    DamageTargetAt(ground, collisionRadius + 0.05f, 4.0f, attack.damage, DamageType::kExplosion,
                    {knockback.x, 6.0f, knockback.z});
     umbraFlameFanHit_ = true;
 }

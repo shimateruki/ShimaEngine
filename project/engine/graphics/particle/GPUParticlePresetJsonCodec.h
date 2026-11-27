@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 // 担当：GPU粒子プリセットのJSONを読み書きし、旧形式の値も解釈する。
 // 関連：GpuParticleConfig（設定）、GpuParticleManager / GpuParticleEditor（利用）
@@ -9,19 +10,21 @@
 
 // 実行時とEditorで同じプリセット項目を読書きする。
 // 呼び出し側が初期値を決め、この読込処理はJSONに存在する項目だけを上書きする。
-namespace GpuParticlePresetJsonCodec {
+namespace gpuParticlePresetJsonCodec {
 using Json = nlohmann::json;
 
 template <typename T>
 // 指定キーがある場合だけ値を読む。型変換の例外は呼出側で扱う。
 inline void ReadValue(const Json& json, const char* key, T& target) {
+    // 指定のキーが見つかる場合だけ、型を変換して設定を上書きする。
     if (const auto found = json.find(key); found != json.end()) {
         target = found->get<T>();
     }
 }
 
-// キーがある場合は3成分配列として読む。型や成分不足の例外は呼び出し側で扱う。
+// 3成分配列を前提とします。呼び出し側が読込失敗時の例外を扱います。
 inline void ReadVector3(const Json& json, const char* key, engine::Vector3& target) {
+    // キーが見つかった場合だけ、X、Y、Zの順に読み込む。
     if (const auto found = json.find(key); found != json.end()) {
         target.x = (*found)[0].get<float>();
         target.y = (*found)[1].get<float>();
@@ -29,8 +32,9 @@ inline void ReadVector3(const Json& json, const char* key, engine::Vector3& targ
     }
 }
 
-// 指定キーの四成分配列を読む。型・成分不足の例外は呼出側で扱う。
+// 4成分配列を前提とします。呼び出し側が読込失敗時の例外を扱います。
 inline void ReadVector4(const Json& json, const char* key, engine::Vector4& target) {
+    // キーが見つかった場合だけ、四成分を順に読み込む。
     if (const auto found = json.find(key); found != json.end()) {
         target.x = (*found)[0].get<float>();
         target.y = (*found)[1].get<float>();
@@ -40,10 +44,11 @@ inline void ReadVector4(const Json& json, const char* key, engine::Vector4& targ
 }
 
 // 旧形式の真偽値・数値フラグを整数設定へ読み込む。
-inline void ReadLegacyFlag(const Json& json, const char* key, int& target) {
+inline void ReadLegacyFlag(const Json& json, const char* key, std::int32_t& target) {
+    // フラグのキーが見つかった場合にだけ変換し、存在しなければ現在値を維持する。
     if (const auto found = json.find(key); found != json.end()) {
         // 古いプリセットの整数値と、Editorが保存するbool値をどちらも受け取る。
-        target = found->is_boolean() ? (found->get<bool>() ? 1 : 0) : found->get<int>();
+        target = found->is_boolean() ? (found->get<bool>() ? 1 : 0) : found->get<std::int32_t>();
     }
 }
 
@@ -54,6 +59,7 @@ inline void Read(const Json& json, GpuParticleConfig& config) {
     ReadVector3(json, "emitVelocity", config.emitVelocity);
     ReadValue(json, "emitCount", config.emitCount);
 
+    // LODがオブジェクトとして定義されている場合だけ、項目を取り出して不足分を既定値で補う。
     if (const auto found = json.find("lod"); found != json.end() && found->is_object()) {
         config.lod.enabled = found->value("enabled", false);
         config.lod.nearDistance = found->value("nearDistance", 12.0f);
@@ -115,6 +121,7 @@ inline void Read(const Json& json, GpuParticleConfig& config) {
     ReadVector3(json, "lightColor", config.lightColor);
     ReadValue(json, "lightingStrength", config.lightingStrength);
 
+    // スプライトアニメーションの新形式がオブジェクトで指定されていれば、その中にある項目を旧形式の上から反映する。
     if (const auto found = json.find("spriteAnimation"); found != json.end() && found->is_object()) {
         ReadValue(*found, "columns", config.spriteSheetColumns);
         ReadValue(*found, "rows", config.spriteSheetRows);
@@ -188,4 +195,4 @@ inline Json Write(const GpuParticleConfig& config) {
                    {"maxAliveParticles", config.lod.maxAliveParticles}};
     return json;
 }
-} // namespace GpuParticlePresetJsonCodec
+} // namespace gpuParticlePresetJsonCodec

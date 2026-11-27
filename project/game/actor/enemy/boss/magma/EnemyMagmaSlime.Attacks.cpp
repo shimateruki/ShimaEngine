@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include <cstdint>
 #include "game/actor/combat/CombatGroundQuery.h"
 #include "game/actor/combat/CombatMath.h"
 #include "game/actor/enemy/boss/magma/EnemyMagmaSlime.Internal.h"
@@ -18,16 +19,15 @@
 #include <cassert>
 #include <cmath>
 
-using namespace EnemyMagmaSlimeImplementation;
+using namespace enemyMagmaSlimeImplementation;
 
 // 予兆と着弾が一致するよう、攻撃開始時の位相から全着弾点を先に確定します。
 void EnemyMagmaSlime::PrepareMortarTargets() {
-    // 毎回ランダム生成せず、攻撃開始時の位相と番号から散布位置を固定する。
-    // 予兆を見た位置と着弾位置が途中でずれないようにするため。
     constexpr float kGoldenAngle = 2.39996323f;
     const engine::Vector3 origin = FindGroundPoint(GetTranslate());
     const engine::Vector3 spreadCenter = LerpVector3(origin, lockedTargetPosition_, 0.54f);
 
+    // 弾番号と攻撃開始時の位相で角度と距離を決め、散布位置を地表へ落とす。
     for (std::size_t index = 0; index < mortarTargets_.size(); ++index) {
         const float indexValue = static_cast<float>(index + 1);
         const float rawNoise = std::sin(indexValue * 12.9898f + mortarPatternPhase_ * 31.733f) * 43758.5453f;
@@ -43,13 +43,15 @@ void EnemyMagmaSlime::PrepareMortarTargets() {
 
 void EnemyMagmaSlime::LaunchNextMagmaBlob() {
     // 狙いは準備済みの着弾点で固定し、弾ごとの横位置と滞空時間だけをずらす。
-    if (actionIndex_ < 0 || actionIndex_ >= static_cast<int>(mortarTargets_.size())) {
+    // 発射番号が着弾点の配列内にある場合だけ、弾と制御点を用意する。
+    if (actionIndex_ < 0 || actionIndex_ >= static_cast<std::int32_t>(mortarTargets_.size())) {
         return;
     }
 
     MagmaBlob blob;
     blob.visual = CreateMagmaVisual("MagmaSlime_Mortar_" + std::to_string(actionIndex_), "Primitives/sphere",
                                     kMagmaMaterialType, {1.0f, 0.16f, 0.008f, 0.97f}, 2.6f);
+    // 弾の表示を生成できなければ、飛行も着弾も登録しない。
     if (!blob.visual) {
         return;
     }
@@ -57,8 +59,8 @@ void EnemyMagmaSlime::LaunchNextMagmaBlob() {
     const engine::Vector3 side = {lockedDirection_.z, 0.0f, -lockedDirection_.x};
 
     // 5発ごとに発射位置と滞空時間をずらし、同時着弾を避ける。
-    const int withinWave = actionIndex_ % 5;
-    const int wave = actionIndex_ / 5;
+    const std::int32_t withinWave = actionIndex_ % 5;
+    const std::int32_t wave = actionIndex_ / 5;
     const float sideOffset = (static_cast<float>(withinWave) - 2.0f) * 0.46f;
     blob.start = GetWorldPosition() + side * sideOffset +
                  engine::Vector3{0.0f, baseScale_.y * 0.68f + 0.72f + static_cast<float>(wave) * 0.18f, 0.0f};
@@ -71,25 +73,28 @@ void EnemyMagmaSlime::LaunchNextMagmaBlob() {
     blob.visual->SetScale({0.92f, 0.92f, 0.92f});
     blob.visual->UpdateWorldMatrix(true);
 
+    // 発射時の尾を出してから、UpdateMagmaBlobs() が進める弾の一覧へ登録する。
     const EnemyAttackDefinition& attack = GetCurrentAttackDefinition();
     // 発射直後も飛行中と同じ攻撃設定から軌跡を選ぶ。
-    const char* activePreset = MagmaAttackVfx::kMortar.Resolve(&attack);
+    const char* activePreset = magmaAttackVfx::kMortar.Resolve(&attack);
     EmitDirectedPreset(activePreset, blob.start, lockedDirection_ + engine::Vector3{0.0f, 1.0f, 0.0f}, 1.18f);
     magmaBlobs_.push_back(std::move(blob));
 }
 
 void EnemyMagmaSlime::UpdateMagmaBlobs(float deltaTime) {
     // 二次ベジエ曲線で弾を飛ばし、終点へ達した一度だけ着弾処理を行う。
+    // 飛行中の弾がなければ攻撃設定の取得と走査を省く。
     if (magmaBlobs_.empty()) {
         return;
     }
 
     // 攻撃状態が次の技へ移っても、飛行中の溶岩弾は溶岩弾の設定を使う。
     const auto& attack = GetAttackDefinition(kMagmaMortarAttackId);
-    const char* trailPreset = MagmaAttackVfx::kMortar.Resolve(&attack);
+    const char* trailPreset = magmaAttackVfx::kMortar.Resolve(&attack);
     auto blob = magmaBlobs_.begin();
 
     while (blob != magmaBlobs_.end()) {
+        // 対応する表示部品を失った弾は、着弾処理へ渡さず一覧から除く。
         if (!blob->visual) {
             blob = magmaBlobs_.erase(blob);
             continue;
@@ -111,7 +116,7 @@ void EnemyMagmaSlime::UpdateMagmaBlobs(float deltaTime) {
         blob->visual->Update(deltaTime);
         blob->visual->UpdateWorldMatrix(true);
 
-        // 軌跡粒子は飛行方向の逆へ、間隔を空けて出す。
+        // 経過秒を発生間隔で割った余りがこのフレーム時間より小さい場合に、弾の進行方向と逆へ軌跡を出す。
         if (std::fmod(blob->age, kMortarTrailInterval) < deltaTime) {
             EmitDirectedPreset(trailPreset, position, NormalizePlanar(blob->target - blob->start) * -1.0f, 1.1f);
         }
@@ -122,6 +127,7 @@ void EnemyMagmaSlime::UpdateMagmaBlobs(float deltaTime) {
             blob->impacted = true;
         }
 
+        // 着弾処理を済ませた弾は、次回の更新で二重に処理しないよう取り除く。
         if (blob->impacted) {
             blob = magmaBlobs_.erase(blob);
             continue;
@@ -147,6 +153,7 @@ void EnemyMagmaSlime::SpawnMagmaPool(const engine::Vector3& position, float radi
     MagmaPool pool;
     pool.visual = CreateMagmaVisual("MagmaSlime_Pool_" + std::to_string(magmaPools_.size()), "Primitives/cylinder",
                                     kMagmaMaterialType, {1.0f, 0.13f, 0.005f, 0.86f}, 2.2f);
+    // 床の見た目を作れなければ、ダメージを持つ床も登録しない。
     if (!pool.visual) {
         return;
     }
@@ -155,6 +162,7 @@ void EnemyMagmaSlime::SpawnMagmaPool(const engine::Vector3& position, float radi
     pool.position.y += 0.055f;
     pool.radius = radius;
     pool.lifetime = lifetime;
+    // 床の最初の命中確認を待機なしで始め、小さく表示して更新一覧へ渡す。
     pool.damageTimer = 0.0f;
     pool.visual->SetTranslate(pool.position);
     pool.visual->SetScale({radius * 0.32f, 0.045f, radius * 0.32f});
@@ -167,6 +175,7 @@ void EnemyMagmaSlime::UpdateMagmaPools(float deltaTime) {
     auto pool = magmaPools_.begin();
 
     while (pool != magmaPools_.end()) {
+        // 表示部品がなくなった床は、ダメージを残さず一覧から除く。
         if (!pool->visual) {
             pool = magmaPools_.erase(pool);
             continue;
@@ -189,9 +198,10 @@ void EnemyMagmaSlime::UpdateMagmaPools(float deltaTime) {
         pool->visual->Update(deltaTime);
         pool->visual->UpdateWorldMatrix(true);
 
-        // 見た目の円盤は薄いが、上下に離れた相手へ床ダメージを与えない。
+        // 再命中までの待ち時間を過ぎて標的がいる場合、床からの上下差と水平距離の両方を確認する。
         if (pool->damageTimer <= 0.0f && GetTarget()) {
             const engine::Vector3 targetPosition = GetTarget()->GetWorldPosition();
+            // 高さの許容差内にいて、円の半径に0.55を足した距離内のときは床ダメージを発生させる。
             if (std::abs(targetPosition.y - pool->position.y) <= kPoolVerticalTolerance &&
                 PlanarDistance(targetPosition, pool->position) <= pool->radius + 0.55f) {
                 DamageTargetAt(pool->position, pool->radius + 0.55f, 0.55f, {0.0f, 2.2f, 0.0f}, 2.2f, 0.55f, 0.22f);
@@ -209,10 +219,12 @@ void EnemyMagmaSlime::UpdateMagmaPools(float deltaTime) {
     }
 }
 
+// 突進の起点・終点を地面にそろえ、進行方向と初期の炎を準備する。
 void EnemyMagmaSlime::BeginRush() {
     const EnemyAttackDefinition& attack = GetCurrentAttackDefinition();
     attackStartPosition_ = FindGroundPoint(GetTranslate());
 
+    // 標的がいる場合は発動時の地面位置から方向を取り直す。いない場合は保持していた方向と狙いを使う。
     if (GetTarget()) {
         lockedTargetPosition_ = FindGroundPoint(GetTarget()->GetWorldPosition());
         lockedDirection_ = NormalizePlanar(lockedTargetPosition_ - attackStartPosition_);
@@ -244,7 +256,7 @@ void EnemyMagmaSlime::UpdateRush(float deltaTime, float, engine::Vector3& veloci
     SetRotationY(std::atan2(lockedDirection_.x, lockedDirection_.z) + kMagmaSlimeModelYawOffset);
     UpdateRushFlameVisuals(position, progress, deltaTime);
 
-    // 炎を本体に追従させた後、後方の尾と左右の飛沫を粒子用の時刻で出す。
+    // 粒子の発生間隔が経過し、突進が90%以下の間だけ、後方の尾と左右の飛沫を出す。
     if (effectTimer_ <= 0.0f && progress <= 0.90f) {
         const engine::Vector3 side = {lockedDirection_.z, 0.0f, -lockedDirection_.x};
         EmitDirectedPreset(attack.activeVfx.empty() ? kRushWakePreset : attack.activeVfx.c_str(),
@@ -257,13 +269,13 @@ void EnemyMagmaSlime::UpdateRush(float deltaTime, float, engine::Vector3& veloci
         effectTimer_ += kRushWakeInterval;
     }
 
-    // 通過した場所の床は粒子とは別間隔で設置する。
+    // 床用の間隔が経過し、突進が84%以下の間だけ、通過点へ残留床を置く。
     if (actionTimer_ <= 0.0f && progress <= 0.84f) {
         SpawnMagmaPool(position, (std::max)(0.82f, attack.radius * 0.46f), 2.55f);
         actionTimer_ += kRushPoolInterval;
     }
 
-    // 突進本体の接触ダメージは一度だけ。設置済みの床による判定は個別に残る。
+    // 標的がいて未命中なら、突進半径と標的の半径を足した水平距離で一度だけ本体ダメージを調べる。
     if (!attackDamageApplied_ && GetTarget() &&
         PlanarDistance(GetTarget()->GetWorldPosition(), position) <= attack.radius + GetTarget()->GetCollisionRadius()) {
         DamageTargetAt(position, attack.radius + GetTarget()->GetCollisionRadius(), attack.damage,
@@ -272,7 +284,7 @@ void EnemyMagmaSlime::UpdateRush(float deltaTime, float, engine::Vector3& veloci
         attackDamageApplied_ = true;
     }
 
-    // 移動を終えたら終点の衝撃と床を一度だけ発生させる。
+    // 進行率84%に達して終点演出がまだなら、FinishRush() で衝撃と床を出して炎を解放する。
     if (progress >= 0.84f && !rushImpactSpawned_) {
         FinishRush();
     }
@@ -296,6 +308,7 @@ void EnemyMagmaSlime::FinishRush() {
 void EnemyMagmaSlime::EnsureRushFlameVisuals() {
     // 突進中に必要な炎メッシュだけを遅延生成し、炎用材質の流れ方を設定する。
     for (std::size_t index = 0; index < rushFlameVisuals_.size(); ++index) {
+        // すでに作成済みの炎は再利用する。
         if (rushFlameVisuals_[index]) {
             continue;
         }
@@ -305,12 +318,14 @@ void EnemyMagmaSlime::EnsureRushFlameVisuals() {
                               {1.0f, 0.19f, 0.018f, 0.78f}, 2.9f);
         engine::Object3D* flame = rushFlameVisuals_[index].get();
 
+        // 生成に失敗した枠は非表示設定や材質設定を行わず飛ばす。
         if (!flame) {
             continue;
         }
 
         flame->SetIsVisible(false);
 
+        // 炎用材質のパラメーターを取得できた場合にだけ、流れと発光の初期値を設定する。
         if (engine::MeshRenderer* renderer = flame->GetMeshRenderer()) {
             if (engine::MeshRenderer::WaterParamForGpu* fire = renderer->GetWaterParamData()) {
                 fire->effectType = 2.0f;
@@ -343,6 +358,7 @@ void EnemyMagmaSlime::UpdateRushFlameVisuals(const engine::Vector3& position, fl
     for (std::size_t index = 0; index < rushFlameVisuals_.size(); ++index) {
         engine::Object3D* flame = rushFlameVisuals_[index].get();
 
+        // 作れなかった炎の枠は位置や色を更新しない。
         if (!flame) {
             continue;
         }
@@ -362,6 +378,7 @@ void EnemyMagmaSlime::UpdateRushFlameVisuals(const engine::Vector3& position, fl
         });
         flame->SetIsVisible(envelope > 0.01f || progress <= 0.02f);
 
+        // 描画用のパラメーターがあれば、左右の流れと突進中の発光量を材質へ渡す。
         if (engine::MeshRenderer* renderer = flame->GetMeshRenderer()) {
             if (engine::MeshRenderer::WaterParamForGpu* fire = renderer->GetWaterParamData()) {
                 fire->flowSpeedX = kSideOffsets[index] * -0.18f;
@@ -389,10 +406,12 @@ void EnemyMagmaSlime::BeginVolcanicSlam() {
     engine::Vector3 toTarget = lockedTargetPosition_ - attackStartPosition_;
     const float distance = std::sqrt(toTarget.x * toTarget.x + toTarget.z * toTarget.z);
 
+    // 標的までの水平距離が最大射程を超え、方向を計算できる場合にだけ着地点を手前へ寄せる。
     if (distance > attack.maxRange && distance > 0.001f) {
         lockedTargetPosition_ = attackStartPosition_ + NormalizePlanar(toTarget) * attack.maxRange;
     }
 
+    // 着地点を地面へ落とし、このフレームは通常の接地移動からスクリプトの跳躍へ切り替える。
     attackEndPosition_ = FindGroundPoint(lockedTargetPosition_);
     SetGrounded(false);
     scriptedMovementThisFrame_ = true;
@@ -415,9 +434,9 @@ void EnemyMagmaSlime::UpdateVolcanicSlam(float, engine::Vector3& velocity) {
     scriptedMovementThisFrame_ = true;
     SetGrounded(slamImpactSpawned_);
 
-    // 空中でだけ下向きの残光を出し、着地の直前に粒子の発生を止める。
+    // 粒子の間隔が過ぎても、着地直前の進行率90%からは下向きの残光を止める。
     if (effectTimer_ <= 0.0f && progress < 0.90f) {
-        EmitDirectedPreset(attack.activeVfx.empty() ? MagmaAttackVfx::kMortar.defaultName : attack.activeVfx.c_str(),
+        EmitDirectedPreset(attack.activeVfx.empty() ? magmaAttackVfx::kMortar.defaultName : attack.activeVfx.c_str(),
                            position + engine::Vector3{0.0f, 0.20f, 0.0f},
                            {-lockedDirection_.x * 0.22f, -1.0f, -lockedDirection_.z * 0.22f}, 1.18f);
         effectTimer_ += 0.058f;
@@ -430,7 +449,7 @@ void EnemyMagmaSlime::UpdateVolcanicSlam(float, engine::Vector3& velocity) {
 }
 
 void EnemyMagmaSlime::ImpactVolcanicSlam() {
-    // 中央判定に続き、外周二列の柱を時間差で噴き上げる。
+    // 水平方向の着地点で接地状態を確定し、衝撃波・残留床・噴火の準備と中央のダメージを処理する。
     slamImpactSpawned_ = true;
     SetGrounded(true);
     landingPulseTimer_ = 0.42f;
@@ -440,11 +459,12 @@ void EnemyMagmaSlime::ImpactVolcanicSlam() {
     SpawnMagmaPool(attackEndPosition_, (std::max)(1.7f, attack.radius * 0.52f), 3.0f);
     SpawnSlamRings(attackEndPosition_);
 
-    for (int ringIndex = 0; ringIndex < 2; ++ringIndex) {
+    // 外側の列は中心から離し、角度と時間をずらして内側の柱の隙間から噴き上がるようにする。
+    for (std::int32_t ringIndex = 0; ringIndex < 2; ++ringIndex) {
         const float eruptionRadius = ringIndex == 0 ? 3.7f : 6.4f;
         const float angleOffset = ringIndex == 0 ? 0.0f : kPi / 6.0f;
 
-        for (int index = 0; index < 6; ++index) {
+        for (std::int32_t index = 0; index < 6; ++index) {
             const float angle = angleOffset + static_cast<float>(index) * kPi / 3.0f;
             const engine::Vector3 direction = {std::sin(angle), 0.0f, std::cos(angle)};
             SpawnMagmaPillar(
@@ -454,13 +474,14 @@ void EnemyMagmaSlime::ImpactVolcanicSlam() {
         }
     }
 
+    // 着地点の中央では、後から広がる波紋とは別に即時のダメージを確認する。
     DamageTargetAt(attackEndPosition_, (std::max)(2.0f, attack.radius * 0.62f), attack.damage,
                    {lockedDirection_.x * 6.0f, 8.0f, lockedDirection_.z * 6.0f}, attack.statusDuration,
                    attack.statusTickInterval, attack.statusTickDamage);
 }
 
 void EnemyMagmaSlime::SpawnSlamRings(const engine::Vector3& position) {
-    // 三つの波紋を時間差で準備し、前の波紋の外周から順に広げる。
+    // 三つの波紋の開始をずらし、後から出る波紋ほど大きい終点半径まで広げる。
     const EnemyAttackDefinition& attack = GetCurrentAttackDefinition();
     constexpr std::array<float, 3> kDelays = {0.0f, 0.14f, 0.29f};
 
@@ -468,6 +489,7 @@ void EnemyMagmaSlime::SpawnSlamRings(const engine::Vector3& position) {
         MagmaRing ring;
         ring.visual = CreateMagmaVisual("MagmaSlime_Shockwave_" + std::to_string(index), "Primitives/cylinder",
                                         kShockwaveMaterialType, {1.0f, 0.22f, 0.015f, 0.82f}, 2.4f);
+        // 波紋を表示する部品が作れなければ、その一波を登録しない。
         if (!ring.visual) {
             continue;
         }
@@ -492,6 +514,7 @@ void EnemyMagmaSlime::UpdateMagmaRings(float deltaTime) {
     auto ring = magmaRings_.begin();
 
     while (ring != magmaRings_.end()) {
+        // 表示部品を失った波紋は、半径の判定を残さず取り除く。
         if (!ring->visual) {
             ring = magmaRings_.erase(ring);
             continue;
@@ -516,10 +539,11 @@ void EnemyMagmaSlime::UpdateMagmaRings(float deltaTime) {
         ring->visual->Update(deltaTime);
         ring->visual->UpdateWorldMatrix(true);
 
-        // 一フレームで広がった範囲に対象の判定半径を足し、間をすり抜けないようにする。
+        // 標的がいてこの波紋が未命中なら、前回半径と現在半径の間に当たり幅を加えて判定する。
         if (!ring->hitTarget && GetTarget()) {
             const float targetDistance = PlanarDistance(GetTarget()->GetWorldPosition(), ring->position);
             const float hitPadding = GetTarget()->GetCollisionRadius() + 0.72f;
+            // 水平距離が波紋の通過帯と重なり、高さの差が3以内のときだけ命中とする。
             if (targetDistance >= ring->previousRadius - hitPadding && targetDistance <= radius + hitPadding &&
                 std::abs(GetTarget()->GetWorldPosition().y - ring->position.y) <= 3.0f) {
                 const EnemyAttackDefinition& attack = GetAttackDefinition(kVolcanicSlamAttackId);
@@ -528,7 +552,7 @@ void EnemyMagmaSlime::UpdateMagmaRings(float deltaTime) {
                 event.target = GetTarget();
                 event.attacker = this;
                 event.damageAmount = attack.damage * 0.34f;
-                event.damageType = DamageType::Fire;
+                event.damageType = DamageType::kFire;
                 event.knockbackVelocity = {
                     knockbackDirection.x * 6.0f,
                     4.8f,
@@ -545,6 +569,7 @@ void EnemyMagmaSlime::UpdateMagmaRings(float deltaTime) {
         // 次のフレームで広がった分だけを試せるよう、現在半径を保存する。
         ring->previousRadius = radius;
 
+        // 最大半径まで広がった波紋は、最後の判定を終えてから取り除く。
         if (progress >= 1.0f) {
             ring = magmaRings_.erase(ring);
             continue;
@@ -576,7 +601,8 @@ void EnemyMagmaSlime::PrepareEruptionTargets() {
 
 void EnemyMagmaSlime::SpawnNextMagmaPillar() {
     // 攻撃番号に応じた準備済みの座標へ柱を一本ずつ生成する。
-    if (actionIndex_ < 0 || actionIndex_ >= static_cast<int>(eruptionTargets_.size())) {
+    // 準備済みの噴火位置に対応する番号でなければ生成しない。
+    if (actionIndex_ < 0 || actionIndex_ >= static_cast<std::int32_t>(eruptionTargets_.size())) {
         return;
     }
 
@@ -593,10 +619,12 @@ void EnemyMagmaSlime::SpawnMagmaPillar(const engine::Vector3& position, float ra
     MagmaPillar pillar;
     pillar.visual = CreateMagmaVisual("MagmaSlime_Eruption_" + std::to_string(magmaPillars_.size()), "Primitives/plane",
                                       kFireMaterialType, {1.0f, 0.18f, 0.012f, 0.94f}, 2.8f);
+    // 炎柱の表示を作れない場合は、噴出や命中の記録も残さない。
     if (!pillar.visual) {
         return;
     }
 
+    // 地面から少し浮かせた位置を基準に、ワールド単位の半径と高さ、秒単位の寿命と遅延を保存する。
     pillar.position = FindGroundPoint(position);
     pillar.position.y += 0.04f;
     pillar.radius = radius;
@@ -617,6 +645,7 @@ void EnemyMagmaSlime::UpdateMagmaPillars(float deltaTime) {
     auto pillar = magmaPillars_.begin();
 
     while (pillar != magmaPillars_.end()) {
+        // 表示部品がなくなった柱は、その後に発生する床やダメージを残さず取り除く。
         if (!pillar->visual) {
             pillar = magmaPillars_.erase(pillar);
             continue;
@@ -625,6 +654,7 @@ void EnemyMagmaSlime::UpdateMagmaPillars(float deltaTime) {
         pillar->age += (std::max)(deltaTime, 0.0f);
         const float localAge = pillar->age - pillar->delay;
 
+        // 柱ごとの待機時間が残る間は表示せず、噴出と命中も始めない。
         if (localAge < 0.0f) {
             ++pillar;
             continue;
@@ -652,6 +682,7 @@ void EnemyMagmaSlime::UpdateMagmaPillars(float deltaTime) {
         pillar->visual->SetColor({1.0f, 0.12f + envelope * 0.13f, 0.006f, 0.62f + envelope * 0.34f});
         pillar->visual->SetIsVisible(envelope > 0.015f);
 
+        // 材質の描画パラメーターが取得できれば、現在の柱の高さに対して炎の幅と流れを補正する。
         if (engine::MeshRenderer* renderer = pillar->visual->GetMeshRenderer()) {
             if (engine::MeshRenderer::WaterParamForGpu* fire = renderer->GetWaterParamData()) {
                 fire->effectScaleX = std::clamp((pillar->radius * 2.0f * radiusPulse) / activeHeight, 0.18f, 2.6f);
@@ -664,7 +695,7 @@ void EnemyMagmaSlime::UpdateMagmaPillars(float deltaTime) {
         pillar->visual->Update(deltaTime);
         pillar->visual->UpdateWorldMatrix(true);
 
-        // 柱が十分に伸びている間は、噴出中の火の粉を一定間隔で追加する。
+        // 火の粉の間隔を過ぎ、柱の高さ係数が0.18を超える間だけ、柱の中ほどから火の粉を出す。
         pillar->particleTimer -= deltaTime;
 
         if (pillar->particleTimer <= 0.0f && envelope > 0.18f) {
@@ -673,7 +704,7 @@ void EnemyMagmaSlime::UpdateMagmaPillars(float deltaTime) {
             pillar->particleTimer += 0.075f;
         }
 
-        // 柱が十分に伸びた一度だけ判定し、見た目の立ち上がり前の被弾と多重ヒットを避ける。
+        // 柱の高さ係数が0.62以上に達した最初のフレームで一度だけ判定し、着地に伴う柱と通常の噴火でダメージ倍率を分ける。
         if (!pillar->damageApplied && envelope >= 0.62f) {
             const EnemyAttackDefinition& attack = GetAttackDefinition(pillar->attackId);
             engine::Vector3 knockbackDirection =
@@ -686,6 +717,7 @@ void EnemyMagmaSlime::UpdateMagmaPillars(float deltaTime) {
             pillar->damageApplied = true;
         }
 
+        // 寿命を過ぎた柱を描画と命中の対象から外す。
         if (progress >= 1.0f) {
             pillar = magmaPillars_.erase(pillar);
             continue;
@@ -700,18 +732,19 @@ void EnemyMagmaSlime::BeginLavaSpiral() {
     const EnemyAttackDefinition& attack = GetAttackDefinition(kLavaSpiralAttackId);
     const engine::Vector3 origin = FindGroundPoint(GetTranslate());
     const float baseAngle = std::atan2(lockedDirection_.x, lockedDirection_.z);
-    constexpr int kWaveCount = 3;
-    constexpr int kSpokesPerWave = 6;
+    constexpr std::int32_t kWaveCount = 3;
+    constexpr std::int32_t kSpokesPerWave = 6;
 
-    for (int wave = 0; wave < kWaveCount; ++wave) {
+    for (std::int32_t wave = 0; wave < kWaveCount; ++wave) {
         const float waveOffset = static_cast<float>(wave) * kPi / 6.0f;
 
-        for (int spoke = 0; spoke < kSpokesPerWave; ++spoke) {
+        for (std::int32_t spoke = 0; spoke < kSpokesPerWave; ++spoke) {
             const float angle = baseAngle + waveOffset + static_cast<float>(spoke) * kPi / 3.0f;
             MagmaSurge surge;
             surge.visual =
                 CreateMagmaVisual("MagmaSlime_Spiral_" + std::to_string(magmaSurges_.size()), "Primitives/Semicircle",
                                   kMagmaMaterialType, {1.0f, 0.12f, 0.004f, 0.98f}, 3.0f);
+            // 溶岩面を描けない波は、波頭や残留床も生成せず飛ばす。
             if (!surge.visual) {
                 continue;
             }
@@ -733,11 +766,13 @@ void EnemyMagmaSlime::BeginLavaSpiral() {
             surge.visual->SetIsVisible(false);
             surge.visual->UpdateWorldMatrix(true);
 
+            // 波頭の炎を作れた場合は初期の位置と大きさを与え、発生時刻まで隠す。
             if (surge.crestVisual) {
                 surge.crestVisual->SetTranslate(origin + engine::Vector3{0.0f, surge.radius * 0.46f, 0.0f});
                 surge.crestVisual->SetScale({surge.radius * 1.54f, surge.radius * 1.05f, surge.radius * 1.54f});
                 surge.crestVisual->SetIsVisible(false);
 
+                // 炎用の材質パラメーターを取得できた場合は、波頭の揺れ・発光・見かけの倍率を設定する。
                 if (engine::MeshRenderer* renderer = surge.crestVisual->GetMeshRenderer()) {
                     if (engine::MeshRenderer::WaterParamForGpu* fire = renderer->GetWaterParamData()) {
                         fire->effectType = 2.0f;
@@ -755,6 +790,7 @@ void EnemyMagmaSlime::BeginLavaSpiral() {
                 surge.crestVisual->UpdateWorldMatrix(true);
             }
 
+            // 波頭が作れなくても、溶岩面があれば時間差で更新する一覧へ渡す。
             magmaSurges_.push_back(std::move(surge));
         }
     }
@@ -768,6 +804,7 @@ void EnemyMagmaSlime::UpdateMagmaSurges(float deltaTime) {
     auto surge = magmaSurges_.begin();
 
     while (surge != magmaSurges_.end()) {
+        // 溶岩面が失われた波は、見えないまま命中しないよう取り除く。
         if (!surge->visual) {
             surge = magmaSurges_.erase(surge);
             continue;
@@ -776,6 +813,7 @@ void EnemyMagmaSlime::UpdateMagmaSurges(float deltaTime) {
         surge->age += (std::max)(deltaTime, 0.0f);
         const float localAge = surge->age - surge->delay;
 
+        // 波ごとの待機時間が残っている間は、出現も移動も始めない。
         if (localAge < 0.0f) {
             ++surge;
             continue;
@@ -803,7 +841,7 @@ void EnemyMagmaSlime::UpdateMagmaSurges(float deltaTime) {
         surge->visual->Update(deltaTime);
         surge->visual->UpdateWorldMatrix(true);
 
-        // 波頭の炎は溶岩面の移動位置を基準にし、同じ曲がり方向へ流す。
+        // 波頭の炎があれば、溶岩面の現在位置の上へずらして同じ曲線上を進める。
         if (surge->crestVisual) {
             const float crestScale = surge->radius * (1.34f + (1.0f - progress) * 0.30f) * pulse;
             surge->crestVisual->SetTranslate(position - curvedDirection * (surge->radius * 0.12f) +
@@ -817,6 +855,7 @@ void EnemyMagmaSlime::UpdateMagmaSurges(float deltaTime) {
             });
             surge->crestVisual->SetIsVisible(progress < 1.0f);
 
+            // 波頭の描画パラメーターが取得できる場合は、曲がり方に合わせて炎の流れを調整する。
             if (engine::MeshRenderer* renderer = surge->crestVisual->GetMeshRenderer()) {
                 if (engine::MeshRenderer::WaterParamForGpu* fire = renderer->GetWaterParamData()) {
                     fire->flowSpeedX = surge->curveAmount * 0.42f;
@@ -831,13 +870,14 @@ void EnemyMagmaSlime::UpdateMagmaSurges(float deltaTime) {
 
         surge->trailTimer -= deltaTime;
 
+        // 軌跡の間隔を過ぎ、寿命の92%未満なら後方へ粒子を出す。
         if (surge->trailTimer <= 0.0f && progress < 0.92f) {
             EmitDirectedPreset(kSpiralTrailPreset, position, curvedDirection * -1.0f + engine::Vector3{0.0f, 0.28f, 0.0f},
                                0.92f + progress * 0.38f);
             surge->trailTimer += 0.065f;
         }
 
-        // 見えている波頭から離れた対象を巻き込まないよう、高さと水平距離の両方で判定する。
+        // 未命中で標的がいる場合、波頭からの高さと水平距離が両方範囲内なら命中させる。
         if (!surge->hitTarget && GetTarget() &&
             std::abs(GetTarget()->GetWorldPosition().y - position.y) <= kPoolVerticalTolerance &&
             PlanarDistance(GetTarget()->GetWorldPosition(), position) <= surge->radius + GetTarget()->GetCollisionRadius()) {
@@ -847,7 +887,7 @@ void EnemyMagmaSlime::UpdateMagmaSurges(float deltaTime) {
             surge->hitTarget = true;
         }
 
-        // 終点で、床を残す設定の波だけ設置物へ引き渡してから、波本体を取り除く。
+        // 寿命に達した波だけ終了する。残留床の対象で未生成の波は、床を置いてから取り除く。
         if (progress >= 1.0f) {
             if (surge->leavesPool && !surge->poolSpawned) {
                 SpawnMagmaPool(position, surge->radius * 0.78f, 2.25f);
@@ -862,6 +902,7 @@ void EnemyMagmaSlime::UpdateMagmaSurges(float deltaTime) {
     }
 }
 
+// 中央を照準方向の射程内に置き、3本の外周柱を120度間隔で地面へ投影する。
 void EnemyMagmaSlime::PrepareFireColumnTargets() {
     const EnemyAttackDefinition& attack = GetAttackDefinition(kFireColumnAttackId);
     const engine::Vector3 casterGround = FindGroundPoint(GetTranslate());
@@ -871,9 +912,10 @@ void EnemyMagmaSlime::PrepareFireColumnTargets() {
 
     // 炎柱の外周は中央の攻撃半径より広く取り、3本の柱と線を読み分けやすくします。
     const float orbitRadius = attack.radius * 1.6f;
-    const Aabb bounds = GetModelWorldAabb();
+    const engine::Aabb bounds = GetModelWorldAabb();
     const float bossRadius =
         (std::max)({(bounds.max.x - bounds.min.x) * 0.5f, (bounds.max.z - bounds.min.z) * 0.5f, baseScale_.x * 0.84f});
+    // 最低距離をボスの大きさと炎柱の広がりから求め、至近距離でも柱を本体から離して置く。
     const float maxDistance = (std::max)(attack.maxRange, 1.0f);
     const float minimumDistance =
         (std::min)(maxDistance, (std::max)(attack.minRange, bossRadius + orbitRadius * 0.5f + attack.radius + 0.6f));
@@ -891,27 +933,30 @@ void EnemyMagmaSlime::PrepareFireColumnTargets() {
 
 void EnemyMagmaSlime::CreateFireColumnSigils() {
     // 地面の魔法陣と三辺の接続線を個別に持ち、予兆の組み立て順を表現する。
+    // 3D共通基盤が取得できない場合は、紋章も接続線も生成できない。
     if (!GetObjectCommon())
         return;
     for (std::size_t index = 0; index < fireColumnSigils_.size(); ++index) {
         auto sigil = std::make_unique<EffectObject3D>();
         sigil->Initialize(GetObjectCommon());
+        // 紋章データを読めない枠は配置せず、他の枠の準備を続ける。
         if (!sigil->LoadFromJson(kFireChantEffect))
             continue;
         sigil->SetName("MagmaSlime_FireColumnSigil_" + std::to_string(index));
-        sigil->SetBlendMode(BlendMode::Add);
+        sigil->SetBlendMode(BlendMode::kAdd);
         sigil->SetRevealProgress(0.0f);
         sigil->SetIsVisible(false);
         fireColumnSigils_[index] = std::move(sigil);
     }
 
+    // 接続線は指定した演出を読み込めた辺だけ、線の始点から伸びる設定で登録する。
     for (std::size_t index = 0; index < fireColumnLinks_.size(); ++index) {
         auto link = std::make_unique<EffectObject3D>();
         link->Initialize(GetObjectCommon());
         if (!link->LoadFromJson(kFireColumnLinkEffect))
             continue;
         link->SetName("MagmaSlime_FireColumnLink_" + std::to_string(index));
-        link->SetBlendMode(BlendMode::Add);
+        link->SetBlendMode(BlendMode::kAdd);
         link->SetRevealMode(1);
         link->SetRevealProgress(0.0f);
         link->SetIsVisible(false);
@@ -922,7 +967,7 @@ void EnemyMagmaSlime::CreateFireColumnSigils() {
 void EnemyMagmaSlime::UpdateFireColumnSigils(float deltaTime) {
     // 外周の円を詠唱中に順次開き、中央の円は発動後に主柱の直前まで開く。
     const EnemyAttackDefinition& attack = GetAttackDefinition(kFireColumnAttackId);
-    const bool windingUp = attackState_ == AttackState::Windup;
+    const bool windingUp = attackState_ == AttackState::kWindup;
     const float windupProgress =
         windingUp ? 1.0f - std::clamp(attackTimer_ / (std::max)(attackStateDuration_, 0.01f), 0.0f, 1.0f) : 1.0f;
     const float elapsed = windingUp ? 0.0f : (std::max)(0.0f, attackStateDuration_ - attackTimer_);
@@ -932,6 +977,7 @@ void EnemyMagmaSlime::UpdateFireColumnSigils(float deltaTime) {
 
     for (std::size_t index = 0; index < fireColumnSigils_.size(); ++index) {
         EffectObject3D* sigil = fireColumnSigils_[index].get();
+        // 作れなかった紋章の更新を飛ばし、残りの円を動かす。
         if (!sigil)
             continue;
         const bool center = index == fireColumnOuterPositions_.size();
@@ -961,6 +1007,7 @@ void EnemyMagmaSlime::UpdateFireColumnSigils(float deltaTime) {
 
     for (std::size_t index = 0; index < fireColumnLinks_.size(); ++index) {
         EffectObject3D* link = fireColumnLinks_[index].get();
+        // 作れなかった辺は位置や角度を更新しない。
         if (!link)
             continue;
         const engine::Vector3& a = fireColumnOuterPositions_[index];
@@ -981,6 +1028,7 @@ void EnemyMagmaSlime::UpdateFireColumnSigils(float deltaTime) {
     }
 }
 
+// 主柱の周期を初期化して狙い点を決め、個別の炎柱を発生前の非表示状態で用意する。
 void EnemyMagmaSlime::BeginFireColumn() {
     fireColumnDamageTimer_ = 0.0f;
     PrepareFireColumnTargets();
@@ -989,6 +1037,7 @@ void EnemyMagmaSlime::BeginFireColumn() {
         auto& flame = fireColumnVisuals_[index];
         flame = CreateMagmaVisual("MagmaSlime_FireColumn_" + std::to_string(index), "Primitives/cylinder",
                                   kFireMaterialType, {1.0f, 0.44f, 0.06f, 0.82f}, 3.0f);
+        // 柱を生成できた場合にだけ、取得できた描画パラメーターへ円筒内の炎の設定を渡す。
         if (flame) {
             if (engine::MeshRenderer* renderer = flame->GetMeshRenderer()) {
                 if (engine::MeshRenderer::WaterParamForGpu* fire = renderer->GetWaterParamData()) {
@@ -1014,6 +1063,7 @@ void EnemyMagmaSlime::BeginFireColumn() {
     }
 }
 
+// 炎柱の実行時間を基に、発生順、終盤の消散、火の粉と主柱のダメージを進める。
 void EnemyMagmaSlime::UpdateFireColumn(float deltaTime) {
     const EnemyAttackDefinition& attack = GetAttackDefinition(kFireColumnAttackId);
     const float elapsed = (std::max)(0.0f, attackStateDuration_ - attackTimer_);
@@ -1025,6 +1075,7 @@ void EnemyMagmaSlime::UpdateFireColumn(float deltaTime) {
     // 三本を順に立て、中央の紋章が完成してから主柱を噴き上げます。
     for (std::size_t index = 0; index < fireColumnVisuals_.size(); ++index) {
         engine::Object3D* flame = fireColumnVisuals_[index].get();
+        // 作れなかった柱には表示や噴き出しの粒子を適用しない。
         if (!flame)
             continue;
         const bool center = index == fireColumnOuterPositions_.size();
@@ -1050,6 +1101,7 @@ void EnemyMagmaSlime::UpdateFireColumn(float deltaTime) {
         flame->SetScale({radius * 2.0f * flicker, activeHeight * 0.5f, radius * 2.0f * flicker});
         flame->SetColor({1.0f, center ? 0.58f : 0.38f, 0.035f, (center ? 0.94f : 0.75f) * envelope});
 
+        // 材質の描画パラメーターを取得できた場合だけ、この柱固有の消散率を渡す。
         if (engine::MeshRenderer* renderer = flame->GetMeshRenderer()) {
             if (engine::MeshRenderer::WaterParamForGpu* fire = renderer->GetWaterParamData()) {
                 // 炎柱だけでディゾルブ進行値として使い、下部から徐々にほどけさせます。
@@ -1064,23 +1116,25 @@ void EnemyMagmaSlime::UpdateFireColumn(float deltaTime) {
 
     UpdateFireColumnSigils(deltaTime);
 
-    // 終了前に発生を止めると、残った火の粉が炎柱より遅れて自然に消えます。
+    // 粒子の発生間隔を過ぎて残りが0.78秒より長い場合だけ、立ち上がった柱に火の粉を足す。
     if (effectTimer_ <= 0.0f && attackTimer_ > 0.78f) {
         // 外周と中央の柱に使う火の粉を同じ設定から選ぶ。
-        const char* streamPreset = MagmaAttackVfx::kFireColumn.Resolve(&attack);
-        const float layerY = (static_cast<int>(elapsed / 0.16f) % 2 == 0) ? 2.0f : 6.0f;
+        const char* streamPreset = magmaAttackVfx::kFireColumn.Resolve(&attack);
+        const float layerY = (static_cast<std::int32_t>(elapsed / 0.16f) % 2 == 0) ? 2.0f : 6.0f;
 
         for (std::size_t index = 0; index < fireColumnOuterPositions_.size(); ++index) {
+            // 各外周柱が立ち始める時刻までは、その場所に火の粉を出さない。
             if (elapsed <= static_cast<float>(index) * outerSpacing)
                 continue;
             EmitDirectedPreset(streamPreset, fireColumnOuterPositions_[index] + engine::Vector3{0.0f, layerY, 0.0f},
                                {0.0f, 1.0f, 0.0f}, 0.82f);
         }
 
+        // 主柱の開始後に、中心と外縁の両方から火の粉を出す。
         if (elapsed >= blastStart) {
             EmitDirectedPreset(streamPreset, fireColumnCenter_ + engine::Vector3{0.0f, layerY + 1.0f, 0.0f},
                                {0.0f, 1.0f, 0.0f}, 1.16f);
-            for (int sparkIndex = 0; sparkIndex < 3; ++sparkIndex) {
+            for (std::int32_t sparkIndex = 0; sparkIndex < 3; ++sparkIndex) {
                 const float angle = idleTimer_ * 0.95f + static_cast<float>(sparkIndex) * (2.0f * kPi / 3.0f);
                 const engine::Vector3 rim = {
                     std::cos(angle) * attack.radius * 0.77f,
@@ -1095,7 +1149,7 @@ void EnemyMagmaSlime::UpdateFireColumn(float deltaTime) {
         effectTimer_ += 0.16f;
     }
 
-    // 命中は中央の主柱だけ。十分に伸びてから消え始めるまで一定間隔で判定する。
+    // 命中は中央のみ。主柱開始後0.22秒から残り0.30秒まで、再判定間隔が経過した場合に調べる。
     fireColumnDamageTimer_ -= deltaTime;
 
     if (elapsed >= blastStart + 0.22f && attackTimer_ > 0.30f && fireColumnDamageTimer_ <= 0.0f) {
@@ -1112,9 +1166,9 @@ void EnemyMagmaSlime::BeginMagmaFlood() {
     const engine::Vector3 origin = FindGroundPoint(GetTranslate());
     const engine::Vector3 side = {lockedDirection_.z, 0.0f, -lockedDirection_.x};
     floodDamageTimer_ = 0.0f;
-    constexpr int kCellCount = 10;
+    constexpr std::int32_t kCellCount = 10;
 
-    for (int index = 0; index < kCellCount; ++index) {
+    for (std::int32_t index = 0; index < kCellCount; ++index) {
         MagmaFloodCell cell;
         const float distance = attack.maxRange * (static_cast<float>(index) + 0.55f) / static_cast<float>(kCellCount);
         const float meander = std::sin(static_cast<float>(index) * 1.4f) * 0.20f;
@@ -1129,6 +1183,7 @@ void EnemyMagmaSlime::BeginMagmaFlood() {
                                          kMagmaMaterialType, {0.80f, 0.09f, 0.008f, 0.93f}, 2.3f);
         cell.crest = CreateMagmaVisual("MagmaSlime_FloodCrest_" + std::to_string(index), "Primitives/sphere",
                                        kMagmaMaterialType, {1.0f, 0.26f, 0.03f, 0.92f}, 2.9f);
+        // 土台が作れなければセルを登録しない。波頭は任意で、生成できたものだけ隠して待機させる。
         if (!cell.surface)
             continue;
         cell.surface->SetIsVisible(false);
@@ -1147,14 +1202,15 @@ void EnemyMagmaSlime::UpdateMagmaFlood(float deltaTime) {
         cell->age += (std::max)(0.0f, deltaTime);
         const float localAge = cell->age - cell->delay;
 
+        // セルの待機時間が残る間は、発生・表示・命中を始めない。
         if (localAge < 0.0f) {
             ++cell;
             continue;
         }
 
+        // 発生時の飛沫はセルごとに一度だけ出し、指定したセルには後から残る床も置く。
         if (!cell->burstSpawned) {
-            // 各セルの出現時に、詠唱解放と同じ飛沫プリセットを使う。
-            EmitDirectedPreset(MagmaAttackVfx::kFlood.Resolve(&attack), cell->position, cell->direction + engine::Vector3{0.0f, 0.72f, 0.0f}, 1.2f);
+            EmitDirectedPreset(magmaAttackVfx::kFlood.Resolve(&attack), cell->position, cell->direction + engine::Vector3{0.0f, 0.72f, 0.0f}, 1.2f);
 
             if (cell->leavesPool) {
                 SpawnMagmaPool(cell->position, cell->radius * 0.82f, 2.75f);
@@ -1178,7 +1234,7 @@ void EnemyMagmaSlime::UpdateMagmaFlood(float deltaTime) {
         cell->surface->Update(deltaTime);
         cell->surface->UpdateWorldMatrix(true);
 
-        // 先端の波頭を土台の前方に置いて別々に変形させ、流れが進むように見せる。
+        // 波頭を生成できたセルでは、土台の前方に波頭を置いて別々に変形させる。
         if (cell->crest) {
             cell->crest->SetTranslate(cell->position + cell->direction * (cell->radius * 0.52f) +
                                       engine::Vector3{0.0f, 0.35f + surge * 0.55f, 0.0f});
@@ -1190,7 +1246,7 @@ void EnemyMagmaSlime::UpdateMagmaFlood(float deltaTime) {
             cell->crest->UpdateWorldMatrix(true);
         }
 
-        // セルが重なった場所で連続被弾しないよう、全セルで再命中までの待ち時間を共有する。
+        // 再命中の待ち時間がなく、セルが十分に広がり透明になりすぎていない間だけ、高さと水平距離を調べる。
         if (GetTarget() && floodDamageTimer_ <= 0.0f && appear > 0.60f && fade > 0.30f &&
             std::abs(GetTarget()->GetWorldPosition().y - cell->position.y) <= kPoolVerticalTolerance &&
             PlanarDistance(GetTarget()->GetWorldPosition(), cell->position) <=
@@ -1205,30 +1261,31 @@ void EnemyMagmaSlime::UpdateMagmaFlood(float deltaTime) {
         if (localAge >= cell->lifetime) {
             cell = magmaFloodCells_.erase(cell);
         } else {
+            // 寿命内ならセルを残して次の要素へ進む。
             ++cell;
         }
     }
 }
 
 void EnemyMagmaSlime::UpdateChantVisual(float deltaTime) {
-    // 詠唱共通部品へ本体の実寸と攻撃状態を渡し、魔法陣の位置を追従させる。
+    // 作成済みの詠唱部品へ本体のワールド寸法と攻撃状態を渡す。未生成なら計算を省く。
     if (!chantVisual_)
         return;
     BossChantFrame frame;
     frame.casterPosition = GetWorldPosition();
     frame.groundPosition = FindGroundPoint(frame.casterPosition);
-    const Aabb bounds = GetModelWorldAabb();
+    const engine::Aabb bounds = GetModelWorldAabb();
     frame.casterRadius =
         (std::max)({(bounds.max.x - bounds.min.x) * 0.5f, (bounds.max.z - bounds.min.z) * 0.5f, baseScale_.x * 0.84f});
     frame.casterHeight = (std::max)(bounds.max.y - bounds.min.y, baseScale_.y * 1.2f);
     frame.sigilCenter =
         frame.casterPosition + lockedDirection_ * std::clamp(frame.casterRadius * 1.55f, 2.4f, 5.0f) +
         engine::Vector3{0.0f,
-                currentAttack_ == AttackKind::MagmaFlood ? frame.casterHeight * 0.35f : frame.casterHeight * 0.58f,
+                currentAttack_ == AttackKind::kMagmaFlood ? frame.casterHeight * 0.35f : frame.casterHeight * 0.58f,
                 0.0f};
     frame.forward = lockedDirection_;
-    frame.casting = attackState_ == AttackState::Windup;
-    frame.releasing = attackState_ == AttackState::Active;
+    frame.casting = attackState_ == AttackState::kWindup;
+    frame.releasing = attackState_ == AttackState::kActive;
     frame.windupProgress =
         frame.casting ? 1.0f - std::clamp(attackTimer_ / (std::max)(attackStateDuration_, 0.001f), 0.0f, 1.0f) : 1.0f;
     frame.activeElapsed = frame.releasing ? (std::max)(0.0f, attackStateDuration_ - attackTimer_) : 0.0f;

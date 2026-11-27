@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "GpuParticleSystem.h"
 #include "GpuParticleConfig.h"
 #include <unordered_map>
@@ -107,7 +108,7 @@ public:
     bool IsEmpty() const;
 
     /// <summary>稼働中のシステム数を返します。</summary>
-    int GetActiveSystemCount() const;
+    std::int32_t GetActiveSystemCount() const;
 
     /// <summary>直近の更新に要した CPU 時間をミリ秒で返します。</summary>
     float GetLastUpdateCpuTimeMs() const { return lastUpdateCpuTimeMs_; }

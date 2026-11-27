@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "enemyType": "Bomber",
+  "displayName": "ボムスライム",
+  "attacks": [
+    {
+      "id": "player_bomb_place",
+      "displayName": "コピー設置ボム・反動",
+      "playerMovement": {"enabled": true, "duration": 0.28, "groundSpeedScale": 0.15, "airSpeedScale": 0.45, "airResponse": 15},
+      "sequence": { "enabled": false, "binding": "player_special" }
+    },
+    {
+      "id": "player_bomb_throw",
+      "displayName": "コピーボム投擲・反動",
+      "playerMovement": {"enabled": true, "duration": 0.18, "groundSpeedScale": 0.45, "airSpeedScale": 0.65, "airResponse": 12},
+      "sequence": { "enabled": false, "binding": "player_special" }
+    },
+    {
+      "id": "player_bomb_blast_jump",
+      "displayName": "コピー爆風ジャンプ・踏み切り",
+      "playerMovement": {"enabled": true, "duration": 0.12, "groundSpeedScale": 0, "airSpeedScale": 0.7, "airResponse": 10},
+      "sequence": { "enabled": false, "binding": "player_special" }
+    }
+  ]
+}

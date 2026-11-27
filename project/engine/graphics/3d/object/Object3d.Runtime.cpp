@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include <cstdint>
 #include "Object3D.h"
 #include "EditorPropertyRegistry.h"
 #include "Object3DTransformUtils.h"
@@ -34,7 +35,6 @@ namespace engine {
 // Object3D 実行時補助処理
 // ------------------------------------------------------------------------
 // GhostRecorder連携、Clone、Shadow/LocalFog描画、CopyFromを担当する。
-// 生成済みオブジェクトの複製やランタイム補助はここにまとめる。
 // ========================================================================
 void Object3D::InitializeRecorder(SceneManager* sceneManager) {
     // 古い記録器の接続を先に解放し、このオブジェクトを新しい再生対象へ結び直す。
@@ -58,6 +58,7 @@ std::unique_ptr<Object3D> Object3D::Clone() const {
     return newObj;
 }
 
+// 保存用の識別子として、乱数にバージョンとバリアントのビットを設定した UUID を返す。
 std::string Object3D::GeneratePersistentGuid() {
     std::array<unsigned char, 16> bytes{};
     std::random_device random;
@@ -79,7 +80,7 @@ std::string Object3D::GeneratePersistentGuid() {
             stream << '-';
         }
 
-        stream << std::setw(2) << static_cast<unsigned int>(bytes[index]);
+        stream << std::setw(2) << static_cast<std::uint32_t>(bytes[index]);
     }
 
     return stream.str();
@@ -94,12 +95,15 @@ bool Object3D::IsPersistentGuidValid(std::string_view guid) {
     for (std::size_t index = 0; index < guid.size(); ++index) {
         const bool isSeparator = index == 8 || index == 13 || index == 18 || index == 23;
 
+        // 区切りを置く4位置では、16進数としてではなくハイフンとして検証する。
         if (isSeparator) {
+            // 区切りが欠落していれば、36文字でも別形式として拒否する。
             if (guid[index] != '-')
                 return false;
             continue;
         }
 
+        // 区切り以外に16進文字でない文字を見つけた時点で拒否する。
         if (std::isxdigit(static_cast<unsigned char>(guid[index])) == 0) {
             return false;
         }
@@ -173,12 +177,12 @@ void Object3D::SetParticleName(const std::string& name) {
 
 const std::string& Object3D::GetParticleName() const {
     // 未追加時には参照寿命が安定した空文字列を返す。
-    static const std::string empty;
-    return particleEmitterComponent_ ? particleEmitterComponent_->GetCpuParticle() : empty;
+    static const std::string kEmpty;
+    return particleEmitterComponent_ ? particleEmitterComponent_->GetCpuParticle() : kEmpty;
 }
 
 void Object3D::SetGpuParticleName(const std::string& name) {
-    // GPUプリセットが指定された場合だけ粒子Componentを実体化する。
+    // GPU 名が空で未追加の場合は作らない。追加済みなら空を指定して現在のプリセットを解除できる。
     if (!particleEmitterComponent_ && name.empty())
         return;
     EnsureParticleEmitterComponent()->SetGpuParticle(name);
@@ -186,8 +190,8 @@ void Object3D::SetGpuParticleName(const std::string& name) {
 
 const std::string& Object3D::GetGpuParticleName() const {
     // GPU設定が無い場合も空文字列の参照を安全に返す。
-    static const std::string empty;
-    return particleEmitterComponent_ ? particleEmitterComponent_->GetGpuParticle() : empty;
+    static const std::string kEmpty;
+    return particleEmitterComponent_ ? particleEmitterComponent_->GetGpuParticle() : kEmpty;
 }
 
 MeshEffectComponent* Object3D::EnsureMeshEffectComponent() {
@@ -234,12 +238,12 @@ void Object3D::SetMeshEffect1Name(const std::string& name) {
 
 const std::string& Object3D::GetMeshEffect1Name() const {
     // 主効果が無い場合は静的な空文字列を返し、参照先の寿命を保つ。
-    static const std::string empty;
-    return meshEffectComponent_ ? meshEffectComponent_->GetPrimaryEffect() : empty;
+    static const std::string kEmpty;
+    return meshEffectComponent_ ? meshEffectComponent_->GetPrimaryEffect() : kEmpty;
 }
 
 void Object3D::SetMeshEffect2Name(const std::string& name) {
-    // 副効果を設定した場合だけComponentを作成する。
+    // 副効果名が空で未追加の場合は作らない。既存の枠に対する空の指定は解除として反映する。
     if (!meshEffectComponent_ && name.empty())
         return;
     EnsureMeshEffectComponent()->SetSecondaryEffect(name);
@@ -247,8 +251,8 @@ void Object3D::SetMeshEffect2Name(const std::string& name) {
 
 const std::string& Object3D::GetMeshEffect2Name() const {
     // 副効果が未設定なら寿命の安定した空文字列を返す。
-    static const std::string empty;
-    return meshEffectComponent_ ? meshEffectComponent_->GetSecondaryEffect() : empty;
+    static const std::string kEmpty;
+    return meshEffectComponent_ ? meshEffectComponent_->GetSecondaryEffect() : kEmpty;
 }
 
 PathMoverComponent* Object3D::EnsurePathMoverComponent() {
@@ -269,6 +273,7 @@ bool Object3D::RemovePathMoverComponent() {
 
     pathMoverComponent_.reset();
 
+    // 記録器がある場合は、Component を外した後に以前の経路を停止する。
     if (recorder_) {
         recorder_->Stop();
     }
@@ -288,7 +293,7 @@ const PathMoverComponent* Object3D::GetPathMoverComponent() const {
 }
 
 void Object3D::SetRecordPathName(const std::string& name) {
-    // 実際に経路名を指定した場合だけ移動Componentを作成する。
+    // 未追加の物へ空の記録名を渡しても作成しない。既存の設定では記録名を解除できる。
     if (!pathMoverComponent_ && name.empty())
         return;
     EnsurePathMoverComponent()->SetPathName(name);
@@ -296,8 +301,8 @@ void Object3D::SetRecordPathName(const std::string& name) {
 
 const std::string& Object3D::GetRecordPathName() const {
     // 経路Componentが無い場合でも安全な空文字列参照を返す。
-    static const std::string empty;
-    return pathMoverComponent_ ? pathMoverComponent_->GetPathName() : empty;
+    static const std::string kEmpty;
+    return pathMoverComponent_ ? pathMoverComponent_->GetPathName() : kEmpty;
 }
 
 void Object3D::SetRecordLoop(bool loop) {
@@ -357,7 +362,7 @@ const GameplayLinkComponent* Object3D::GetGameplayLinkComponent() const {
 
 void Object3D::ApplyWorldMatrix(const engine::Matrix4x4& worldMatrix) {
     // 入力行列からローカル姿勢を組み立てます。親付きでワールド姿勢を維持するには、親の逆変換を呼び出し側で適用します。
-    Object3DTransformUtils::ApplyMatrixToTransform(transform_, worldMatrix);
+    object3DTransformUtils::ApplyMatrixToTransform(transform_, worldMatrix);
     UpdateLocalMatrix();
     UpdateWorldMatrix();
 }
@@ -391,26 +396,26 @@ const NavAgentComponent* Object3D::GetNavAgentComponent() const {
     return navAgentComponent_ ? &*navAgentComponent_ : nullptr;
 }
 
-void Object3D::SetEventId(int id) {
+void Object3D::SetEventId(std::int32_t id) {
     // 無効IDだけのオブジェクトには空の接続Componentを作らない。
     if (!gameplayLinkComponent_ && id < 0)
         return;
     EnsureGameplayLinkComponent()->SetEventId(id);
 }
 
-int Object3D::GetEventId() const {
+std::int32_t Object3D::GetEventId() const {
     // 接続Componentが無ければ-1を未設定IDとして返す。
     return gameplayLinkComponent_ ? gameplayLinkComponent_->GetEventId() : -1;
 }
 
-void Object3D::SetTargetId(int id) {
-    // 有効な接続先があるときだけComponentを確保する。
+void Object3D::SetTargetId(std::int32_t id) {
+    // 未追加かつ負の ID なら接続設定を作らない。設定済みの物には解除用の値も反映する。
     if (!gameplayLinkComponent_ && id < 0)
         return;
     EnsureGameplayLinkComponent()->SetTargetId(id);
 }
 
-int Object3D::GetTargetId() const {
+std::int32_t Object3D::GetTargetId() const {
     // 接続先が無い場合は-1を返し、通常のIDと区別する。
     return gameplayLinkComponent_ ? gameplayLinkComponent_->GetTargetId() : -1;
 }
@@ -441,20 +446,28 @@ void* Object3D::FindBuiltInComponent(std::string_view typeId) {
 
 const void* Object3D::FindBuiltInComponent(std::string_view typeId) const {
     // 編集用の型IDから組み込みComponent実体へ対応付ける。
+    // 変形は Value として常に存在するため、直接そのアドレスを返す。
     if (typeId == kTransformComponentType)
         return &transform_;
+    // 描画型を要求された場合は、生成済みのレンダラーを返す。
     if (typeId == kMeshRendererComponentType)
         return meshRenderer_.get();
+    // 判定型の指定では、現在の Collider を返す。
     if (typeId == kColliderComponentType)
         return collider_.get();
+    // 粒子型では、未追加なら nullptr を返す取得経路を使う。
     if (typeId == kParticleEmitterComponentType)
         return GetParticleEmitterComponent();
+    // メッシュ効果型では、現在の効果設定を生成せずに返す。
     if (typeId == kMeshEffectComponentType)
         return GetMeshEffectComponent();
+    // 移動型では、記録した経路の設定を取得する。
     if (typeId == kPathMoverComponentType)
         return GetPathMoverComponent();
+    // 接続型では、送受信 ID を持つ設定の実体を返す。
     if (typeId == kGameplayLinkComponentType)
         return GetGameplayLinkComponent();
+    // 探索型では、NavAgent が存在するときにその設定を返す。
     if (typeId == kNavAgentComponentType)
         return GetNavAgentComponent();
     return nullptr;
@@ -465,6 +478,7 @@ void Object3D::DrawShadow() {
     // 非表示とカメラオブジェクトは影パスへ送らない。
     if (!GetIsRenderVisible() || IsCameraObject())
         return;
+    // 描画を許可された Object でも、Renderer があるものだけ影パスへ渡す。
     if (meshRenderer_) {
         meshRenderer_->DrawShadow();
     }
@@ -481,12 +495,14 @@ void Object3D::DrawShadowOnly() {
     // 影だけの描画でも可視性とカメラ除外の条件を本体描画と揃える。
     if (!GetIsRenderVisible() || IsCameraObject())
         return;
+    // Renderer がある場合は、影のみを描く経路を呼ぶ。
     if (meshRenderer_) {
         meshRenderer_->DrawShadowOnly();
     }
 }
 
 void Object3D::DrawLocalFog(uint32_t depthSrvHandle) {
+    // 現在のビューで描画対象となり、メッシュの描画先もある場合だけ霧を描く。
     if (GetIsRenderVisible() && meshRenderer_) {
         // 深度を参照する霧の描画はメッシュレンダラーの専用パスへ渡す。
         meshRenderer_->DrawLocalFog(depthSrvHandle);
@@ -500,10 +516,11 @@ engine::MeshRenderer::LocalFogData* Object3D::GetLocalFogData() {
 
 // 配置設定を写す。Object階層の付け替えはここでは行わず、再生中の表示物も複製しない。
 void Object3D::CopyFrom(const Object3D* other) {
+    // コピー元が無ければ、複製先の各設定を初期化し直さない。
     if (!other)
         return;
 
-    // 1. 基本設定・識別子
+    // 名前・分類・見た目などのシーン設定を写し、複製先の識別子を保持する。
     this->name_ = other->name_;
 
     // 複製先にはInitialize時に発行した別GUIDを維持します。
@@ -527,51 +544,56 @@ void Object3D::CopyFrom(const Object3D* other) {
     this->cameraOcclusionMode_ = other->cameraOcclusionMode_;
     this->prefabInstanceInfo_ = other->prefabInstanceInfo_;
 
+    // コピー元にモデル指定がある場合だけ、各種描画設定に先立って適用する。
     if (!other->GetModelName().empty()) {
         // モデルの設定でコライダーと材質の初期値が変わるため、複製元の調整値を戻すより先に設定します。
         this->SetModel(other->GetModelName());
     }
 
-    // 2. Transform構造体 (位置・回転・クォータニオン・スケールを完全コピー)
+    // ローカルの変形値と姿勢表現の方式を引き継ぐ。
     this->transform_ = other->transform_;
 
-    // 3. Collider ＆ 衝突属性
+    // 両方に衝突の実体がある場合だけ、形状・ビット属性・地形データを移す。
     if (collider_ && other->collider_) {
         this->SetColliderConfig(other->GetColliderConfig());
         this->SetCollisionAttribute(other->GetCollisionAttribute());
         this->SetCollisionMask(other->GetCollisionMask());
 
+        // 元が地形の判定データを持っていれば、参照パスと一緒に更新する。
         if (const engine::TerrainCollisionData* terrain = other->GetTerrainCollisionData()) {
             this->SetTerrainCollisionData(*terrain, other->GetTerrainCollisionPath());
+        // 地形の設定がなければ、複製先に以前の地形が残らないよう消す。
         } else {
             terrainCollisionPath_.clear();
             collider_->ClearTerrainData();
         }
     }
 
-    // 4. イベント関連
+    // イベントの接続と経路探索の設定を移す。
     this->eventType_ = other->eventType_;
     this->gameplayLinkComponent_ = other->gameplayLinkComponent_;
     this->navAgentComponent_ = other->navAgentComponent_;
 
-    // 5. Stats (Param)
+    // 敵などの Parameter と登録済みの型固有項目を移す。
     this->param_ = other->param_;
     // 設定値だけを複製し、台帳のGetter/Setterや移動中の状態はコピーしません。
     EditorPropertyRegistry::GetInstance()->ReadClassProperties(*this, other->SerializeFeatureComponents());
 
-    // 6. MeshRendererはMaterial Instanceと同じ共通変換を使い、項目追加時のコピー漏れを防ぎます。
+    // 両側にレンダラーがあれば、Material Instance の共通変換で材質と描画メッシュの番号を移す。
     if (meshRenderer_ && other->meshRenderer_) {
         MaterialInstanceAsset::Apply(MaterialInstanceAsset::Capture(*other), *this);
         this->SetMeshDrawIndex(other->GetMeshDrawIndex());
     }
 
 
-    // 7. アニメーション
+    // アニメーションの名前とループ設定を移し、コントローラーは指定の有無に合わせる。
     this->animName_ = other->animName_;
     this->isAnimLoop_ = other->isAnimLoop_;
 
+    // 元のコントローラーにパスがあれば、複製先でもその定義を読み込む。
     if (!other->GetAnimatorControllerPath().empty()) {
         this->SetAnimatorController(other->GetAnimatorControllerPath());
+    // 元にパスがない場合は、複製先に以前のコントローラーを残さない。
     } else {
         this->ClearAnimatorController();
     }
@@ -598,7 +620,6 @@ void Object3D::CopyFrom(const Object3D* other) {
             isCinematic);
     }
 
-    // 9. ローカルフォグ (もし両方にフォグデータがあれば構造体ごとコピー)
     auto myFog = this->GetLocalFogData();
     auto otherFog = const_cast<Object3D*>(other)->GetLocalFogData();
 

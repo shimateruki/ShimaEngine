@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "engine/component/Collider.h"
 #include "engine/component/ConvexCollision.h"
 #include "json.hpp"
@@ -36,7 +37,7 @@ std::vector<engine::ModelSurfaceTriangle> ReadObj(const std::string& model) {
 
         if(kind=="v"){engine::Vector3 v{};tokens>>v.x>>v.y>>v.z;vertices.push_back(v);}
         if(kind=="f"){
-            std::vector<int> ids;
+            std::vector<std::int32_t> ids;
             std::string value;
             while(tokens>>value)
                 ids.push_back(std::stoi(value)-1);
@@ -55,7 +56,7 @@ int main(){
         Transform groundTransform;
         engine::Collider ground(&groundTransform);
         engine::ColliderConfig config;
-        config.type=ColliderType::Obb;
+        config.type=engine::ColliderType::kObb;
         config.useModelVolume=true;
         ground.SetConfig(config);
         ground.SetModelSurface(ReadObj("Stages/magma_fortress_foundation"));
@@ -69,7 +70,7 @@ int main(){
         Transform actorTransform;
         engine::Collider actor(&actorTransform);
         engine::ColliderConfig actorConfig;
-        actorConfig.type=ColliderType::Aabb;
+        actorConfig.type=engine::ColliderType::kAabb;
         actorConfig.size={.5f,.5f,.5f};
         actor.SetConfig(actorConfig);
         const auto contact=[&](engine::Vector3 position){actorTransform.translate=position;actorTransform.UpdateMatrix();return actor.CheckCollision(&ground);};
@@ -80,7 +81,7 @@ int main(){
         hit=contact({16.6f,-2,0});
         Require(hit.isColliding&&hit.normal.x>.8f,"box side contact");
         Require(!contact({16.5f,.5f,12.4f}).isColliding,"chamfer corner must be empty");
-        actorConfig.type=ColliderType::Sphere;
+        actorConfig.type=engine::ColliderType::kSphere;
         actor.SetConfig(actorConfig);
         hit=contact({16.6f,-2,0});
         Require(hit.isColliding&&hit.normal.x>.8f,"sphere side");
@@ -138,7 +139,7 @@ int main(){
         Require(slopedChild.RaycastModelVolume(deckCenter+engine::Vector3{0,10,0},
             {0,-1,0},20,distance,normal)&&normal.y>.5f&&std::abs(distance-10)<.2f,
             "scaled parent sloped child top ray");
-        actorConfig.type=ColliderType::Sphere;
+        actorConfig.type=engine::ColliderType::kSphere;
         actor.SetConfig(actorConfig);
         actorTransform.translate=deckCenter+normal*.4f;
         actorTransform.UpdateMatrix();
@@ -157,7 +158,7 @@ int main(){
             const auto hull=ground.GetWorldHull();
 
             for(const auto& t:triangles)for(const auto& p:{t.a,t.b,t.c})for(const auto& f:hull)
-                Require(ConvexCollision::Dot(ConvexCollision::Normal(f),p-f[0])<.0003f,"hull clips visible mesh");
+                Require(convexCollision::Dot(convexCollision::Normal(f),p-f[0])<.0003f,"hull clips visible mesh");
             const auto bounds=ground.GetAabb();
             const auto center=(bounds.min+bounds.max)*.5f;
             Require(ground.RaycastModelVolume({center.x,bounds.max.y+10,center.z},{0,-1,0},100,distance,normal)&&normal.y>0,"terrain top");
@@ -189,7 +190,7 @@ int main(){
         for (auto& e:entries) for(auto& parent:entries)
             if(e->data.value("parentGuid","")==parent->data.value("guid","?"))
                 e->transform.parent=&parent->transform;
-        for(int pass=0;pass<3;++pass)
+        for(std::int32_t pass=0;pass<3;++pass)
             for(auto& e:entries)
                 e->transform.UpdateMatrix();
         const auto pairsStart=std::chrono::steady_clock::now();
@@ -205,14 +206,14 @@ int main(){
             if (!(maskA&attrB) || !(maskB&attrA))
                 continue;
             const auto ba=first.collider->GetAabb(),bb=second.collider->GetAabb();
-            int cells=1;
+            std::int32_t cells=1;
 
-            for(int axis=0;axis<3;++axis){
+            for(std::int32_t axis=0;axis<3;++axis){
                 const float amin=axis==0?ba.min.x:axis==1?ba.min.y:ba.min.z;
                 const float amax=axis==0?ba.max.x:axis==1?ba.max.y:ba.max.z;
                 const float bmin=axis==0?bb.min.x:axis==1?bb.min.y:bb.min.z;
                 const float bmax=axis==0?bb.max.x:axis==1?bb.max.y:bb.max.z;
-                cells*=std::max(0,int(std::floor(std::min(amax,bmax)/5))-int(std::floor(std::max(amin,bmin)/5))+1);
+                cells*=std::max(0,std::int32_t(std::floor(std::min(amax,bmax)/5))-std::int32_t(std::floor(std::max(amin,bmin)/5))+1);
             }
 
             if(!cells)
@@ -221,7 +222,7 @@ int main(){
                 cells=1;
             const auto pairStart=std::chrono::steady_clock::now();
 
-            for(int repeat=0;repeat<cells;++repeat)
+            for(std::int32_t repeat=0;repeat<cells;++repeat)
                 first.collider->CheckCollision(second.collider.get());
             const auto ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-pairStart).count();
             if(ms>5)
@@ -256,7 +257,7 @@ int main(){
         // 門の中央には判定を置かず、左右の柱だけに接触することを子Colliderで確認する。
         bool touchedPost=false;
         size_t gateParts=0;
-        actorConfig.type=ColliderType::Aabb;
+        actorConfig.type=engine::ColliderType::kAabb;
         actor.SetConfig(actorConfig);
 
         for(const auto& obj:scene["objects"]){
@@ -265,7 +266,7 @@ int main(){
             Transform partTransform;
             engine::Collider part(&partTransform);
             engine::ColliderConfig partConfig;
-            partConfig.type=ColliderType::Obb;
+            partConfig.type=engine::ColliderType::kObb;
             const auto& col=obj.at("collider");
             partConfig.center={col["center"][0],col["center"][1],col["center"][2]};
             partConfig.size={col["size"][0],col["size"][1],col["size"][2]};
@@ -285,7 +286,7 @@ int main(){
         ground.SetModelSurface(ReadObj("Stages/magma_fortress_foundation"));
         const auto performanceStart=std::chrono::steady_clock::now();
 
-        for(int i=0;i<1000;++i)
+        for(std::int32_t i=0;i<1000;++i)
             Require(contact({0,.25f,0}).isColliding,"repeated top contact");
         std::cout<<"1000 contacts ms="<<std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-performanceStart).count()<<'\n';
         std::cout<<"PASS top/bottom/side, chamfer, sphere/box, parent scale, slope; terrain="<<count

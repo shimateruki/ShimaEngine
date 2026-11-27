@@ -21,7 +21,7 @@
 #include "EditorToolSettings.h"
 #include "IconsFontAwesome5.h"
 
-namespace CameraEditorImplementation {
+namespace cameraEditorImplementation {
     inline constexpr float kPi = std::numbers::pi_v<float>;
     inline constexpr const char* kCameraModelGizmoName = "Editor/camera_gizmo";
     inline constexpr bool kShowLegacyCameraEditor = false;
@@ -62,5 +62,5 @@ namespace CameraEditorImplementation {
 
     engine::Vector3 GetObjectWorldForward(const engine::Object3D* object);
 
-    bool IsValidFocusBounds(const Aabb& bounds);
+    bool IsValidFocusBounds(const engine::Aabb& bounds);
 }

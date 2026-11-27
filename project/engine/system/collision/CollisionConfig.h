@@ -5,6 +5,8 @@
 #include <vector>
 #include "engine/utility/math/Math.h"
 
+namespace engine {
+
 /// <summary>JSONで定義する衝突カテゴリ。idは保存用の不変キー、bitは実行時のビット値です。</summary>
 struct CollisionCategoryDefinition {
     std::string id;
@@ -12,7 +14,7 @@ struct CollisionCategoryDefinition {
     uint32_t bit = 0;
 };
 
-namespace CollisionCategories {
+namespace collisionCategories {
 /// <summary>カテゴリIDに対応するビットを取得する。未登録の場合は0を返します。</summary>
 uint32_t Get(std::string_view id);
 
@@ -39,20 +41,20 @@ uint32_t GetKnownMask();
 
 /// <summary>従来の0～7番ビットを対象にしていた配置物の既定Maskを再現します。</summary>
 uint32_t GetDefaultGameplayMask();
-} // namespace CollisionCategories
+} // namespace collisionCategories
 
 /// <summary>
 /// コライダー（あたり判定）の形状タイプ
 /// </summary>
 // ColliderTypeは、Colliderが使う形状の種類を表します。
 enum class ColliderType {
-    None,   // 当たり判定なし
-    Sphere, // 球
-    Aabb,   // Aabb（回転しない箱）
-    Obb,
-    Cylinder,
-    Ring,   // リング（ドーナツ型・衝撃波用）
-    Terrain // 高さ付き地形
+    kNone,   // 当たり判定なし
+    kSphere, // 球
+    kAabb,   // Aabb（回転しない箱）
+    kObb,
+    kCylinder,
+    kRing,   // リング（ドーナツ型・衝撃波用）
+    kTerrain // 高さ付き地形
 };
 
 // AABB構造体
@@ -91,7 +93,7 @@ struct Cylinder {
 // CollisionInfoは、衝突有無、法線、めり込み量など判定結果をまとめます。
 struct CollisionInfo {
     bool isColliding = false;   // 衝突しているか
-    engine::Vector3 normal = engine::Vector3::ZERO; // 衝突法線 (押し戻す方向)
+    engine::Vector3 normal = engine::Vector3::kZero; // 衝突法線 (押し戻す方向)
     float penetration = 0.0f;   // めり込み量
 };
 
@@ -99,13 +101,13 @@ struct CollisionInfo {
 /// 衝突面（法線）がどの方向を向いているかを示す
 /// </summary>
 enum class CollisionFace {
-    Top,    // 上面 (Y+)
-    Bottom, // 底面 (Y-)
-    Right,  // 右面 (X+)
-    Left,   // 左面 (X-)
-    Front,  // 正面 (Z+)
-    Back,   // 背面 (Z-)
-    Other   // 斜め
+    kTop,    // 上面 (Y+)
+    kBottom, // 底面 (Y-)
+    kRight,  // 右面 (X+)
+    kLeft,   // 左面 (X-)
+    kFront,  // 正面 (Z+)
+    kBack,   // 背面 (Z-)
+    kOther   // 斜め
 };
 
 /// <summary>
@@ -135,3 +137,5 @@ CollisionInfo CheckRingObbCollision(const Ring& ring, const Obb& obb);
 // --- 円柱関連の衝突判定 ---
 CollisionInfo CheckCylinderSphereCollision(const Cylinder& cyl, const engine::Vector3& spherePos, float sphereRadius);
 CollisionInfo CheckCylinderObbCollision(const Cylinder& cyl, const Obb& obb);
+
+} // namespace engine

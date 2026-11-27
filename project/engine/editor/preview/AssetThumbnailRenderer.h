@@ -107,7 +107,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> pbrPreviewLightResource_;
     Microsoft::WRL::ComPtr<ID3D12Resource> pbrPreviewPointLightsResource_;
     Microsoft::WRL::ComPtr<ID3D12Resource> pbrPreviewSpotLightsResource_;
-    const int kThumbnailSize = 256;
+    const std::int32_t kThumbnailSize = 256;
 
     std::map<std::string, uint64_t> presetThumbnailUseFence_;
 

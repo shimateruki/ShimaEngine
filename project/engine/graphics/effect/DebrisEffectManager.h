@@ -24,10 +24,10 @@ struct DebrisEffectConfig {
     std::string name = "shared/rock_burst";
     std::vector<std::string> modelNames = { "Primitives/cube" };
 
-    int spawnCount = 18;
+    std::int32_t spawnCount = 18;
     // 発生点からのオフセットと各軸のばらつき半幅はワールド距離。
     engine::Vector3 spawnOffset = { 0.0f, 0.4f, 0.0f };
-    engine::Vector3 spawnBoxHalfExtents = engine::Vector3::ZERO;
+    engine::Vector3 spawnBoxHalfExtents = engine::Vector3::kZero;
 
     engine::Vector3 baseDirection = { 0.0f, 0.0f, 1.0f };
     float horizontalSpread = 1.0f;
@@ -58,7 +58,7 @@ struct DebrisEffectConfig {
     float fadeStartRatio = 0.72f;
 
     engine::Vector4 color = { 0.62f, 0.55f, 0.48f, 1.0f };
-    int materialType = 0;
+    std::int32_t materialType = 0;
     float roughness = 0.5f;
     float metallic = 0.0f;
 
@@ -107,7 +107,7 @@ public:
     float GetTimeScale() const { return timeScale_; }
 
     /// <summary>表示中の破片数を返す。</summary>
-    int GetActivePieceCount() const;
+    std::int32_t GetActivePieceCount() const;
 
     /// <summary>指定フォルダ内の破片プリセットJSONを一括で読み込む。</summary>
     void LoadAllPresets(const std::string& directoryPath);
@@ -144,8 +144,8 @@ private:
     // 関連：DebrisEffectManager（この型を使う機能の本体）
     struct DebrisPiece {
         engine::Model* model = nullptr;
-        engine::Vector3 position = engine::Vector3::ZERO;
-        engine::Vector3 rotation = engine::Vector3::ZERO;
+        engine::Vector3 position = engine::Vector3::kZero;
+        engine::Vector3 rotation = engine::Vector3::kZero;
 
         Microsoft::WRL::ComPtr<ID3D12Resource> wvpResource;
         Microsoft::WRL::ComPtr<ID3D12Resource> shadowWvpResource;
@@ -155,8 +155,8 @@ private:
         engine::MeshRenderer::TransformationMatrix* shadowWvpData = nullptr;
         engine::MeshRenderer::MaterialData* materialData = nullptr;
 
-        engine::Vector3 velocity = engine::Vector3::ZERO; // 破片の移動速度（ワールド単位/秒）。
-        engine::Vector3 angularVelocity = engine::Vector3::ZERO; // 破片の角速度（ラジアン/秒）。
+        engine::Vector3 velocity = engine::Vector3::kZero; // 破片の移動速度（ワールド単位/秒）。
+        engine::Vector3 angularVelocity = engine::Vector3::kZero; // 破片の角速度（ラジアン/秒）。
 
         float age = 0.0f;
         float lifetime = 1.0f; // 破片の寿命（秒）。
@@ -200,7 +200,7 @@ private:
     float RandomRange(float minValue, float maxValue);
 
     // 候補が一つ以下なら乱数を消費せず、配列外参照を防ぐ。
-    int RandomIndex(int maxExclusive);
+    std::int32_t RandomIndex(std::int32_t maxExclusive);
 
     // 基準方向へ水平拡散と垂直範囲を加え、最後に単位方向へ正規化する。
     engine::Vector3 RandomDirection(const DebrisEffectConfig& config);

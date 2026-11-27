@@ -13,9 +13,9 @@
 
 /// <summary>CPUパーティクルの発生領域の形。</summary>
 enum class EmitterType {
-    Box,
-    Sphere,
-    Cone,
+    kBox,
+    kSphere,
+    kCone,
 };
 
 /// <summary>
@@ -70,17 +70,17 @@ public:
     /// <summary>エディタで編集できる自動発生と粒子の初期値。</summary>
     // 関連：ParticleSystem（この型を使う機能の本体）
     struct EmitterParams {
-        engine::Vector3 spawnPosition = engine::Vector3::ZERO;      // 発生座標
+        engine::Vector3 spawnPosition = engine::Vector3::kZero;      // 発生座標
         engine::Vector3 spawnArea = { 1.0f, 1.0f, 1.0f };          // 発生範囲 (ランダム幅)
         engine::Vector3 initialVelocity = { 0.0f, 1.0f, 0.0f };    // 初速
         engine::Vector3 velocityRandomness = { 0.5f, 0.5f, 0.5f }; // 初速のランダム幅
         // 毎秒の速度変化を表す加速度（ワールド単位/秒²）。発生時に各粒子へ渡します。
-        engine::Vector3 acceleration = engine::Vector3::ZERO;
-        int emitCount = 1;                 // 単発発生1回あたりの粒子数
+        engine::Vector3 acceleration = engine::Vector3::kZero;
+        std::int32_t emitCount = 1;                 // 単発発生1回あたりの粒子数
         float particlesPerSecond = 10.0f; // 毎秒の発生数
         float particleLifetime = 2.0f;    // パーティクルの生存期間
 
-        engine::Vector4 startColor = engine::Colors::White; // 開始時の色
+        engine::Vector4 startColor = engine::colors::kWhite; // 開始時の色
         engine::Vector4 endColor = { 1.0f, 1.0f, 1.0f, 0.0f };   // 終了時の色
 
         float startSize = 1.0f; // 開始時のサイズ
@@ -94,10 +94,10 @@ public:
         VfxFloatCurve sizeOverLife;
         VfxColorGradient colorOverLife;
         VfxLodSettings lod;
-        ParticleBlendMode blendMode = ParticleBlendMode::Alpha;
+        ParticleBlendMode blendMode = ParticleBlendMode::kAlpha;
         float initialRotationSpeed = 0.0f;      // 基本の回転スピード
         float rotationSpeedRandomness = 0.0f;   // 回転スピードのバラつき
-        EmitterType emitterType = EmitterType::Box;
+        EmitterType emitterType = EmitterType::kBox;
 
         // Sphere / Cone の発生領域で使用する。
         float spawnRadius = 1.0f; // 半径
@@ -122,11 +122,11 @@ public:
     /// <param name="count">発生させる粒子数。</param>
     /// <param name="direction">指定時はこの方向を基準に初速を決める。</param>
     /// <param name="spreadAngle">X・Y回転に使う散らばり角（ラジアン）。各軸で±半分の範囲から選ぶ。</param>
-    void SpawnParticles(const engine::Vector3& position, int count,
+    void SpawnParticles(const engine::Vector3& position, std::int32_t count,
         float initialSpeed = 2.0f,
         const engine::Vector3* direction = nullptr,
         float spreadAngle = 0.0f,
-        engine::Vector4 initialColor = engine::Colors::White,
+        engine::Vector4 initialColor = engine::colors::kWhite,
         engine::Vector4 endColor = { 1,1,1,0 },
         float lifeTimeMin = 1.0f, float lifeTimeMax = 3.0f,
         float startSize = 1.0f,
@@ -164,7 +164,7 @@ public:
     size_t GetEstimatedMemoryBytes() const;
 
     /// <summary>このシステムが保持できる粒子数の上限を返す。</summary>
-    static constexpr int GetMaxParticles() { return kMaxParticles; }
+    static constexpr std::int32_t GetMaxParticles() { return kMaxParticles; }
 
     /// <summary>発生設定の読み取りと適用。シミュレーションのリセットは行わない。</summary>
     const EmitterParams& GetEmitterParams() const { return params_; }
@@ -190,7 +190,7 @@ public:
     void SpawnSlashEffect(const engine::Vector3& position, float baseRotation = 0.0f);
 
     /// <summary>指定回数の連続ヒット用粒子を発生させる。</summary>
-    void SpawnContinuousHitEffect(const engine::Vector3& position, int count,
+    void SpawnContinuousHitEffect(const engine::Vector3& position, std::int32_t count,
         float initialSpeed,
         engine::Vector4 color,
         float lifeTimeMin, float lifeTimeMax,
@@ -215,7 +215,7 @@ private:
     std::size_t ResolveParticleLimit(const EmitterParams& params) const;
 
     // CPUで保持し、描画インスタンスとして転送できる粒子数の上限。
-    static const int kMaxParticles = 1024;
+    static const std::int32_t kMaxParticles = 1024;
 
     // ParticleCommonの描画PSOを借用する。寿命は呼び出し側が保証する。
     engine::ParticleCommon* common_ = nullptr;
@@ -258,7 +258,7 @@ private:
     float simulationTimeScale_ = 1.0f;
 
     // エディタプレビューだけで加算する表示位置の差分。
-    engine::Vector3 editorPreviewOffset_ = engine::Vector3::ZERO;
+    engine::Vector3 editorPreviewOffset_ = engine::Vector3::kZero;
 
     // 直近のUpdateとDrawで測ったCPU処理時間（ミリ秒）。
     float lastUpdateCpuTimeMs_ = 0.0f;

@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "Model.h"
 #include "Easing.h"
 #include <numbers>
@@ -32,7 +33,9 @@ class PlayerWhipDeformer final {
         std::vector<bool> body;
     };
 public:
+    // 専用の変形モデルを作る元になったモデルを借用参照で返す。
     engine::Model* GetSource() const { return source_; }
+    // レンダラーへ渡す変形専用のモデルを借用参照で返す。
     engine::Model* GetModel() const { return model_.get(); }
 
     // 元モデルのCPUデータを複製・細分化して専用モデルを作る。元のModelは変更しない。
@@ -42,11 +45,12 @@ public:
         source_ = source;
         center_ = source->GetCenter();
         half_ = source->GetSize() * 0.5f;
+        // どれかの軸がほぼゼロの場合は、体表を正規化できないため初期化に失敗する。
         if (half_.x < 0.001f || half_.y < 0.001f || half_.z < 0.001f) return false;
         engine::Model::ModelData data = source->GetModelData();
         for (auto& mesh : data.meshes) {
             Surface surface;
-            // 接続成分を調べ、4頂点の目などを面積の大きな体表と区別します。
+            // 頂点を三角形でたどって連結成分を作り、17頂点以上ある成分を本体として扱う。
             std::vector<size_t> parent(mesh.vertices.size());
             std::iota(parent.begin(), parent.end(), size_t{0});
             auto root = [&parent](size_t i) {
@@ -62,10 +66,11 @@ public:
             for (size_t i = 0; i < parent.size(); ++i) ++counts[root(i)];
             for (size_t i = 0; i < parent.size(); ++i) surface.body.push_back(counts[root(i)] > 16);
             // 体表の輪郭を保ったまま3段階細分化。UV境界は元の対応を維持します。
-            for (int level = 0; level < 3; ++level) {
+            for (std::int32_t level = 0; level < 3; ++level) {
                 std::unordered_map<uint64_t, uint32_t> edges;
                 auto midpoint = [&](uint32_t a, uint32_t b) {
                     const uint64_t key = (uint64_t((std::min)(a,b)) << 32) | (std::max)(a,b);
+                    // 同じ辺の中点が生成済みなら頂点を再利用し、隣り合う三角形で境界が裂けないようにする。
                     if (auto it = edges.find(key); it != edges.end()) return it->second;
                     const auto va = mesh.vertices[a], vb = mesh.vertices[b];
                     engine::Model::VertexData v{};
@@ -82,7 +87,7 @@ public:
                 for (size_t i=0;i+2<mesh.indices.size();i+=3) {
                     const auto a=mesh.indices[i],b=mesh.indices[i+1],c=mesh.indices[i+2];
                     const float highest=(std::max)({mesh.vertices[a].position.y,mesh.vertices[b].position.y,mesh.vertices[c].position.y});
-                    // 変形しない下半身は細分化せず、元の輪郭と計算量を維持します。
+                    // 本体の頂点を含まない面や、頂点がすべて高さのしきい値以下の面は細分化しない。
                     if ((!surface.body[a] && !surface.body[b] && !surface.body[c]) || highest <= center_.y+half_.y*0.42f) {
                         indices.insert(indices.end(),{a,b,c});continue;
                     }
@@ -91,23 +96,28 @@ public:
                 }
                 mesh.indices = std::move(indices);
             }
+            // 複製した頂点の骨情報を空にし、元姿勢と毎フレームの出力用データを分けて保持する。
             for (auto& v : mesh.vertices) { v.boneWeights={0,0,0,0};v.boneIndices={0,0,0,0}; }
             surface.rest = mesh.vertices;surface.output = surface.rest;
             surfaces_.push_back(std::move(surface));
             mesh.vertexResource.Reset();mesh.indexResource.Reset();mesh.computeSkinnedVertexResource.Reset();
         }
+        // 元モデルの GPU バッファとは独立した頂点バッファを持つモデルを作る。
         model_ = std::make_unique<engine::Model>();
         model_->InitializeFromCpuData(common,std::move(data),"PlayerWhipSurface");
+        // 一つでも頂点バッファが生成されていなければ、変形専用モデルとして使えない。
         for (const auto& mesh : model_->GetModelData().meshes) if (!mesh.vertexResource) return false;
         return !surfaces_.empty();
     }
 
     template<size_t N>
+    // 曲線の各点は origin からのワールド座標差。rootAngle は度で、変形する体表の範囲を決める。
     void Update(const std::array<Vec,N>& curve, const Vec& origin, const engine::Matrix4x4& world,
                 float rootAngle, float lift, float thickness, float tipRadius = 0.22f,
                 float contactWeight = 0.0f, const Vec& contactNormal = {},
                 float returnProgress = 0.0f, float returnBulge = 0.0f,
                 float returnReceive = 0.0f, const PlayerWhipLaunchShape& launch = {}) {
+        // 変形専用のモデルが未生成なら、変形も頂点の転送も行わない。
         if (!model_) return;
         // 曲線の世界座標を、見た目の傾きや伸びが入った描画モデルの座標へ戻します。
         const auto inverse = engine::Math::Inverse(world);
@@ -119,6 +129,7 @@ public:
         const float launchProgress = std::clamp(launch.progress,0.0f,1.0f);
         const bool launching = launchProgress > 0.0f && launchProgress < 1.0f &&
             (launch.mound > 0.0f || launch.draw > 0.0f || launch.flow > 0.0f);
+        // 曲線が体の半径の半分より長い間は、付け根近くの点から今回の方向を求める。
         if (reach > worldRadius*0.5f)
             lastHeading_ = Unit(Vec{local[N/3].x-center_.x,0,local[N/3].z-center_.z},{0,0,1});
         else if (launching) {
@@ -142,10 +153,12 @@ public:
         // 理想球面ではなく実メッシュの頂点で最大値を求め、調整値にかかわらず先端を届かせます。
         float peakWeight=0.000001f;
         for (const auto& surface:surfaces_) for(size_t j=0;j<surface.rest.size();++j) {
+            // 独立した小部品や低い位置の頂点は、体表の最大変形量を求める候補から外す。
             if (!surface.body[j] || surface.rest[j].position.y <= center_.y+half_.y*0.42f) continue;
             const auto p=surface.rest[j].position;
             peakWeight=(std::max)(peakWeight,surfaceWeight({p.x,p.y,p.z}));
         }
+        // 先端の丸みの範囲と、振り始め・巻き戻しの膨らみが動く位置を先に求める。
         const float capSpan = std::clamp(tipRadius * 3.0f / (std::max)(reach, 0.001f), 0.04f, 0.28f);
         const float returnCenter = 1.0f - Easing::SmoothStep01(returnProgress);
         const float flowWeight = std::sin(std::numbers::pi_v<float> * std::clamp(returnProgress,0.0f,1.0f));
@@ -158,21 +171,26 @@ public:
         const float launchFlowWeight = launching ? launch.flow * std::sin(std::numbers::pi_v<float>*launchProgress) : 0.0f;
         auto deform = [&](const Vec& p) {
             const float t=std::clamp(surfaceWeight(p)/peakWeight,0.0f,1.0f);
+            // 変形範囲の外に近い頂点は、元の位置を保つ。
             if(t<0.000001f) return p;
             // 根元寄りの上半身だけに受け止めの丸みを作り、顔と接地面は保護します。
             Vec received{};
+            // 鞭が体へ戻る際の受け止め量が正の場合だけ、根元を外向きに膨らませる。
             if (receiveWeight > 0.0f) {
                 // 収まった後は中心も膨らませ、輪状の段差を残しません。
                 const float rootMask = Easing::SmoothStep01(t) * (1.0f-activation*t);
                 received = Unit(p-center_,{0,1,0}) * (half_.x * receiveWeight * rootMask);
             }
             Vec launched{};
+            // 振り始めに盛り上がりか絞りがある場合だけ、体表の予備動作を計算する。
             if (moundWeight > 0.0f || drawWeight > 0.0f) {
                 // 中心まで連続する盛り上がり。周囲だけを軽く絞り、顔と足元は動かしません。
                 const float gatherMask = 4.0f*t*(1.0f-t) * (1.0f-Easing::SmoothStep01(t/0.40f));
                 launched = axis * (half_.y*moundWeight*Easing::SmoothStep01(t)*(1.0f-activation));
+                // 絞りが有効なら、盛り上がりへ中心方向の変位を重ねる。
                 if (drawWeight > 0.0f) launched = launched - Unit(p-center_,{0,1,0})*(half_.x*drawWeight*gatherMask);
             }
+            // 鞭の伸びが始まっていなければ、体表の膨らみだけを適用する。
             if (activation <= 0) return p + received + launched;
             const float index=t*static_cast<float>(N-1);
             const auto i=(std::min)(static_cast<size_t>(index),N-2);
@@ -186,6 +204,7 @@ public:
             const float along=crossOffset.x*tangent.x+crossOffset.y*tangent.y+crossOffset.z*tangent.z;
             const auto transverse=crossOffset-tangent*along;
             auto narrowed=target-transverse*((1.0f-width)*4.0f*t*(1.0f-t)*0.20f);
+            // 振り始めか巻き戻しで移動する膨らみがある場合は、軌道に沿った横方向の変位を重ねる。
             if ((returnBulge > 0.0f && flowWeight > 0.0f) || launchFlowWeight > 0.0f) {
                 const float returnWave = returnBulge*flowWeight*(1.0f-Easing::SmoothStep01(std::abs(t-returnCenter)/0.35f));
                 const float launchWave = launchFlowWeight*(1.0f-Easing::SmoothStep01(std::abs(t-launchCenter)/0.35f));
@@ -222,10 +241,12 @@ public:
             auto& surface=surfaces_[m];
             for(size_t j=0;j<surface.rest.size();++j) {
                 const auto& rest=surface.rest[j];auto& out=surface.output[j];out=rest;
+                // 体表以外や高さのしきい値以下は、元頂点をコピーした状態のままにする。
                 if(!surface.body[j] || rest.position.y <= center_.y+half_.y*0.42f) continue;
                 const Vec p{rest.position.x,rest.position.y,rest.position.z};
                 const auto next=deform(p);
                 out.position={next.x,next.y,next.z,1};
+                // 変形による位置の差がほぼゼロの場合は、元の法線と接線を維持する。
                 if(engine::Math::Length(next-p)<0.000001f) continue;
                 // 位置だけでなく接平面も変形し、付け根の陰影が別部品に見えないようにします。
                 const auto n=Unit(rest.normal,{0,1,0});
@@ -240,6 +261,7 @@ public:
             // 作り直した頂点はこの表示専用モデルのバッファだけに転送します。
             const auto& resource=model_->GetModelData().meshes[m].vertexResource;
             void* mapped=nullptr;const D3D12_RANGE readRange{0,0};
+            // 書き込み先をマップできたメッシュだけ、頂点を転送してマッピングを解除する。
             if(SUCCEEDED(resource->Map(0,&readRange,&mapped))) {
                 std::memcpy(mapped,surface.output.data(),surface.output.size()*sizeof(engine::Model::VertexData));
                 resource->Unmap(0,nullptr);
@@ -247,6 +269,7 @@ public:
         }
     }
 private:
+    // ゼロに近いベクトルを正規化せず、計算ごとに指定された予備の方向を返す。
     static Vec Unit(const Vec& v,const Vec& fallback){const float length=engine::Math::Length(v);return length>0.000001f?v/length:fallback;}
     engine::Model* source_=nullptr;
     std::unique_ptr<engine::Model> model_;

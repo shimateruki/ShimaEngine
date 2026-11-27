@@ -9,14 +9,13 @@
 #include <chrono>
 
 
-// 静的メンバ変数の実体定義
 // 既定のモデル検索設定を保持する。
 const std::string ModelManager::kDefaultBaseDirectory = "Resources/3DModel/";
 const std::string ModelManager::kDefaultModelExtension = ".obj";
 ModelManager* ModelManager::GetInstance() {
     // 関数内 static の寿命管理に任せ、明示的な終了処理ではGPUリソースだけ解放する。
-    static ModelManager instance;
-    return &instance;
+    static ModelManager sInstance;
+    return &sInstance;
 }
 
 void ModelManager::Initialize(engine::DirectXCommon* dxCommon) {
@@ -37,10 +36,10 @@ void ModelManager::Finalize() {
 
 
 engine::Model* ModelManager::LoadModel(const std::string& modelName) {
-    // すでに同じキーで読み込まれている場合は、GPUリソースを作り直さず再利用する。
     {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
 
+        // 要求名でGPUモデルを登録済みなら、同じ参照を返して再ロードを省く。
         if (models_.contains(modelName)) {
             return models_[modelName].get();
         }
@@ -52,7 +51,6 @@ engine::Model* ModelManager::LoadModel(const std::string& modelName) {
     std::string stem = path.stem().string();
     std::string ext = path.extension().string();
 
-    // 事前ロードは拡張子なしのキーで登録されるため、gltf指定でも同じモデルを再利用する
     // 拡張子付きで指定された場合でも、拡張子なしキーやフォルダキーの既存登録を優先して探す。
     if (!ext.empty()) {
         std::string extensionlessKey = parentPath.empty() ? stem : parentPath + "/" + stem;
@@ -62,10 +60,12 @@ engine::Model* ModelManager::LoadModel(const std::string& modelName) {
         {
             std::lock_guard<std::recursive_mutex> lock(mutex_);
 
+            // 拡張子を除いたキーで登録済みなら、その先読みモデルを再利用する。
             if (models_.contains(extensionlessKey)) {
                 return models_[extensionlessKey].get();
             }
 
+            // フォルダー代表のファイル名で指定され、フォルダーキーの登録がある場合も再利用する。
             if (isFolderMainModel && models_.contains(parentPath)) {
                 return models_[parentPath].get();
             }
@@ -90,6 +90,7 @@ engine::Model* ModelManager::LoadModel(const std::string& modelName) {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
         auto prepared = preparedModels_.find(modelName);
 
+        // 先読み結果がある場合は、所有権をここへ移してキャッシュから外す。
         if (prepared != preparedModels_.end()) {
             preparedModel = std::move(prepared->second);
             preparedModels_.erase(prepared);
@@ -110,6 +111,7 @@ engine::Model* ModelManager::LoadModel(const std::string& modelName) {
             std::move(preparedModel->data),
             preparedModel->fileName);
     }
+    // CPUの先読み結果がなければ、この呼び出しでファイルから初期化する。
     else {
         newModel->Initialize(modelCommon, directoryPath, fileName);
     }
@@ -120,9 +122,9 @@ engine::Model* ModelManager::LoadModel(const std::string& modelName) {
 
     {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
-        // 解析・生成中に別スレッドが先に登録した場合は、後から作ったモデルの代わりに既存の参照を返します。
         auto existingIt = models_.find(modelName);
 
+        // 別スレッドが先に同名モデルを登録していれば、後から作った重複分は使用しない。
         if (existingIt != models_.end()) {
             return existingIt->second.get();
         }
@@ -137,6 +139,7 @@ bool ModelManager::PrepareModel(const std::string& modelName) {
     {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
 
+        // GPUモデルかCPU先読みデータのどちらかが登録済みなら、この準備は完了。
         if (models_.contains(modelName) || preparedModels_.contains(modelName)) {
             return true;
         }
@@ -145,6 +148,7 @@ bool ModelManager::PrepareModel(const std::string& modelName) {
     std::string directoryPath;
     std::string fileName;
 
+    // 要求名から実ファイルを特定できない場合は、CPUの解析を開始できない。
     if (!ResolveModelPath(modelName, directoryPath, fileName)) {
         return false;
     }
@@ -156,26 +160,29 @@ bool ModelManager::PrepareModel(const std::string& modelName) {
 
     // 通常ロードと同じ色空間でテクスチャを先読みし、後のLoadがデコード済みの画像を見つけられるようにします。
     for (const engine::Model::MaterialData& material : prepared->data.materials) {
-        TextureManager::GetInstance()->Prepare(
+        engine::TextureManager::GetInstance()->Prepare(
             material.textureFilePath.empty()
                 ? "Resources/sprite/common/white.png"
                 : material.textureFilePath,
-            TextureManager::TextureColorSpace::SRGB);
+            engine::TextureManager::TextureColorSpace::kSRGB);
+        // 有効な法線画像が指定されている場合だけ、線形データとして先に読み込む。
         if (material.hasNormalMap && !material.normalMapPath.empty()) {
-            TextureManager::GetInstance()->Prepare(
+            engine::TextureManager::GetInstance()->Prepare(
                 material.normalMapPath,
-                TextureManager::TextureColorSpace::Linear);
+                engine::TextureManager::TextureColorSpace::kLinear);
         }
 
+        // 有効なORM画像が指定されている場合だけ、材質係数のデータとして先に読み込む。
         if (material.hasOrmMap && !material.ormMapPath.empty()) {
-            TextureManager::GetInstance()->Prepare(
+            engine::TextureManager::GetInstance()->Prepare(
                 material.ormMapPath,
-                TextureManager::TextureColorSpace::Linear);
+                engine::TextureManager::TextureColorSpace::kLinear);
         }
     }
 
     std::lock_guard<std::recursive_mutex> lock(mutex_);
 
+    // 解析中に別の処理で同じモデルが登録済みになった場合は、後から結果を上書きしない。
     if (models_.contains(modelName) || preparedModels_.contains(modelName)) {
         return true;
     }
@@ -224,6 +231,7 @@ std::vector<std::string> ModelManager::GetAvailableModelNames() const {
 
     std::error_code error;
 
+    // 基準フォルダーが無いか確認に失敗した場合も、読み込み済みの名前だけは返す。
     if (!std::filesystem::exists(kDefaultBaseDirectory, error) || error) {
         return names;
     }
@@ -240,6 +248,7 @@ std::vector<std::string> ModelManager::GetAvailableModelNames() const {
             continue;
         }
 
+        // 通常ファイルとして取得できない項目は、モデル候補に含めない。
         if (!iterator->is_regular_file(error) || error) {
             error.clear();
             continue;
@@ -247,6 +256,7 @@ std::vector<std::string> ModelManager::GetAvailableModelNames() const {
 
         const std::string extension = iterator->path().extension().string();
 
+        // OBJ、GLTF、GLBのファイルだけからモデルキーを集める。
         if (extension != ".obj" && extension != ".gltf" && extension != ".glb") {
             continue;
         }
@@ -255,6 +265,7 @@ std::vector<std::string> ModelManager::GetAvailableModelNames() const {
             iterator->path().parent_path(),
             kDefaultBaseDirectory,
             error);
+        // フォルダーまでの相対パスを得られない項目は、登録キーに変換できないので飛ばす。
         if (error || relativePath.empty()) {
             error.clear();
             continue;
@@ -262,6 +273,7 @@ std::vector<std::string> ModelManager::GetAvailableModelNames() const {
 
         std::string modelName = relativePath.generic_string();
 
+        // 同じフォルダーに複数のモデルがあっても、一覧へ入れるフォルダーキーは一度だけにする。
         if (uniqueNames.insert(modelName).second) {
             names.push_back(std::move(modelName));
         }
@@ -273,37 +285,33 @@ std::vector<std::string> ModelManager::GetAvailableModelNames() const {
 
 #include <Windows.h> // OutputDebugStringAで読み込みログを出力するために使用。
 
-// ---------------------------------------------------------
-// ★修正版：フォルダ内を自動スキャンして一括ロード（ログ出力付き）
-// ---------------------------------------------------------
 // Resources/3DModel配下を走査し、見つかったモデルファイルを事前にまとめて読み込む。
 void ModelManager::LoadAllModels() {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
 
+    // 既定フォルダーが存在しない場合は、全件のロードを始めない。
     if (!std::filesystem::exists(kDefaultBaseDirectory))
         return;
 
     OutputDebugStringA("=== 【ModelManager】事前ロード開始 ===\n");
 
     for (const auto& entry : std::filesystem::recursive_directory_iterator(kDefaultBaseDirectory)) {
+        // フォルダーなどの非ファイル項目は、ローダーへ渡さない。
         if (entry.is_regular_file()) {
             std::string ext = entry.path().extension().string();
 
+            // 対応する三つの拡張子の場合だけ、モデルの読み込み先と登録キーを組み立てる。
             if (ext == ".obj" || ext == ".gltf" || ext == ".glb") {
 
-                // ファイルの本当の場所をそのまま使う！
+                // 解析に使うフォルダーとファイル名は、走査結果の実パスから取る。
                 std::string dirPath = entry.path().parent_path().string() + "/";
                 std::string fileName = entry.path().filename().string();
 
-                // ==========================================
-                // ★ 修正：LoadModelを使わず、相対パスから完璧な「登録キー」を自動生成する
-                // ==========================================
                 // 事前ロード時はモデルファイル名ではなく、モデルフォルダまでの相対パスを登録キーにする。
                 std::filesystem::path relPath = std::filesystem::relative(entry.path(), kDefaultBaseDirectory);
                 std::string keyName = relPath.parent_path().string(); // フォルダまでのパスを取得
                 std::replace(keyName.begin(), keyName.end(), '\\', '/'); // Windowsの「\」を「/」に統一
 
-                // 登録キー例: "enemy_core_shards/enemy_core1"
                 // 同じフォルダキーを二重登録しないようにし、最初に見つかった代表モデルだけを読み込む。
                 if (!models_.contains(keyName)) {
                     auto start = std::chrono::high_resolution_clock::now();

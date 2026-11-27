@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include <cstdint>
 #include "DebugEditor.h"
 #include <numbers>
 #include "SceneManager.h"    
@@ -54,6 +55,7 @@ namespace fs = std::filesystem;
 
 
 namespace {
+    // ドラフト書込の間隔と、変更がないセッションの生存記録を更新する間隔。どちらも秒。
     constexpr float kCrashRecoveryAutosaveInterval = 3.0f;
     constexpr float kCrashRecoveryHeartbeatInterval = 5.0f;
     constexpr const char* kCrashRecoveryRoot = "Resources/.backup/crash_recovery";
@@ -86,10 +88,12 @@ namespace {
         return out.str();
     }
 
+    // 復元用ファイルを読み、トップレベルが JSON オブジェクトのときだけ成功を返す。
     bool ReadJsonFileSafe(const fs::path& path, nlohmann::json& outJson) {
         // 復元データが存在しても不正なJSONなら採用しない。
         std::ifstream file(path, std::ios::binary);
 
+        // ファイルを開けないときは、読込候補に含めない。
         if (!file.is_open()) {
             return false;
         }
@@ -103,17 +107,20 @@ namespace {
         }
     }
 
+    // 親フォルダーを準備して JSON を書き出し、ストリームが正常なら true を返す。
     bool WriteJsonFileSafe(const fs::path& path, const nlohmann::json& data) {
-        // クラッシュ復元用のJSONを書き出し、失敗は復元状態として残さない。
+        // 呼出側は、書き出しに成功したドラフトだけを復元一覧へ載せる。
         std::error_code ec;
         fs::create_directories(path.parent_path(), ec);
 
+        // 保存先の親を用意できなければ、ファイルを開かない。
         if (ec) {
             return false;
         }
 
         std::ofstream file(path, std::ios::binary);
 
+        // 出力ファイルを開けなければ、保存失敗を返す。
         if (!file.is_open()) {
             return false;
         }
@@ -123,16 +130,18 @@ namespace {
     }
 
     bool IsPathInside(const fs::path& child, const fs::path& parent) {
-        // 回復対象は指定ルート配下だけに絞り、任意パスへの書き戻しを防ぐ。
+        // 絶対化・字句正規化した Windows パスを比較し、指定ルート名の直下以降にあるかを判定する。
         std::error_code ec;
         const fs::path childAbs = fs::absolute(child, ec).lexically_normal();
 
+        // 対象を絶対パスにできない場合は、配下と判定しない。
         if (ec) {
             return false;
         }
 
         const fs::path parentAbs = fs::absolute(parent, ec).lexically_normal();
 
+        // ルートを絶対パスにできない場合も、照合できないため拒否する。
         if (ec) {
             return false;
         }
@@ -201,13 +210,15 @@ void DebugEditor::UpdateCrashRecovery(float deltaTime) {
     crashRecoveryAutosaveTimer_ += deltaTime;
     crashRecoveryHeartbeatTimer_ += deltaTime;
 
+    // 未保存状態が続き、ドラフト間隔に達した場合は現在のスナップショットを試みる。
     if (dirty && crashRecoveryAutosaveTimer_ >= kCrashRecoveryAutosaveInterval) {
         SaveCrashRecoveryDraft();
         crashRecoveryAutosaveTimer_ = 0.0f;
         crashRecoveryHeartbeatTimer_ = 0.0f;
     }
+    // 未保存状態が解消されたときか、生存記録の間隔に達したときにクリーン側の情報を更新する。
     else if (!dirty && (crashRecoveryLastDirty_ || crashRecoveryHeartbeatTimer_ >= kCrashRecoveryHeartbeatInterval)) {
-        // 通常保存で未保存状態がなくなったら、古いドラフトを復元候補に残さないようファイル一覧も空にする。
+        // 古いドラフトを候補に残さないよう、マニフェストの復元一覧を空にして記録する。
         crashRecoveryLastFiles_ = nlohmann::json::array();
         WriteCrashRecoverySession(false, false);
         crashRecoveryHeartbeatTimer_ = 0.0f;
@@ -235,8 +246,9 @@ void DebugEditor::SaveCrashRecoveryDraft() {
     }
 
     // 通常保存と同じシリアライザで全対象を作り、編集中Sceneの現在値をドラフトへ写します。
-    auto targets = serializer_.BuildSceneSaveTargets(currentSceneFilename_, SaveMode::All);
+    auto targets = serializer_.BuildSceneSaveTargets(currentSceneFilename_, SaveMode::kAll);
 
+    // シリアライザーから保存対象が得られなければ、ドラフトは書き出さない。
     if (targets.empty()) {
         return;
     }
@@ -252,10 +264,12 @@ void DebugEditor::SaveCrashRecoveryDraft() {
 
         const fs::path draftPath = draftRoot / fs::path(target.path);
 
+        // 組み立てたドラフト先がセッション内に収まらない場合は対象外にする。
         if (!IsPathInside(draftPath, draftRoot)) {
             continue;
         }
 
+        // ドラフトの書き出しに失敗したファイルは、復元一覧へ掲載しない。
         if (!WriteJsonFileSafe(draftPath, target.data)) {
             continue;
         }
@@ -268,6 +282,7 @@ void DebugEditor::SaveCrashRecoveryDraft() {
         });
     }
 
+    // どのファイルも保存できなければ、直前のマニフェストを差し替えない。
     if (files.empty()) {
         return;
     }
@@ -279,6 +294,7 @@ void DebugEditor::SaveCrashRecoveryDraft() {
 
 void DebugEditor::WriteCrashRecoverySession(bool cleanExit, bool dirty, const nlohmann::json& files) {
     // ドラフト一覧と終了状態をマニフェストにまとめ、起動時の復元判定に使います。
+    // セッションの保存先が確定していない場合は、生存記録を書かない。
     if (crashRecoverySessionDir_.empty()) {
         return;
     }
@@ -287,6 +303,7 @@ void DebugEditor::WriteCrashRecoverySession(bool cleanExit, bool dirty, const nl
     const fs::path sessionPath = fs::path(crashRecoverySessionDir_) / kCrashRecoverySessionFile;
     ReadJsonFileSafe(sessionPath, session);
 
+    // 前回の内容をオブジェクトとして取得できなければ、空の状態から組み立てる。
     if (!session.is_object()) {
         session = nlohmann::json::object();
     }
@@ -296,6 +313,7 @@ void DebugEditor::WriteCrashRecoverySession(bool cleanExit, bool dirty, const nl
     session["sessionId"] = crashRecoverySessionId_;
     session["updatedAt"] = NowIsoString();
 
+    // 初回にだけ開始時刻を付け、その後は更新時刻だけ進める。
     if (!session.contains("startedAt")) {
         session["startedAt"] = NowIsoString();
     }
@@ -308,6 +326,7 @@ void DebugEditor::WriteCrashRecoverySession(bool cleanExit, bool dirty, const nl
     session["draftRoot"] = crashRecoveryDraftDir_;
     session["files"] = files.is_array() ? files : nlohmann::json::array();
 
+    // 新規セッションでは解決済み情報がないため、未解決で初期化する。
     if (!session.contains("resolved")) {
         session["resolved"] = false;
     }
@@ -324,6 +343,7 @@ void DebugEditor::LoadCrashRecoveryCandidate() {
     const fs::path root = kCrashRecoveryRoot;
     std::error_code ec;
 
+    // 復元用フォルダーが見つからなければ、候補なしで終了する。
     if (!fs::exists(root, ec)) {
         return;
     }
@@ -334,6 +354,7 @@ void DebugEditor::LoadCrashRecoveryCandidate() {
 
     // 正常終了・解決済み・ドラフトなしを除き、更新時刻が最も新しい一件だけを提示します。
     for (const auto& entry : fs::directory_iterator(root, ec)) {
+        // 列挙エラーかディレクトリでない場合は、セッションとして探索しない。
         if (ec || !entry.is_directory()) {
             continue;
         }
@@ -341,10 +362,12 @@ void DebugEditor::LoadCrashRecoveryCandidate() {
         const fs::path manifestPath = entry.path() / kCrashRecoverySessionFile;
         nlohmann::json manifest;
 
+        // マニフェストを有効な JSON オブジェクトとして読めないセッションは省く。
         if (!ReadJsonFileSafe(manifestPath, manifest)) {
             continue;
         }
 
+        // 異常終了・未解決・未保存のすべてを満たし、ドラフト一覧に項目があるセッションだけ候補にする。
         if (manifest.value("cleanExit", true) ||
             manifest.value("resolved", false) ||
             !manifest.value("dirty", false) ||
@@ -356,10 +379,12 @@ void DebugEditor::LoadCrashRecoveryCandidate() {
 
         const fs::file_time_type writeTime = fs::last_write_time(manifestPath, ec);
 
+        // 更新日時を取得できない候補は、新旧を比較できないため飛ばす。
         if (ec) {
             continue;
         }
 
+        // 最初に確認できた候補か、それより新しい候補で提示対象を更新する。
         if (!hasBest || writeTime > bestTime) {
             bestTime = writeTime;
             bestManifest = manifest;
@@ -368,6 +393,7 @@ void DebugEditor::LoadCrashRecoveryCandidate() {
         }
     }
 
+    // 有効な候補が見つかった場合だけ、次の描画へモーダル表示を予約する。
     if (hasBest) {
         crashRecoveryPendingManifest_ = bestManifest;
         crashRecoveryPending_ = true;
@@ -384,11 +410,13 @@ void DebugEditor::DrawCrashRecoveryPrompt() {
 
     const char* popupName = "クラッシュ復元###CrashRecoveryPrompt";
 
+    // 復元候補に対してモーダルを開く要求を1回だけ出す。
     if (!crashRecoveryPromptOpened_) {
         ImGui::OpenPopup(popupName);
         crashRecoveryPromptOpened_ = true;
     }
 
+    // モーダルを描画できるフレームで、復元対象と選択肢を表示する。
     if (ImGui::BeginPopupModal(popupName, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextWrapped("前回のEditorが正常終了していません。未保存の自動ドラフトがあります。");
         ImGui::TextWrapped("復元すると、現在のJSONは退避してからドラフトを Resources/json に戻します。");
@@ -399,6 +427,7 @@ void DebugEditor::DrawCrashRecoveryPrompt() {
 
         const auto& files = crashRecoveryPendingManifest_.value("files", nlohmann::json::array());
 
+        // 表を表示できる場合にだけ、元のパスと退避先を1行ずつ並べる。
         if (ImGui::BeginTable("CrashRecoveryFiles", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
             ImGui::TableSetupColumn("復元先");
             ImGui::TableSetupColumn("ドラフト");
@@ -415,11 +444,14 @@ void DebugEditor::DrawCrashRecoveryPrompt() {
             ImGui::EndTable();
         }
 
+        // 前の試行結果が入っている場合は、再操作できるように同じモーダルで表示する。
         if (!crashRecoveryStatus_.empty()) {
             ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.25f, 1.0f), "%s", crashRecoveryStatus_.c_str());
         }
 
+        // 復元を選んだ場合は、現行ファイルの退避とドラフトの書き戻しを試す。
         if (ImGui::Button("復元する", ImVec2(120.0f, 0.0f))) {
+            // 1件以上の復元に成功した場合は解決済みにして閉じる。全件失敗では表示を残す。
             if (RestoreCrashRecoveryDraft()) {
                 ResolveCrashRecoveryCandidate("restored");
                 crashRecoveryPending_ = false;
@@ -429,6 +461,7 @@ void DebugEditor::DrawCrashRecoveryPrompt() {
 
         ImGui::SameLine();
 
+        // 今回は使わないと選んだ場合は、シーン JSON を復元せず候補を解決済みにする。
         if (ImGui::Button("今回は使わない", ImVec2(140.0f, 0.0f))) {
             ResolveCrashRecoveryCandidate("dismissed");
             crashRecoveryPending_ = false;
@@ -454,13 +487,14 @@ bool DebugEditor::RestoreCrashRecoveryDraft() {
     const fs::path jsonRoot = projectRoot / "Resources/json";
     const fs::path recoveryRoot = projectRoot / fs::path(kCrashRecoveryRoot);
     const fs::path backupRoot = projectRoot / fs::path(kCrashRecoveryRoot) / ("pre_restore_" + MakeCrashRecoveryStamp());
-    int restoredCount = 0;
-    int errorCount = 0;
+    std::int32_t restoredCount = 0;
+    std::int32_t errorCount = 0;
 
     for (const auto& file : crashRecoveryPendingManifest_["files"]) {
         const std::string sourceText = file.value("source", std::string(""));
         const std::string draftText = file.value("draft", std::string(""));
 
+        // 元パス・ドラフトパスの欠損や許可対象外の保存先は、その行の失敗として数える。
         if (sourceText.empty() || draftText.empty() || !IsCrashRecoverySourcePathAllowed(sourceText)) {
             ++errorCount;
             continue;
@@ -483,11 +517,13 @@ bool DebugEditor::RestoreCrashRecoveryDraft() {
         // 上書きする現行JSONは先に別フォルダへ退避し、ファイルごとの失敗を数えます。
         std::error_code ec;
 
+        // 元のファイルが存在する場合は、上書き前に専用の退避先へコピーする。
         if (fs::exists(source, ec)) {
             const fs::path currentBackup = backupRoot / fs::path(sourceText);
             fs::create_directories(currentBackup.parent_path(), ec);
             fs::copy_file(source, currentBackup, fs::copy_options::overwrite_existing, ec);
 
+            // 元データの退避に失敗した場合は、そのファイルを上書きしない。
             if (ec) {
                 ++errorCount;
                 continue;
@@ -496,6 +532,7 @@ bool DebugEditor::RestoreCrashRecoveryDraft() {
 
         fs::create_directories(source.parent_path(), ec);
 
+        // 復元先の親を用意できない場合は、そのファイルを飛ばす。
         if (ec) {
             ++errorCount;
             continue;
@@ -504,6 +541,7 @@ bool DebugEditor::RestoreCrashRecoveryDraft() {
         // 現行ファイルがあれば退避した後でドラフトを戻す。ここまでの処理で失敗したファイルは上書きしない。
         fs::copy_file(draft, source, fs::copy_options::overwrite_existing, ec);
 
+        // ドラフトのコピーに失敗した場合は、復元件数に含めない。
         if (ec) {
             ++errorCount;
             continue;
@@ -520,6 +558,7 @@ bool DebugEditor::RestoreCrashRecoveryDraft() {
 
     crashRecoveryStatus_ = "クラッシュ復元: " + std::to_string(restoredCount) + "件を復元しました。";
 
+    // 成功と失敗が混在する場合は、戻せなかった件数を結果に付ける。
     if (errorCount > 0) {
         crashRecoveryStatus_ += " " + std::to_string(errorCount) + "件は失敗しました。";
     }
@@ -543,12 +582,14 @@ void DebugEditor::ResolveCrashRecoveryCandidate(const std::string& resolution) {
 
     const std::string manifestPathText = crashRecoveryPendingManifest_.value("_manifestPath", std::string(""));
 
+    // 保存場所を示す内部項目が無ければ、元の候補を更新できない。
     if (manifestPathText.empty()) {
         return;
     }
 
     nlohmann::json manifest;
 
+    // 元のマニフェストを再読込できなければ、読み込み時の控えから内部パスを外して書き戻す。
     if (!ReadJsonFileSafe(manifestPathText, manifest)) {
         manifest = crashRecoveryPendingManifest_;
         manifest.erase("_manifestPath");

@@ -1,5 +1,5 @@
 {
-  "sealRadius": 14,
+  "sealRadius": 16,
   "sealHitRadius": 3,
   "sealCenterOffsetZ": 15,
   "sealCastTime": 18,
@@ -8,6 +8,7 @@
   "sealBarrierHeight": 9,
   "sealBarrageRadius": 41,
   "sealBarrageSkyHeight": 11.2,
+  "sealChantSkyHeight": 31,
   "sealBarrageSkyRadiusRate": 0.88,
   "sealBarrageSpearScale": 1.0,
   "sealBarrageMovieDuration": 4.8,

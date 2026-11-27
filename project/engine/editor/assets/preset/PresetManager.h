@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "Object3D.h"
 #include "json.hpp"
 #include <map>
@@ -55,11 +56,11 @@ public:
     // 追加・削除・親変更など構造差分の集計。個々の差分本体を保持するデータではない。
     // 関連：PresetManager（この型を使う機能の本体）
     struct PrefabStructureOverrideSummary {
-        int addedObjects = 0;
-        int removedObjects = 0;
-        int reparentedObjects = 0;
-        int rawNodeOverrides = 0;
-        int componentOverrides = 0;
+        std::int32_t addedObjects = 0;
+        std::int32_t removedObjects = 0;
+        std::int32_t reparentedObjects = 0;
+        std::int32_t rawNodeOverrides = 0;
+        std::int32_t componentOverrides = 0;
 
         bool HasOverrides() const {
             return addedObjects > 0 || removedObjects > 0 ||
@@ -134,7 +135,7 @@ public:
     bool UpdatePrefabFromObject(const std::string& prefabName, engine::Object3D* obj);
 
     /// Prefab Asset更新前後を比較し、Scene内の未変更Instanceだけを新しいSourceへ同期する。
-    int SynchronizePrefabInstances(
+    std::int32_t SynchronizePrefabInstances(
         const std::map<std::string, json>& beforePrefabs,
         BaseScene& scene,
         engine::Object3DCommon* common);
@@ -196,13 +197,13 @@ public:
         const std::vector<engine::Object3D*>& sceneObjects);
 
     // 同じinstanceIdの階層全体へ適用し、個別操作をひとつのAsset履歴にまとめる。
-    int ApplyAllPrefabOverrides(engine::Object3D* object, const std::vector<engine::Object3D*>& sceneObjects);
+    std::int32_t ApplyAllPrefabOverrides(engine::Object3D* object, const std::vector<engine::Object3D*>& sceneObjects);
 
     // 同じ instanceId の階層を回り、構造差分と Property 差分を元へ戻す。
-    int RevertAllPrefabOverrides(engine::Object3D* object, const std::vector<engine::Object3D*>& sceneObjects);
+    std::int32_t RevertAllPrefabOverrides(engine::Object3D* object, const std::vector<engine::Object3D*>& sceneObjects);
 
     // 同じinstanceIdの階層からPrefabへの紐付けを外す。戻り値は解除したObject数。
-    int UnpackPrefabInstance(engine::Object3D* object, const std::vector<engine::Object3D*>& sceneObjects);
+    std::int32_t UnpackPrefabInstance(engine::Object3D* object, const std::vector<engine::Object3D*>& sceneObjects);
 
     // 同じ旧 instanceId を持つ複製群には同じ新 ID を割り当て、群のまとまりを保つ。
     void AssignNewPrefabInstanceId(const std::vector<engine::Object3D*>& objects) const;

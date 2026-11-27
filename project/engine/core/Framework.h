@@ -29,7 +29,7 @@ public:
     /// </summary>
     virtual void Finalize();
 
-    /// <summary>初期化、毎フレームの更新と描画、終了処理を順番に実行する。</summary>
+    /// <summary>WinMainからの初期化後に実行する。ウィンドウの終了通知まで更新と描画を繰り返す。</summary>
     void Run();
 
 protected:

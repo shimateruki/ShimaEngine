@@ -47,7 +47,6 @@ public:
     void StopPreview();
 
 
-    /// 作業対象を見やすい位置にカメラを一時的に配置する。
 
 
     /// Game View の位置と大きさをギズモ投影に使用する。
@@ -72,10 +71,10 @@ private:
     // 関連：AnimationClipEditor（この型を使う機能の本体）
     struct PoseKey {
         float time = 0.0f;
-        int jointIndex = -1; // 姿勢キーの対象関節。-1は未指定。
+        std::int32_t jointIndex = -1; // 姿勢キーの対象関節。-1は未指定。
         std::string jointName;
-        engine::Vector3 translate = engine::Vector3::ZERO;
-        engine::Vector3 rotate = engine::Vector3::ZERO;
+        engine::Vector3 translate = engine::Vector3::kZero;
+        engine::Vector3 rotate = engine::Vector3::kZero;
         engine::Vector3 scale = { 1.0f, 1.0f, 1.0f };
     };
 
@@ -83,9 +82,9 @@ private:
     // 関連：AnimationClipEditor（この型を使う機能の本体）
     struct EventMarker {
         float time = 0.0f;
-        int type = 0;
+        std::int32_t type = 0;
         std::string name;
-        engine::Vector3 offset = engine::Vector3::ZERO;
+        engine::Vector3 offset = engine::Vector3::kZero;
     };
 
 private:
@@ -162,10 +161,10 @@ private:
     void DeleteSelectedJointKeyAtCurrentTime();
 
     /// 指定ジョイントの前後キーを探し、現在時刻の補間結果を取得する。
-    bool TryGetInterpolatedKey(int jointIndex, float time, PoseKey& keyOut) const;
+    bool TryGetInterpolatedKey(std::int32_t jointIndex, float time, PoseKey& keyOut) const;
 
     /// 選択ジョイントの現在姿勢を編集 UI へ反映する。
-    void SyncUiFromJoint(int jointIndex);
+    void SyncUiFromJoint(std::int32_t jointIndex);
 
     /// ジョイント姿勢キーを再生時刻順へ並べる。
     void SortKeys();
@@ -189,7 +188,7 @@ private:
     void StoreEditOverrideFromUi();
 
     /// 指定ジョイントの編集上書きを外す。
-    void ClearEditOverride(int jointIndex);
+    void ClearEditOverride(std::int32_t jointIndex);
 
     /// すべてのジョイント編集上書きを外す。
     void ClearAllEditOverrides();
@@ -213,7 +212,7 @@ private:
     bool ProjectWorldToGameView(const engine::Vector3& world, engine::Vector2& screenOut) const;
 
     /// 指定ジョイントのワールド変換行列を返す。
-    engine::Matrix4x4 GetJointWorldMatrix(int jointIndex) const;
+    engine::Matrix4x4 GetJointWorldMatrix(std::int32_t jointIndex) const;
 
     /// 行列の平行移動成分を取り出す。
     engine::Vector3 GetMatrixTranslation(const engine::Matrix4x4& matrix) const;
@@ -234,18 +233,18 @@ private:
     // プレビュー再生と表示オプション。
     bool enabled_ = false;
 
-    // 制作空間の所有権と時間軸の表示状態。ゲーム用クリップには保存しない。
+    // ファイルの読込・保存操作の保留と、クリップに保存しない時間軸の操作状態。
 
 
-    int pendingClipAction_ = 0;
+    std::int32_t pendingClipAction_ = 0;
     std::string pendingClipPath_;
 
     bool timelineSnap_ = true;
     float timelineZoom_ = 220.0f;
-    int timelineFps_ = 30;
+    std::int32_t timelineFps_ = 30;
 
-    int timelineDragKind_ = -1;
-    int timelineDragIndex_ = -1; // ドラッグ中のキー番号。-1は操作なし。
+    std::int32_t timelineDragKind_ = -1;
+    std::int32_t timelineDragIndex_ = -1; // ドラッグ中のキー番号。-1は操作なし。
     float timelineDragTime_ = 0.0f;
     float timelineDragMouseX_ = 0.0f;
 
@@ -302,38 +301,38 @@ private:
     char jointSearchBuffer_[128] = "";
     char eventNameBuffer_[128] = "attack";
 
-    int selectedJointIndex_ = -1; // 選択関節。-1は未選択。
-    int selectedBodyKeyIndex_ = -1; // 選択Bodyキー。-1は未選択。
-    int selectedEventIndex_ = -1; // 選択イベント。-1は未選択。
+    std::int32_t selectedJointIndex_ = -1; // 選択関節。-1は未選択。
+    std::int32_t selectedBodyKeyIndex_ = -1; // 選択Bodyキー。-1は未選択。
+    std::int32_t selectedEventIndex_ = -1; // 選択イベント。-1は未選択。
 
-    int eventType_ = 0;
+    std::int32_t eventType_ = 0;
     std::string lastEventPreviewText_;
 
-    engine::Vector3 jointTranslateUi_ = engine::Vector3::ZERO;
-    engine::Vector3 jointRotateDegUi_ = engine::Vector3::ZERO;
+    engine::Vector3 jointTranslateUi_ = engine::Vector3::kZero;
+    engine::Vector3 jointRotateDegUi_ = engine::Vector3::kZero;
     engine::Vector3 jointScaleUi_ = { 1.0f, 1.0f, 1.0f };
 
-    engine::Vector3 bodyTranslateUi_ = engine::Vector3::ZERO;
+    engine::Vector3 bodyTranslateUi_ = engine::Vector3::kZero;
     engine::Vector3 bodyShearUi_ = {};
     float bodyShearPivotY_ = 0.0f;
-    engine::Vector3 bodyRotateDegUi_ = engine::Vector3::ZERO;
+    engine::Vector3 bodyRotateDegUi_ = engine::Vector3::kZero;
     engine::Vector3 bodyScaleUi_ = { 1.0f, 1.0f, 1.0f };
-    int bodyEasingToNext_ = 4;
+    std::int32_t bodyEasingToNext_ = 4;
 
-    engine::Vector3 eventOffsetUi_ = engine::Vector3::ZERO;
+    engine::Vector3 eventOffsetUi_ = engine::Vector3::kZero;
 
-    engine::Vector2 gameViewOffset_ = engine::Vector2::ZERO;
+    engine::Vector2 gameViewOffset_ = engine::Vector2::kZero;
     engine::Vector2 gameViewSize_ = { 1280.0f, 720.0f };
-    engine::Vector2 gameViewMousePos_ = engine::Vector2::ZERO;
+    engine::Vector2 gameViewMousePos_ = engine::Vector2::kZero;
     bool isGameViewHovered_ = false;
 
-    int gizmoOperation_ = 0;
+    std::int32_t gizmoOperation_ = 0;
 
     std::vector<BodyAnimationClip::Key> bodyKeys_;
     std::vector<PoseKey> keys_;
     std::vector<EventMarker> events_;
     std::vector<std::string> assetFiles_;
-    std::map<int, PoseKey> editPoseOverrides_;
+    std::map<std::int32_t, PoseKey> editPoseOverrides_;
 };
 
 #endif

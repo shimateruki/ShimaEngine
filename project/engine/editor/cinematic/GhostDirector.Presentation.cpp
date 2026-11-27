@@ -1,23 +1,29 @@
+#include <cstdint>
 #include "engine/editor/cinematic/GhostDirector.h"
 #include "imgui.h"
 #include <algorithm>
 #include <cstring>
 
+// 演出部品とばね、姿勢キー、カメラ、持続粒子の編集欄を描画し、明示的な反映操作でプレビューを再評価する。
 void GhostDirector::DrawPresentationEditor() {
 #ifdef USE_IMGUI
     auto& p=sequence_.presentation;
+    // 編集欄が閉じている間は描画を省く。既存の部品があれば初期状態では開く。
     if (!ImGui::CollapsingHeader("演出部品・見た目・カメラ", p.objects.empty()?0:ImGuiTreeNodeFlags_DefaultOpen)) return;
     ImGui::TextWrapped("演出専用の部品は再生器が生成・破棄します。停止・姿勢復元で既存Objectの変更も戻します。");
+    // 再生中は編集欄を無効化するため、一時停止してから編集するよう表示する。
     if (player_.IsPlaying()) ImGui::TextDisabled("キーや部品を編集するときは一時停止してください。");
     // 再生器が参照するキーや部品を変更する間は、再生を止めた状態に限定する。
     ImGui::BeginDisabled(player_.IsPlaying());
     auto text=[](const char* label,std::string& value) {
         char buffer[512]{}; strncpy_s(buffer,sizeof(buffer),value.c_str(),_TRUNCATE);
+        // 入力欄に変更があったときだけ、文字列を編集用バッファーから保存値へ戻す。
         if (ImGui::InputText(label,buffer,sizeof(buffer))) value=buffer;
     };
     // 部品の参照は名前・役割を保存する形式なので、選択欄と直接入力を同じ文字列へ反映する。
     auto binding=[&](const char* label,std::string& value) {
         CinematicObjectBinding b{value,-1};
+        // 参照の選択が変わったときは、新しい対象名を直接入力欄と共有する。
         if (DrawObjectBindingEditor(label,b,false,false)) value=b.targetName;
         text((std::string(label)+" 名・役割").c_str(),value);
     };
@@ -26,6 +32,7 @@ void GhostDirector::DrawPresentationEditor() {
         ImGui::TextWrapped("装着先のモデル寸法はゲーム側から渡します。再生を停止して調整し、シーケンスを保存してください。");
         for (auto& [name, settings] : p.springs) {
             ImGui::PushID(name.c_str());
+            // 個別項目を開いた追従部品だけ、初期値、ばねの特性、移動上限、傾きの入力欄を表示する。
             if (ImGui::TreeNode(name.c_str())) {
                 ImGui::DragFloat3("初期位置の差分", &settings.initialPositionOffset.x, 0.01f);
                 ImGui::DragFloat3("初期回転の差分（rad）", &settings.initialRotationOffset.x, 0.01f);
@@ -50,11 +57,14 @@ void GhostDirector::DrawPresentationEditor() {
         ImGui::TreePop();
     }
     binding("視点の基準",p.reference); binding("視点が向く対象",p.lookToward);
+    // 非表示対象の一覧を開いたときだけ、再生中に隠す Object の編集欄を表示する。
     if (ImGui::TreeNode("再生中に隠すObject")) {
         for (size_t i=0;i<p.hideObjects.size();++i) {
-            ImGui::PushID(static_cast<int>(i)); text("対象名・役割",p.hideObjects[i]); ImGui::PopID();
+            ImGui::PushID(static_cast<std::int32_t>(i)); text("対象名・役割",p.hideObjects[i]); ImGui::PopID();
         }
+        // 追加操作では既定の対象を $Actor として登録する。
         if (ImGui::Button("非表示対象を追加")) p.hideObjects.push_back("$Actor");
+        // 項目が残っている場合だけ、削除操作で末尾の対象を取り除く。
         ImGui::SameLine(); if (!p.hideObjects.empty() && ImGui::Button("末尾の非表示対象を削除")) p.hideObjects.pop_back();
         ImGui::TreePop();
     }
@@ -62,13 +72,16 @@ void GhostDirector::DrawPresentationEditor() {
     if (ImGui::Button("演出部品を追加")) {
         CinematicObjectClip clip; clip.name="part_"+std::to_string(p.objects.size());
         clip.source="$Actor"; clip.model="Primitives/cube"; clip.keys.push_back({});
-        p.objects.push_back(std::move(clip)); selectedVisualObject_=static_cast<int>(p.objects.size())-1;
+        p.objects.push_back(std::move(clip)); selectedVisualObject_=static_cast<std::int32_t>(p.objects.size())-1;
         selectedVisualKey_=0; RefreshPlayer(true);
     }
+    // 部品があるときだけ対象を選び、削除後も選択番号が範囲に収まるようにする。
     if (!p.objects.empty()) {
-        selectedVisualObject_=std::clamp(selectedVisualObject_,0,static_cast<int>(p.objects.size())-1);
+        selectedVisualObject_=std::clamp(selectedVisualObject_,0,static_cast<std::int32_t>(p.objects.size())-1);
+        // 選択メニューを開いたときに登録済みの部品を列挙する。
         if (ImGui::BeginCombo("編集する部品",p.objects[selectedVisualObject_].name.c_str())) {
-            for (int i=0;i<static_cast<int>(p.objects.size());++i)
+            for (std::int32_t i=0;i<static_cast<std::int32_t>(p.objects.size());++i)
+                // 別の部品を選んだら、前の部品のキー番号を持ち越さず先頭から編集する。
                 if (ImGui::Selectable(p.objects[i].name.c_str(),selectedVisualObject_==i)) {
                     selectedVisualObject_=i; selectedVisualKey_=0;
                 }
@@ -79,6 +92,7 @@ void GhostDirector::DrawPresentationEditor() {
         binding("部品の基準対象",clip.source);
         ImGui::Checkbox("一時Objectを生成",&clip.spawn); ImGui::SameLine(); ImGui::Checkbox("部品を有効化",&clip.enabled);
         ImGui::Checkbox("自動再生で姿勢・見た目を適用",&clip.animate);
+        // 自動適用を無効にした部品も、ゲーム側の手動適用や位置参照に使えることを表示する。
         if (!clip.animate) ImGui::TextDisabled("ゲームからの姿勢適用と位置参照には、OFFのまま使用できます。");
         ImGui::Checkbox("基準の現在位置に追従",&clip.followPosition); ImGui::SameLine(); ImGui::Checkbox("現在の回転に追従",&clip.followRotation);
         ImGui::Checkbox("現在の大きさに追従",&clip.followScale); ImGui::SameLine(); ImGui::Checkbox("基準が隠れたら隠す",&clip.inheritVisibility);
@@ -87,7 +101,8 @@ void GhostDirector::DrawPresentationEditor() {
         ImGui::Checkbox("基準の大きさを継承",&clip.inheritScale); ImGui::SameLine(); ImGui::Checkbox("基準の回転を継承",&clip.inheritRotation);
         // 同じXYZでも選んだ座標系で位置の解釈が変わるため、座標値とは別に方式を保存する。
         const char* spaces[]={"world","model","radial"};
-        int mode=clip.positionSpace=="model"?1:clip.positionSpace=="radial"?2:0;
+        std::int32_t mode=clip.positionSpace=="model"?1:clip.positionSpace=="radial"?2:0;
+        // 選択が変わったときにだけ保存する座標系を差し替える。
         if (ImGui::Combo("位置の座標系",&mode,spaces,3)) clip.positionSpace=spaces[mode];
         ImGui::DragFloat3("モデル基準の支点",&clip.pivot.x,.01f);
         ImGui::DragFloat("接地高さ（-100000で無制限）",&clip.floorHeight,.02f);
@@ -100,6 +115,7 @@ void GhostDirector::DrawPresentationEditor() {
         if (clip.motions.empty() && ImGui::Button("キーを置き換えて移動区間を作成")) {
             engine::CinematicMotionSegment motion;
             motion.name="移動";
+            // 変換元にキーがあれば両端の姿勢と秒数を継承し、終了を開始より最低0.001秒後にする。
             if (!clip.keys.empty()) {
                 motion.from=clip.keys.front(); motion.to=clip.keys.back();
                 motion.startTime=clip.keys.front().time;
@@ -107,12 +123,15 @@ void GhostDirector::DrawPresentationEditor() {
             }
             clip.motions.push_back(motion); clip.keys.clear(); selectedVisualKey_=0;
         }
+        // 区間があれば、姿勢キーとは別の編集欄で開始と終了の条件を調整できる。
         if (!clip.motions.empty()) {
             ImGui::SeparatorText("移動区間（細かなキーの生成は不要）");
-            selectedVisualKey_=std::clamp(selectedVisualKey_,0,static_cast<int>(clip.motions.size())-1);
+            selectedVisualKey_=std::clamp(selectedVisualKey_,0,static_cast<std::int32_t>(clip.motions.size())-1);
+            // 区間メニューを開いたときに登録順で候補を並べる。
             if (ImGui::BeginCombo("区間",clip.motions[selectedVisualKey_].name.c_str())) {
-                for (int i=0;i<static_cast<int>(clip.motions.size());++i) {
+                for (std::int32_t i=0;i<static_cast<std::int32_t>(clip.motions.size());++i) {
                     ImGui::PushID(i);
+                    // 選んだ区間を後続の編集欄に表示する。
                     if (ImGui::Selectable(clip.motions[i].name.c_str(),i==selectedVisualKey_)) selectedVisualKey_=i;
                     ImGui::PopID();
                 }
@@ -123,13 +142,18 @@ void GhostDirector::DrawPresentationEditor() {
             // 固定秒数か Signal からの時間差を選ぶ。開始・終了は同じ入力欄で扱う。
             auto timing=[&](const char* label,std::string& signal,float& seconds,float& offset) {
                 ImGui::PushID(label);
+                // 指定方法のメニューを開いたときは、固定秒数と有効な Signal を選択肢にする。
                 if (ImGui::BeginCombo(label,signal.empty()?"秒数で指定":signal.c_str())) {
+                    // 固定秒数を選んだ場合は Signal 名を空に戻す。
                     if (ImGui::Selectable("秒数で指定",signal.empty())) signal.clear();
                     for (const auto& marker:sequence_.signals)
+                        // 無効な Signal は候補に出さず、選択した有効な Signal の名前を保存する。
                         if (marker.enabled && ImGui::Selectable(marker.name.c_str(),signal==marker.name)) signal=marker.name;
                     ImGui::EndCombo();
                 }
+                // 基準 Signal が空なら絶対秒数を直接編集し、指定済みならその時刻からの差分を編集する。
                 if (signal.empty()) ImGui::DragFloat("秒",&seconds,.01f,0,600);
+                // 基準 Signal が指定されているときは、絶対秒数に代えて差分秒と計算結果を示す。
                 else {
                     ImGui::DragFloat("Signalからの時間差（秒）",&offset,.01f,-600,600);
                     ImGui::Text("開始/終了: %.3f 秒",sequence_.GetSignalTime(signal,-1)+offset);
@@ -140,6 +164,7 @@ void GhostDirector::DrawPresentationEditor() {
             timing("終了",motion.endSignal,motion.endTime,motion.endSignalOffset);
             // 区間全体の効果に先立って、補間に使う両端の位置と見た目を個別に編集する。
             auto point=[&](const char* label,engine::CinematicVisualKey& key) {
+                // 始点または終点の欄が開いている場合だけ、その基準点と補正を表示する。
                 if (ImGui::TreeNode(label)) {
                     binding("基準点",key.positionReference);
                     ImGui::DragFloat3("位置の補正",&key.position.x,.01f);
@@ -153,6 +178,7 @@ void GhostDirector::DrawPresentationEditor() {
             point("始点",motion.from); point("終点",motion.to);
             ImGui::DragFloat("弧の高さ",&motion.arcHeight,.01f);
             ImGui::Checkbox("始終点を滑らかにする",&motion.smoothProgress);
+            // 回転・拡縮の欄を開いた場合、区間内の周期変化と開始割合を調整できる。
             if (ImGui::TreeNode("回転・拡縮")) {
                 ImGui::DragFloat3("中央で加える傾き（rad）",&motion.rotationArc.x,.01f);
                 ImGui::DragFloat("傾きの周期数",&motion.rotationCycles,.05f,0,100);
@@ -166,6 +192,7 @@ void GhostDirector::DrawPresentationEditor() {
                 ImGui::DragFloat("最小倍率",&motion.minimumScale,.001f,0,100);
                 ImGui::TreePop();
             }
+            // 揺れ・発光の欄を開いた場合、着地後の揺れの持続時間と発光周期を調整できる。
             if (ImGui::TreeNode("着地の揺れ・発光")) {
                 ImGui::DragFloat("揺れ幅",&motion.bounceHeight,.01f,0,100);
                 ImGui::DragFloat("揺れが収まる秒数",&motion.bounceDuration,.01f,.001f,600);
@@ -182,20 +209,22 @@ void GhostDirector::DrawPresentationEditor() {
                 next.startSignal=last.endSignal; next.startSignalOffset=last.endSignalOffset;
                 next.startTime=last.endSignal.empty()?last.endTime:sequence_.GetSignalTime(last.endSignal,last.endTime)+last.endSignalOffset;
                 next.endTime=next.startTime+1; clip.motions.push_back(next);
-                selectedVisualKey_=static_cast<int>(clip.motions.size())-1;
+                selectedVisualKey_=static_cast<std::int32_t>(clip.motions.size())-1;
             }
             ImGui::SameLine();
+            // 区間方式を保つため、2件以上ある場合だけ選択区間の削除を受け付ける。
             if (clip.motions.size()>1 && ImGui::Button("選択区間を削除")) clip.motions.erase(clip.motions.begin()+selectedVisualKey_);
             ImGui::TextWrapped("時刻の重複・Signal不足は再生前の検証で確認してください。調整後は再評価して保存します。");
         }
         // 時刻指定方式では、シークした時刻以上にある最初のキーを選べるようにする。
         if (!clip.keys.empty()) {
-            selectedVisualKey_=std::clamp(selectedVisualKey_,0,static_cast<int>(clip.keys.size())-1);
+            selectedVisualKey_=std::clamp(selectedVisualKey_,0,static_cast<std::int32_t>(clip.keys.size())-1);
+            // 探索操作では、シーク時刻以降の先頭へ移動する。以降にキーがなければ末尾を選ぶ。
             if (ImGui::Button("現在時刻に近いキーを選択")) {
                 auto it=std::lower_bound(clip.keys.begin(),clip.keys.end(),currentScrubTime_,[](const auto& k,float t){return k.time<t;});
-                selectedVisualKey_=std::min(static_cast<int>(it-clip.keys.begin()),static_cast<int>(clip.keys.size())-1);
+                selectedVisualKey_=std::min(static_cast<std::int32_t>(it-clip.keys.begin()),static_cast<std::int32_t>(clip.keys.size())-1);
             }
-            ImGui::SliderInt("見た目キー",&selectedVisualKey_,0,static_cast<int>(clip.keys.size())-1);
+            ImGui::SliderInt("見た目キー",&selectedVisualKey_,0,static_cast<std::int32_t>(clip.keys.size())-1);
             auto& k=clip.keys[selectedVisualKey_];
             ImGui::DragFloat("キー時刻",&k.time,.005f,0,sequence_.GetAuthoredDuration());
             binding("位置の基準点（空なら従来の座標系）",k.positionReference);
@@ -210,25 +239,30 @@ void GhostDirector::DrawPresentationEditor() {
             ImGui::DragFloat("発光",&k.emissive,.02f,0,100); ImGui::DragFloat("消失面の高さ",&k.clipHeight,.01f);
             ImGui::DragFloat("接地後の跳ね上がり",&k.bounce,.01f,0,10);
             ImGui::Checkbox("表示",&k.visible); ImGui::SameLine(); ImGui::Checkbox("消失面を使う",&k.clipEnabled);
+            // 複製ボタンでは姿勢と見た目を引き継ぎ、時刻だけ現在のシーク位置にする。
             if (ImGui::Button("選択キーを現在時刻へ複製")) { auto copy=k; copy.time=currentScrubTime_; clip.keys.push_back(copy); }
             ImGui::SameLine();
+            // キーを最低1件残すため、2件以上の場合だけ選択キーを削除できる。
             if (clip.keys.size()>1 && ImGui::Button("選択キーを削除")) clip.keys.erase(clip.keys.begin()+selectedVisualKey_);
         }
     }
     // カットごとの基準点と補正値は部品とは別に編集し、キー時刻は演出全体の秒数で指定する。
     if (ImGui::TreeNode("演出カメラと黒帯")) {
         ImGui::Checkbox("カメラ補正をワールド座標で指定",&p.viewWorldSpace);
+        // 追加時は選択中のカットを複製し、未登録なら既定姿勢で現在時刻に作る。
         if (ImGui::Button("カメラキーを追加")) {
-            auto key=p.view.empty()?CinematicViewKey{}:p.view[std::clamp(selectedViewKey_,0,static_cast<int>(p.view.size())-1)];
-            key.time=currentScrubTime_; p.view.push_back(key); selectedViewKey_=static_cast<int>(p.view.size())-1;
+            auto key=p.view.empty()?CinematicViewKey{}:p.view[std::clamp(selectedViewKey_,0,static_cast<std::int32_t>(p.view.size())-1)];
+            key.time=currentScrubTime_; p.view.push_back(key); selectedViewKey_=static_cast<std::int32_t>(p.view.size())-1;
         }
+        // カメラキーがある場合だけ選択番号を正規化してカットごとの入力欄を出す。
         if (!p.view.empty()) {
-            selectedViewKey_=std::clamp(selectedViewKey_,0,static_cast<int>(p.view.size())-1);
+            selectedViewKey_=std::clamp(selectedViewKey_,0,static_cast<std::int32_t>(p.view.size())-1);
+            // 探索操作では、シーク時刻以降の最初のカットを選ぶ。候補がなければ末尾を選ぶ。
             if (ImGui::Button("現在時刻に近いカメラキー")) {
                 auto it=std::lower_bound(p.view.begin(),p.view.end(),currentScrubTime_,[](const auto& k,float t){return k.time<t;});
-                selectedViewKey_=std::min(static_cast<int>(it-p.view.begin()),static_cast<int>(p.view.size())-1);
+                selectedViewKey_=std::min(static_cast<std::int32_t>(it-p.view.begin()),static_cast<std::int32_t>(p.view.size())-1);
             }
-            ImGui::SliderInt("カメラキー",&selectedViewKey_,0,static_cast<int>(p.view.size())-1);
+            ImGui::SliderInt("カメラキー",&selectedViewKey_,0,static_cast<std::int32_t>(p.view.size())-1);
             auto& k=p.view[selectedViewKey_];
             binding("このカットの注視元（空なら開始位置）",k.reference);
             binding("このカットの注視先（空なら開始位置）",k.lookToward);
@@ -246,9 +280,11 @@ void GhostDirector::DrawPresentationEditor() {
     }
     // 開始から終了の間、部品を起点に指定間隔で発生する粒子を編集する。
     if (ImGui::TreeNode("持続粒子")) {
+        // 追加ボタンで未設定の粒子クリップを末尾へ作る。
         if (ImGui::Button("粒子クリップを追加")) p.particles.push_back({});
         for (size_t i=0;i<p.particles.size();++i) {
-            ImGui::PushID(static_cast<int>(i)); auto& clip=p.particles[i];
+            ImGui::PushID(static_cast<std::int32_t>(i)); auto& clip=p.particles[i];
+            // 開いたクリップだけ、部品名とプリセット、発生時間や方向を編集できる。
             if (ImGui::TreeNode("粒子", "%s",clip.preset.empty()?"未設定":clip.preset.c_str())) {
                 text("発生点の部品名",clip.target); text("GPU粒子プリセット",clip.preset);
                 ImGui::DragFloat("開始",&clip.startTime,.01f,0,sequence_.duration);
@@ -256,6 +292,7 @@ void GhostDirector::DrawPresentationEditor() {
                 ImGui::DragFloat("発生間隔",&clip.interval,.01f,.01f,10);
                 ImGui::DragFloat("発生量倍率",&clip.scale,.01f,0,10); ImGui::DragFloat3("発生方向",&clip.direction.x,.01f);
                 bool radial=clip.directionMode=="radialIn";
+                // 方向指定が切り替わったときだけ、参照先を向く方式と固定ベクトル方式を差し替える。
                 if (ImGui::Checkbox("基準対象へ向ける",&radial)) clip.directionMode=radial?"radialIn":"fixed";
                 ImGui::TreePop();
             }

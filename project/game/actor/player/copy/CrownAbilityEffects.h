@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "CopyAbilitySupport.h"
 #include "CrownPresentationSettings.h"
 #include "EffectObject3D.h"
@@ -28,20 +29,23 @@ class CrownAbilityEffects {
     }
     // 初回だけXZ平面の輪メッシュを生成・保持します。commonが未指定なら生成しません。
     void EnsureRing(engine::Object3DCommon* common) {
+        // リングのメッシュを作成済みの場合は再利用し、共有資源を取得できない場合は生成を見送る。
         if (ring_ || !common) return;
         std::vector<engine::Model::VertexData> vertices;
         std::vector<uint32_t> indices;
-        constexpr int kCount = 96;
+        constexpr std::int32_t kCount = 96;
         constexpr float kFullTurn = 2.0f * std::numbers::pi_v<float>; // 1周分の角度（ラジアン）。
-        for (int i = 0; i <= kCount; ++i) {
+        // 終点にも最初と同じ角度の頂点対を作り、帯を一周で閉じる。
+        for (std::int32_t i = 0; i <= kCount; ++i) {
             const float a = float(i) / kCount * kFullTurn;
-            for (int side = 0; side < 2; ++side) {
+            for (std::int32_t side = 0; side < 2; ++side) {
                 engine::Model::VertexData v{};
                 const float radius = side ? 1.0f : 0.95f;
                 v.position = {std::cos(a) * radius, 0, std::sin(a) * radius, 1};
                 v.normal = {0, 1, 0}; v.texcoord = {float(i) / kCount, float(side)};
                 vertices.push_back(v);
             }
+            // 次の頂点対がある区間だけ、内周と外周を二枚の三角形でつなぐ。
             if (i < kCount) {
                 const uint32_t n = uint32_t(i * 2);
                 for (auto v : {n,n+2,n+1,n+1,n+2,n+3}) indices.push_back(v);
@@ -54,8 +58,10 @@ public:
     // 共有プリセットを値コピーし、位置・方向・倍率を変更して一回発生する。原本は編集しない。
     static void Emit(const char* name, Vec position, Vec direction, float size = 1.0f, float speed = 1.0f) {
         auto* particles = GpuParticleManager::GetInstance();
+        // エフェクト管理側が存在し、初期化も済んでいる場合だけ、リング用のプリセットを探す。
         if (!particles || !particles->IsInitialized()) return;
         const auto& presets = particles->GetPresets();
+        // 目的の名前のプリセットが見つかった場合は、その設定を使う。
         const auto found = presets.find(name); if (found == presets.end()) return;
         // 発生領域と粒の寸法を同じ倍率で補正し、元の速度の大きさだけを指定方向へ向ける。
         auto c = found->second;
@@ -70,23 +76,27 @@ public:
     void Ring(Vec position, Vec normal, float size, bool fragments = false, float delay = 0.0f) {
         auto* scene = SceneManager::GetInstance()->GetCurrentScene();
         auto* common = scene ? scene->GetObject3DCommon() : nullptr;
+        // 必要なリングを用意してから、使用できるメッシュと共有資源がそろった場合に生成する。
         EnsureRing(common); if (!ring_ || !common) return;
         // 同時に所有できる輪の数を制限し、上限に達していれば新しい輪だけ省く。
         if (pulses_.size() >= 8) return;
         Pulse pulse;
         pulse.visual = std::make_unique<EffectObject3D>();
         pulse.visual->Initialize(common); pulse.visual->SetModel(ring_.get());
-        pulse.visual->SetColliderType(ColliderType::None);
-        pulse.visual->SetProceduralType(17); pulse.visual->SetBlendMode(BlendMode::Normal);
+        pulse.visual->SetColliderType(engine::ColliderType::kNone);
+        pulse.visual->SetProceduralType(17); pulse.visual->SetBlendMode(BlendMode::kNormal);
         pulse.visual->SetQuaternionMaster(true);
         normal = Unit(normal);
         // XZ平面の輪を接触面へ向けます。床では必ず床に沿って広がります。
         const float dot = std::clamp(normal.y, -1.0f, 1.0f);
+        // 法線がほぼ真下なら、通常の式では分母がほぼゼロになるため、X軸周りに180度回した姿勢を使う。
         if (dot < -0.9999f) pulse.visual->SetQuaternion({1,0,0,0});
+        // 真下に近くなければ、上向きのリングを地面の法線へ向けるクォータニオンを求める。
         else {
             const float q = std::sqrt((1 + dot) * 2);
             pulse.visual->SetQuaternion({normal.z/q,0,-normal.x/q,q*0.5f});
         }
+        // 地面とリングの描画が重ならないよう、法線方向へ0.06だけ浮かせる。
         pulse.position = position + normal * 0.06f; pulse.normal = normal;
         pulse.age = -delay; pulse.duration = fragments ? 0.38f : 0.25f;
         pulse.size = size; pulse.fragments = fragments;
@@ -94,13 +104,14 @@ public:
         pulses_.push_back(std::move(pulse));
     }
     // 命中位置と方向から粒子・破片・輪を発生する。ダメージの適用は呼出側が行う。
-    void Hit(int stage, Vec position, Vec normal, Vec swing, const CrownPresentationSettings& style) {
+    void Hit(std::int32_t stage, Vec position, Vec normal, Vec swing, const CrownPresentationSettings& style) {
         // 複数敵への同時命中でも発光の総量を抑えます。ダメージ判定とは独立です。
         if (hitCooldown_ > 0) return;
         hitCooldown_ = 0.045f;
         const float weight = stage == 2 ? 1.35f : stage == 1 ? 1.05f : 0.90f;
         Emit("player/copy/crown/player_crown_melee_flash", position + Unit(normal)*0.07f, normal, style.particleScale*weight);
         Emit("player/copy/crown/player_crown_melee_sparks", position, swing, style.particleScale*weight, weight);
+        // 三段目の着地では、リングに加えて破片用のパルスを登録する。
         if (stage == 2) Emit("player/copy/crown/player_crown_melee_shards", position, normal, style.particleScale);
     }
     // dtは秒。遅延を含む効果の時間を進め、寿命を終えた表示物を取り除く。
@@ -111,6 +122,7 @@ public:
             pulse.age += deltaTime;
             // 遅延中と寿命切れの表示は触らず、表示開始を跨いだときだけ破片を出す。
             if (pulse.age < 0 || pulse.age >= pulse.duration) continue;
+            // 待機を終えて初めて表示するフレームに、破片の生成も一度だけ行う。
             if (before <= 0 && pulse.fragments)
                 Emit("player/copy/crown/player_crown_melee_shards", pulse.position, pulse.normal, 1.2f);
             // 輪の外周を広げながら透明にし、同じ経過時間で材質の消散も進める。
@@ -123,13 +135,17 @@ public:
             pulse.visual->GetMaterialData()->time = pulse.age;
             pulse.visual->GetMaterialData()->dissolveFade = t;
         }
+        // 寿命に達したパルスを保持リストから除く。
         std::erase_if(pulses_, [](const Pulse& pulse) { return pulse.age >= pulse.duration; });
     }
-    void Draw(ID3D12Resource* point, ID3D12Resource* spot, engine::Camera* camera, int index) {
+    void Draw(ID3D12Resource* point, ID3D12Resource* spot, engine::Camera* camera, std::int32_t index) {
         for (auto& pulse : pulses_) {
+            // 待機中のパルスにはまだ描画を依頼しない。
             if (!pulse.visual->GetIsVisible()) continue;
             pulse.visual->UpdateWorldMatrix(true);
+            // カメラが明示された場合は、その視点を使って描画する。
             if (camera) pulse.visual->DrawForCamera(camera,point,spot,index);
+            // カメラが省略された場合は、シーン側で設定しているカメラを使う。
             else { pulse.visual->RefreshRenderCameraData(); pulse.visual->Draw(point,spot); }
         }
     }

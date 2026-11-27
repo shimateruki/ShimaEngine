@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include <cstdint>
 #include "game/scene/gameplay/GamePlayScene.h"
 #include "Easing.h"
 #include <numbers>
@@ -12,7 +13,6 @@
 #include "game/actor/enemy/boss/false_king/EnemyFalseKingSlime.h"
 #include "game/actor/enemy/boss/magma/EnemyMagmaSlime.h"
 #include "game/actor/enemy/boss/prism/EnemyPrismSlime.h"
-#include "game/crown/CrownFinaleTuning.h"
 #include "game/system/progress/GameDataManager.h"
 #include "game/system/scene/LevelLoader.h"
 #include "Log.h"
@@ -43,13 +43,13 @@ engine::Vector2 QuadraticBezier(const engine::Vector2& start, const engine::Vect
 }
 
 void SetFullTextureRect(engine::Sprite* sprite, uint32_t textureHandle) {
-    // アイコン差し替え時に画像全体を使い、旧画像のUV領域を残さない。
+    // 有効なSpriteと画像ハンドルが揃ったときに画像全体へ差し替え、旧画像のUV領域を残さない。
     if (!sprite || textureHandle == 0) {
         return;
     }
 
     sprite->SetTextureHandle(textureHandle);
-    const DirectX::TexMetadata& metadata = TextureManager::GetInstance()->GetMetadata(textureHandle);
+    const DirectX::TexMetadata& metadata = engine::TextureManager::GetInstance()->GetMetadata(textureHandle);
     sprite->SetTextureRect({0.0f, 0.0f}, {static_cast<float>(metadata.width), static_cast<float>(metadata.height)});
 }
 
@@ -64,6 +64,7 @@ void GamePlayScene::UpdateUi(float deltaTime) {
     UpdateLifeLostPresentation(deltaTime);
     UpdateDashSpeedLines(deltaTime);
 
+    // セーブ通知を初期化済みなら、通常HUDとは別に表示時間を進める。
     if (saveIndicatorOverlay_) {
         saveIndicatorOverlay_->Update(deltaTime);
     }
@@ -71,6 +72,7 @@ void GamePlayScene::UpdateUi(float deltaTime) {
 
 // 加速と水平速度から表示量を求め、HUDの奥に描く二枚の位置と色を更新する。
 void GamePlayScene::UpdateDashSpeedLines(float deltaTime) {
+    // 時間が進まないフレームや非有限値では、位相や透明度を更新しない。
     if (deltaTime <= 0.0f || !std::isfinite(deltaTime))
         return;
 
@@ -88,6 +90,7 @@ void GamePlayScene::UpdateDashSpeedLines(float deltaTime) {
     const float strength = std::clamp((speedRatio - 1.10f) / 0.90f, 0.0f, 1.0f);
     const bool boosted = !hidden && player_->IsDashPanelBoostActive();
     const float targetAlpha = boosted ? strength * dashSpeedLineMaxAlpha_ : 0.0f;
+    // 非表示条件では残像を消し、次回に向けて流れの位相も戻す。
     if (hidden) {
         dashSpeedLineAlpha_ = 0.0f;
         dashSpeedLinePhase_ = 0.0f;
@@ -96,7 +99,7 @@ void GamePlayScene::UpdateDashSpeedLines(float deltaTime) {
         const float response = targetAlpha > dashSpeedLineAlpha_ ? 28.0f : 14.0f;
         dashSpeedLineAlpha_ = std::lerp(dashSpeedLineAlpha_, targetAlpha, 1.0f - std::exp(-response * deltaTime));
     }
-    // フェードが見えない濃さまで下がったら、二枚とも隠して位置・大きさの更新も止める。
+    // 見えない濃さまで下がったら、作成済みの画像を隠し、位置・大きさの更新も止める。
     if (dashSpeedLineAlpha_ <= 0.005f) {
         dashSpeedLineAlpha_ = 0.0f;
         for (auto& line : dashSpeedLineSprites_)
@@ -111,6 +114,7 @@ void GamePlayScene::UpdateDashSpeedLines(float deltaTime) {
     const float height = static_cast<float>(WinApp::GetClientHeight());
     for (size_t i = 0; i < dashSpeedLineSprites_.size(); ++i) {
         auto& line = dashSpeedLineSprites_[i];
+        // 片方の画像しかなければ、存在する側だけを更新する。
         if (!line)
             continue;
         const float phase = std::fmod(dashSpeedLinePhase_ + static_cast<float>(i) * 0.5f, 1.0f);
@@ -141,7 +145,7 @@ GamePlayScene::HudSpriteState GamePlayScene::BindHud(const std::string& name) {
 }
 
 void GamePlayScene::DrawGameplayHUDSprite(const HudSpriteState& state) {
-    // レイアウトで束ねたSpriteが可視の場合だけ描画する。
+    // 参照がある部品を Draw() に渡し、可視性やリプレイ上の除外はSprite側で判定する。
     if (state.sprite) {
         state.sprite->Draw();
     }
@@ -149,6 +153,7 @@ void GamePlayScene::DrawGameplayHUDSprite(const HudSpriteState& state) {
 
 bool GamePlayScene::IsGameplayHUDSprite(const engine::Sprite* sprite) const {
     // 通常シーンのSpriteとHUD管理下のSpriteを区別し、二重描画を防ぐ。
+    // 参照がなければ名前でHUDの部品かを判別できない。
     if (!sprite) {
         return false;
     }
@@ -158,7 +163,7 @@ bool GamePlayScene::IsGameplayHUDSprite(const engine::Sprite* sprite) const {
 }
 
 void GamePlayScene::InitializeGameplayHUD() {
-    // 静的な画像・配置・色はレイアウトから読み、ここでは演出用の参照だけ結び付ける。
+    // ローダーがあるときは画像・配置・色を読み込み、続けて演出用の参照を結び付ける。
     if (levelLoader_) {
         levelLoader_->LoadSpriteLayout(this, "Resources/json/sprite/gameplayHUD.json");
     }
@@ -166,7 +171,7 @@ void GamePlayScene::InitializeGameplayHUD() {
     // HPとコピー表示は既存の描画部品を渡し、プレイヤー状態に応じた更新を各HUDに任せる。
     healthHud_.Bind(BindHud("hud_hp_icon").sprite, BindHud("hud_hp_damage_fill").sprite,
                     BindHud("hud_hp_fill").sprite, BindHud("hud_hp_highlight").sprite,
-                    BindHud("hud_hp_frame").sprite, player_, PlayerHealthHud::Style::Animated);
+                    BindHud("hud_hp_frame").sprite, player_, PlayerHealthHud::Style::kAnimated);
     hudCopyStyle_ = BindHud("hud_copy_style");
     copyStyleHud_.Bind(hudCopyStyle_.sprite);
 
@@ -188,7 +193,7 @@ void GamePlayScene::InitializeGameplayHUD() {
         prismBossHudGlints_[i] = BindHud("hud_boss_prism_glint_" + std::to_string(i));
     }
 
-    // 偽王専用の段階表示と詠唱ゲージも先に生成し、他のボスでは非表示にする。
+    // 偽王専用の段階表示も先に生成し、他のボスでは非表示にする。
     for (size_t i = 0; i < falseKingBossHudPhaseCrowns_.size(); ++i) {
         falseKingBossHudPhaseCrowns_[i] = BindHud("hud_boss_false_king_phase_crown_" + std::to_string(i));
     }
@@ -197,8 +202,6 @@ void GamePlayScene::InitializeGameplayHUD() {
         falseKingBossHudPhaseDividers_[i] = BindHud("hud_boss_false_king_phase_divider_" + std::to_string(i));
     }
 
-    falseKingCastTrack_ = BindHud("hud_false_king_cast_track");
-    falseKingCastFill_ = BindHud("hud_false_king_cast_fill");
 
     // 残機・コインは数字を桁ごとに持ち、収集スターは保存済み状態と今回の取得を合わせて初期化する。
     hudLifeIcon_ = BindHud("hud_life_icon");
@@ -214,12 +217,12 @@ void GamePlayScene::InitializeGameplayHUD() {
         hudCoinDigits_[i] = BindHud("hud_coin_digit_" + std::to_string(i));
     }
 
-    const int stageIndex = StageManager::GetInstance()->GetCurrentStageIndex();
+    const std::int32_t stageIndex = StageManager::GetInstance()->GetCurrentStageIndex();
 
     for (size_t i = 0; i < hudStageStarSlots_.size(); ++i) {
         hudStageStarSlots_[i] = BindHud("hud_stage_star_slot_" + std::to_string(i));
         hudStageStarVisualCollected_[i] = sessionStarCoins_[i] || GameDataManager::GetInstance()->IsStarCoinCollected(
-                                                                      stageIndex, static_cast<int>(i));
+                                                                      stageIndex, static_cast<std::int32_t>(i));
         hudStageStarPulseTimers_[i] = 0.0f;
     }
 
@@ -243,7 +246,7 @@ void GamePlayScene::InitializeGameplayHUD() {
     lifeLostState_.Reset();
 
     // ボスHUDは入場後に表示対象が見つかるまでは非表示にし、初回更新前に被弾や段階移行の計測を戻す。
-    prismBossHudPhase_ = PrismBossHudPhase::Hidden;
+    prismBossHudPhase_ = PrismBossHudPhase::kHidden;
     prismBossHudTimer_ = 0.0f;
     prismBossHudDisplayedRate_ = 0.0f;
     prismBossHudDelayedRate_ = 0.0f;
@@ -251,28 +254,29 @@ void GamePlayScene::InitializeGameplayHUD() {
     prismBossHudDamagePulseTimer_ = 0.0f;
     prismBossHudDamageHoldTimer_ = 0.0f;
     prismBossHudAnimationTimer_ = 0.0f;
-    prismBossHudTheme_ = BossHudTheme::Prism;
+    prismBossHudTheme_ = BossHudTheme::kPrism;
     falseKingBossHudPreviousPhase_ = 1;
     falseKingBossHudPhasePulseTimer_ = 0.0f;
     UpdateGameplayHUD(0.0f);
 }
 
-void GamePlayScene::SetGameplayHUDNumber(std::array<HudSpriteState, 2>& digits, int value,
+void GamePlayScene::SetGameplayHUDNumber(std::array<HudSpriteState, 2>& digits, std::int32_t value,
                                          const engine::Vector2& rightAlignedPosition, float digitHeight, const engine::Vector4& color,
                                          bool visible) {
     // 一桁・二桁の数字を右揃えで描き、値の桁数で他のHUD要素を動かさない。
     value = std::clamp(value, 0, 99);
 
     // 十の位と一の位を分け、表示する桁数に合わせて数字全体の左端を求める。
-    const std::array<int, 2> digitValues = {value / 10, value % 10};
-    const int digitCount = value >= 10 ? 2 : 1;
+    const std::array<std::int32_t, 2> digitValues = {value / 10, value % 10};
+    const std::int32_t digitCount = value >= 10 ? 2 : 1;
     const float digitWidth = digitHeight * 0.68f;
     const float spacing = digitWidth * 0.82f;
     const float totalWidth = digitCount == 2 ? spacing + digitWidth : digitWidth;
     const float startX = rightAlignedPosition.x - totalWidth + digitWidth * 0.5f;
 
-    for (int i = 0; i < 2; ++i) {
+    for (std::int32_t i = 0; i < 2; ++i) {
         engine::Sprite* sprite = digits[i].sprite;
+        // この桁の配置Spriteがなければ、他の桁だけ処理する。
         if (!sprite)
             continue;
 
@@ -280,12 +284,13 @@ void GamePlayScene::SetGameplayHUDNumber(std::array<HudSpriteState, 2>& digits, 
         const bool digitVisible = visible && (digitCount == 2 || i == 1);
         sprite->SetVisible(digitVisible);
 
+        // HUDが非表示か一桁の十の位なら、隠した部品の画像は差し替えない。
         if (!digitVisible) {
             continue;
         }
 
-        const int sourceIndex = digitCount == 2 ? i : 1;
-        const int digit = digitValues[sourceIndex];
+        const std::int32_t sourceIndex = digitCount == 2 ? i : 1;
+        const std::int32_t digit = digitValues[sourceIndex];
         const uint32_t handle = engine::Sprite::LoadTexture("number/" + std::to_string(digit) + ".png");
         sprite->SetTextureHandle(handle);
         sprite->SetPosition({startX + (sourceIndex - (2 - digitCount)) * spacing, rightAlignedPosition.y});
@@ -295,7 +300,7 @@ void GamePlayScene::SetGameplayHUDNumber(std::array<HudSpriteState, 2>& digits, 
     }
 }
 
-void GamePlayScene::CollectStarCoin(int coinIndex) {
+void GamePlayScene::CollectStarCoin(std::int32_t coinIndex) {
     // 演出位置が無い取得ではセッション状態を即時反映し、該当枠を短く光らせる。
     if (coinIndex < 0 || coinIndex >= 3) {
         return;
@@ -306,18 +311,19 @@ void GamePlayScene::CollectStarCoin(int coinIndex) {
     hudStageStarPulseTimers_[coinIndex] = 0.45f;
 }
 
-void GamePlayScene::CollectStarCoin(int coinIndex, const engine::Vector3& worldPosition) {
+void GamePlayScene::CollectStarCoin(std::int32_t coinIndex, const engine::Vector3& worldPosition) {
     // 初回取得だけワールド位置からHUDへ飛ばし、再取得は即時表示にする。
     if (coinIndex < 0 || coinIndex >= 3) {
         return;
     }
 
-    const int stageIndex = StageManager::GetInstance()->GetCurrentStageIndex();
+    const std::int32_t stageIndex = StageManager::GetInstance()->GetCurrentStageIndex();
     const bool alreadyCollected =
         sessionStarCoins_[coinIndex] || GameDataManager::GetInstance()->IsStarCoinCollected(stageIndex, coinIndex);
 
     sessionStarCoins_[coinIndex] = true;
 
+    // 既に取得済みの星は飛行を再開せず、取得表示を短く強調する。
     if (alreadyCollected) {
         hudStageStarVisualCollected_[coinIndex] = true;
         hudStageStarPulseTimers_[coinIndex] = 0.45f;
@@ -334,24 +340,28 @@ engine::Vector2 GamePlayScene::ProjectWorldToScreen(const engine::Vector3& world
     const float screenW = static_cast<float>(WinApp::GetClientWidth());
     const float screenH = static_cast<float>(WinApp::GetClientHeight());
 
+    // カメラがなければワールド位置を投影できないため、画面中央を返す。
     if (!camera) {
         return {screenW * 0.5f, screenH * 0.5f};
     }
 
     engine::Vector3 ndc = engine::Math::Transform(worldPosition, camera->GetViewProjectionMatrix());
 
+    // 横・縦のどちらかが非有限値なら、演出位置に使えないため中央へ戻す。
     if (!std::isfinite(ndc.x) || !std::isfinite(ndc.y)) {
         return {screenW * 0.5f, screenH * 0.5f};
     }
 
+    // 出発点が画面の端に重ならないよう、投影位置は24ピクセル内側に収める。
     return {std::clamp((ndc.x + 1.0f) * 0.5f * screenW, 24.0f, screenW - 24.0f),
             std::clamp((1.0f - ndc.y) * 0.5f * screenH, 24.0f, screenH - 24.0f)};
 }
 
-void GamePlayScene::StartStageStarHUDCollectEffect(int starIndex, const engine::Vector3& worldPosition) {
+void GamePlayScene::StartStageStarHUDCollectEffect(std::int32_t starIndex, const engine::Vector3& worldPosition) {
     // 星本体と火花を取得位置からHUD枠へ飛ばし、到着時に取得済み表示へ切り替える。
     // 描画部品を作れない場合も、有効な枠の取得表示は即時反映して取りこぼさない。
-    if (starIndex < 0 || starIndex >= static_cast<int>(hudStageStarSlots_.size()) || !GetSpriteCommon()) {
+    if (starIndex < 0 || starIndex >= static_cast<std::int32_t>(hudStageStarSlots_.size()) || !GetSpriteCommon()) {
+        // 演出を作れなくても、取得状態を記録できる0～2番の星はその場で表示する。
         if (starIndex >= 0 && starIndex < 3) {
             hudStageStarVisualCollected_[starIndex] = true;
             hudStageStarPulseTimers_[starIndex] = 0.45f;
@@ -396,7 +406,7 @@ void GamePlayScene::StartStageStarHUDCollectEffect(int starIndex, const engine::
     addParticle("Resources/sprite/ui/hud/stage_star_filled.png", start, end, mainControl, 0.72f, 44.0f, 5.6f, true);
 
     // 火花は星本体の周りから散らし、経路や寿命を少しずつ変えて一斉に消えないようにする。
-    for (int i = 0; i < 10; ++i) {
+    for (std::int32_t i = 0; i < 10; ++i) {
         const float angle = static_cast<float>(i) / 10.0f * kPi * 2.0f;
         const float radius = 18.0f + static_cast<float>((i % 3) * 7);
         const engine::Vector2 startOffset = {static_cast<float>(std::cos(angle) * radius),
@@ -415,7 +425,7 @@ void GamePlayScene::StartStageStarHUDCollectEffect(int starIndex, const engine::
 void GamePlayScene::UpdateStageStarHUD(float deltaTime, bool visible) {
     // 飛行中の星を進め、到着後は保存済みの取得状態と枠の表示を同期する。
     visible = visible && StageManager::GetInstance()->GetCurrentStage().hasStarCoins;
-    const int stageIndex = StageManager::GetInstance()->GetCurrentStageIndex();
+    const std::int32_t stageIndex = StageManager::GetInstance()->GetCurrentStageIndex();
 
     // 同じ曲線補間で星と火花を進め、星本体の形は保ちつつ火花だけ途中から薄くする。
     for (auto it = hudStageStarFlyParticles_.begin(); it != hudStageStarFlyParticles_.end();) {
@@ -427,6 +437,7 @@ void GamePlayScene::UpdateStageStarHUD(float deltaTime, bool visible) {
         const float fade = particle.fillsSlot ? 1.0f : std::clamp(1.0f - (t - 0.62f) / 0.38f, 0.0f, 1.0f);
         const float size = particle.baseSize * (particle.fillsSlot ? (1.0f + (1.0f - t) * 0.20f) : (1.0f - t * 0.38f));
 
+        // 描画用Spriteが作成済みなら飛行位置と色を反映する。到着判定は参照の有無に関わらず行う。
         if (particle.sprite) {
             particle.sprite->SetVisible(visible && fade > 0.0f);
             particle.sprite->SetPosition(position);
@@ -438,6 +449,7 @@ void GamePlayScene::UpdateStageStarHUD(float deltaTime, bool visible) {
 
         // 星本体が枠に到着したフレームで取得表示と脈動を始め、寿命を過ぎた部品は取り除く。
         if (t >= 1.0f) {
+            // 取得枠を埋めるのは、0～2番の枠に対応した星本体だけ。火花はそのまま破棄する。
             if (particle.fillsSlot && particle.starIndex >= 0 && particle.starIndex < 3) {
                 hudStageStarVisualCollected_[particle.starIndex] = true;
                 hudStageStarPulseTimers_[particle.starIndex] = 0.65f;
@@ -445,31 +457,36 @@ void GamePlayScene::UpdateStageStarHUD(float deltaTime, bool visible) {
 
             it = hudStageStarFlyParticles_.erase(it);
         } else {
+            // 飛行中の粒子は次の更新に残し、次の要素へ進む。
             ++it;
         }
     }
 
     // 星本体がまだ飛んでいる枠だけは、セッションの取得フラグを即座に画面へ反映しない。
-    for (int i = 0; i < static_cast<int>(hudStageStarSlots_.size()); ++i) {
+    for (std::int32_t i = 0; i < static_cast<std::int32_t>(hudStageStarSlots_.size()); ++i) {
         bool hasActiveFill = false;
 
         for (const auto& particle : hudStageStarFlyParticles_) {
+            // 同じ枠へ向かう星本体を調べる。火花は到着待ちの対象外。
             if (particle.fillsSlot && particle.starIndex == i) {
                 hasActiveFill = true;
                 break;
             }
         }
 
+        // 今回取得済みで対応する飛行が残っていなければ、未反映の枠を埋める。
         if (sessionStarCoins_[i] && !hasActiveFill && !hudStageStarVisualCollected_[i]) {
             hudStageStarVisualCollected_[i] = true;
         }
 
+        // セーブ済みの取得状態は、今回の演出に関係なく反映する。
         if (GameDataManager::GetInstance()->IsStarCoinCollected(stageIndex, i)) {
             hudStageStarVisualCollected_[i] = true;
         }
 
         HudSpriteState& slot = hudStageStarSlots_[i];
 
+        // 枠の配置Spriteがなければ、この枠の描画更新を省く。
         if (!slot.sprite) {
             continue;
         }
@@ -499,10 +516,10 @@ void GamePlayScene::UpdateGameplayHUD(float deltaTime) {
     copyStyleHud_.Update(player_, deltaTime);
     const bool visible = player_ != nullptr;
     healthHud_.Update(player_, deltaTime);
-    const int lives = GameDataManager::GetInstance()->GetLives();
-    const int coins = GameDataManager::GetInstance()->GetCoins();
+    const std::int32_t lives = GameDataManager::GetInstance()->GetLives();
+    const std::int32_t coins = GameDataManager::GetInstance()->GetCoins();
 
-    // 数値変化を短い反応として保持し、残機・コイン・HP に別の見せ方を与えます。
+    // HUD表示中だけ数値の反応を開始する。残機は増加時、コインは増減の両方を対象にする。
     if (visible && lives > hudPreviousLives_) {
         hudLifeGainPulseTimer_ = kLifeGainPulseDuration;
     }
@@ -529,7 +546,7 @@ void GamePlayScene::UpdateGameplayHUD(float deltaTime) {
     const float coinCountScale = 1.0f + coinBounce * 0.14f;
     const float coinBounceOffsetY = -12.0f * coinBounce;
 
-    // 残機とコインの取得反応を更新した後、数字の桁を描画状態へ反映します。
+    // 配置に含まれるアイコンへ取得反応を反映し、数字は SetGameplayHUDNumber() で更新する。
     if (hudLifeIcon_.sprite) {
         hudLifeIcon_.sprite->SetVisible(visible);
         hudLifeIcon_.sprite->SetPosition(hudLifeIcon_.basePosition);
@@ -540,6 +557,7 @@ void GamePlayScene::UpdateGameplayHUD(float deltaTime) {
         hudLifeIcon_.sprite->Update();
     }
 
+    // 配置済みの残機の掛け記号は、位置を固定したまま縦横同じ倍率で拡大する。
     if (hudLifeXIcon_.sprite) {
         hudLifeXIcon_.sprite->SetVisible(visible);
         hudLifeXIcon_.sprite->SetPosition(hudLifeXIcon_.basePosition);
@@ -567,6 +585,7 @@ void GamePlayScene::UpdateGameplayHUD(float deltaTime) {
         hudCoinIcon_.sprite->Update();
     }
 
+    // 配置済みのコインの掛け記号は、アイコンの跳ね上がりの55%だけ追従する。
     if (hudCoinXIcon_.sprite) {
         hudCoinXIcon_.sprite->SetVisible(visible);
         hudCoinXIcon_.sprite->SetPosition(
@@ -590,9 +609,10 @@ void GamePlayScene::UpdateGameplayHUD(float deltaTime) {
 namespace {
 template<class Boss>
 Boss* FindActiveHudBoss(ObjectManager* manager) {
+    // 検索先の管理クラスがなければ、対象なしとして返す。
     if (!manager) return nullptr;
 
-    // 同じ種類が複数いる場合は、従来どおりシーン内で最初の有効なボスを選ぶ。
+    // 指定した型で戦闘HUDが有効なボスを選ぶ。同じ種類が複数いれば一覧の先頭側を優先する。
     for (const auto& object : manager->GetObjects()) {
         if (auto* boss = dynamic_cast<Boss*>(object.get()); boss && boss->IsEncounterHudActive()) {
             return boss;
@@ -627,18 +647,20 @@ GamePlayScene::BossHudDisplay GamePlayScene::FindBossHudDisplay() {
     };
 
     // 一度に表示するのは一体。既存のプリズム、マグマ、偽王の優先順を保つ。
-    if (const auto* boss = FindPrismBossForHUD()) return makeDisplay(*boss, BossHudTheme::Prism);
-    if (const auto* boss = FindMagmaBossForHUD()) return makeDisplay(*boss, BossHudTheme::Magma);
+    if (const auto* boss = FindPrismBossForHUD()) return makeDisplay(*boss, BossHudTheme::kPrism);
+    if (const auto* boss = FindMagmaBossForHUD()) return makeDisplay(*boss, BossHudTheme::kMagma);
+    // 偽王が選ばれたときだけ、戦闘段階と移行演出の進捗も渡す。
     if (const auto* boss = FindFalseKingBossForHUD()) {
-        auto display = makeDisplay(*boss, BossHudTheme::FalseKing);
+        auto display = makeDisplay(*boss, BossHudTheme::kFalseKing);
         display.falseKingPhase = (std::clamp)(boss->GetBattlePhase(), 1, 3);
         display.falseKingPhaseTransition = boss->GetPhaseTransitionProgress();
-        display.sealCastRemaining = boss->GetSealCastRemainingTime();
         return display;
     }
+    // 三種類とも見つからなければ既定の非表示データを返す。
     return {};
 }
 
+// ボスの表示要求・HP・戦闘段階を読み、出現から消去までの表示を更新する。deltaTimeは秒。
 void GamePlayScene::UpdateBossHud(const BossHudDisplay& display, float deltaTime) {
     constexpr float kIntroDuration = 1.62f;
     constexpr float kDismissDuration = 0.38f;
@@ -646,13 +668,13 @@ void GamePlayScene::UpdateBossHud(const BossHudDisplay& display, float deltaTime
     prismBossHudAnimationTimer_ = std::fmod(prismBossHudAnimationTimer_ + deltaTime, 1000.0f);
 
     const auto requestedTheme = display.theme;
-    const bool usesMagmaTheme = requestedTheme == BossHudTheme::Magma;
-    const bool usesFalseKingTheme = requestedTheme == BossHudTheme::FalseKing;
+    const bool usesMagmaTheme = requestedTheme == BossHudTheme::kMagma;
+    const bool usesFalseKingTheme = requestedTheme == BossHudTheme::kFalseKing;
     const bool requestedVisible = display.visible;
     const float currentHp = display.currentHp;
     // 現在HPを最大HPで割って表示幅の割合にする。装飾の出現率とは独立して保持する。
     const float actualRate = (std::clamp)(currentHp / display.maximumHp, 0.0f, 1.0f);
-    const int falseKingPhase = display.falseKingPhase;
+    const std::int32_t falseKingPhase = display.falseKingPhase;
     const float falseKingPhaseTransition = display.falseKingPhaseTransition;
 
     // テーマが切り替わったときだけ名前と左右の装飾テクスチャを差し替える。
@@ -670,8 +692,8 @@ void GamePlayScene::UpdateBossHud(const BossHudDisplay& display, float deltaTime
 
     // 出現・消滅を検知して表示状態を遷移させる。再出現時はHPアニメーションの基準も初期化する。
     if (requestedVisible &&
-        (prismBossHudPhase_ == PrismBossHudPhase::Hidden || prismBossHudPhase_ == PrismBossHudPhase::Dismissing)) {
-        prismBossHudPhase_ = PrismBossHudPhase::Introducing;
+        (prismBossHudPhase_ == PrismBossHudPhase::kHidden || prismBossHudPhase_ == PrismBossHudPhase::kDismissing)) {
+        prismBossHudPhase_ = PrismBossHudPhase::kIntroducing;
         prismBossHudTimer_ = 0.0f;
         prismBossHudDisplayedRate_ = 0.0f;
         prismBossHudDelayedRate_ = 0.0f;
@@ -680,9 +702,10 @@ void GamePlayScene::UpdateBossHud(const BossHudDisplay& display, float deltaTime
         prismBossHudDamageHoldTimer_ = 0.0f;
         falseKingBossHudPreviousPhase_ = falseKingPhase;
         falseKingBossHudPhasePulseTimer_ = 0.0f;
-    } else if (!requestedVisible && prismBossHudPhase_ != PrismBossHudPhase::Hidden &&
-               prismBossHudPhase_ != PrismBossHudPhase::Dismissing) {
-        prismBossHudPhase_ = PrismBossHudPhase::Dismissing;
+    } else if (!requestedVisible && prismBossHudPhase_ != PrismBossHudPhase::kHidden &&
+               prismBossHudPhase_ != PrismBossHudPhase::kDismissing) {
+        // 出現中または表示中に表示要求が消えたら、消去フェードを始める。
+        prismBossHudPhase_ = PrismBossHudPhase::kDismissing;
         prismBossHudTimer_ = 0.0f;
     }
 
@@ -692,11 +715,11 @@ void GamePlayScene::UpdateBossHud(const BossHudDisplay& display, float deltaTime
     float visualAlpha = 0.0f;
 
     switch (prismBossHudPhase_) {
-    case PrismBossHudPhase::Hidden:
+    case PrismBossHudPhase::kHidden:
         // 非表示中は枠や名前の公開率をゼロのままにして、その値で後段の部品を隠す。
         break;
 
-    case PrismBossHudPhase::Introducing: {
+    case PrismBossHudPhase::kIntroducing: {
         // ボス本体の登場進捗も枠の開きに反映し、HPバーは名前より遅れて見せる。
         prismBossHudTimer_ += deltaTime;
         const float appearanceProgress = display.appearanceProgress;
@@ -709,7 +732,7 @@ void GamePlayScene::UpdateBossHud(const BossHudDisplay& display, float deltaTime
 
         // 登場ゲージの演出が終わったら、両方の帯を実HPに戻して被弾追従へ切り替える。
         if (prismBossHudTimer_ >= kIntroDuration) {
-            prismBossHudPhase_ = PrismBossHudPhase::Active;
+            prismBossHudPhase_ = PrismBossHudPhase::kActive;
             prismBossHudTimer_ = 0.0f;
             prismBossHudDisplayedRate_ = actualRate;
             prismBossHudDelayedRate_ = actualRate;
@@ -718,7 +741,7 @@ void GamePlayScene::UpdateBossHud(const BossHudDisplay& display, float deltaTime
         break;
     }
 
-    case PrismBossHudPhase::Active: {
+    case PrismBossHudPhase::kActive: {
         frameReveal = 1.0f;
         nameReveal = 1.0f;
         visualAlpha = 1.0f;
@@ -726,6 +749,7 @@ void GamePlayScene::UpdateBossHud(const BossHudDisplay& display, float deltaTime
         // HP減少直後は旧HPの帯を短時間残し、その後に遅れて現在HPまで縮める。
         const bool tookDamage = currentHp < prismBossHudPreviousHp_ - 0.01f;
 
+        // 前回から0.01を超えてHPが減ったときは、旧HPの位置を遅延帯に残す。
         if (tookDamage) {
             const float previousRate = (std::clamp)(prismBossHudPreviousHp_ / display.maximumHp, 0.0f, 1.0f);
             prismBossHudDamagePulseTimer_ = 0.44f;
@@ -738,28 +762,31 @@ void GamePlayScene::UpdateBossHud(const BossHudDisplay& display, float deltaTime
         const float follow = 1.0f - std::exp(-deltaTime * 13.0f);
         prismBossHudDisplayedRate_ += (actualRate - prismBossHudDisplayedRate_) * follow;
 
-        // 回復時は遅延帯を追いつかせ、被弾後は保持時間を過ぎてから一定速度で縮める。
+        // 実HPの比率が遅延帯に追いついたら位置をそろえる。下回っていれば保持時間の後で帯を縮める。
         if (actualRate >= prismBossHudDelayedRate_) {
             prismBossHudDelayedRate_ = actualRate;
             prismBossHudDamageHoldTimer_ = 0.0f;
         } else if (prismBossHudDamageHoldTimer_ > 0.0f) {
+            // 保持中は残り時間だけ減らし、幅を保つ。
             prismBossHudDamageHoldTimer_ = (std::max)(0.0f, prismBossHudDamageHoldTimer_ - deltaTime);
         } else {
+            // 保持が終わったら毎秒0.36ずつ縮め、実HPの比率を下限にする。
             prismBossHudDelayedRate_ = (std::max)(actualRate, prismBossHudDelayedRate_ - deltaTime * 0.36f);
         }
 
         break;
     }
 
-    case PrismBossHudPhase::Dismissing:
+    case PrismBossHudPhase::kDismissing:
         // 対象が消えたときは急に非表示にせず、全体の透明度を落とす。
         prismBossHudTimer_ += deltaTime;
         frameReveal = 1.0f;
         nameReveal = 1.0f;
         visualAlpha = 1.0f - Easing::SmoothStep01(prismBossHudTimer_ / kDismissDuration);
 
+        // 消去フェードが0.38秒に達したら、表示状態を非表示に切り替える。
         if (prismBossHudTimer_ >= kDismissDuration) {
-            prismBossHudPhase_ = PrismBossHudPhase::Hidden;
+            prismBossHudPhase_ = PrismBossHudPhase::kHidden;
             visualAlpha = 0.0f;
         }
 
@@ -770,17 +797,18 @@ void GamePlayScene::UpdateBossHud(const BossHudDisplay& display, float deltaTime
     prismBossHudDamagePulseTimer_ = (std::max)(0.0f, prismBossHudDamagePulseTimer_ - deltaTime);
     falseKingBossHudPhasePulseTimer_ = (std::max)(0.0f, falseKingBossHudPhasePulseTimer_ - deltaTime);
 
+    // 偽王の戦闘段階が変わったフレームで、段階表示の強調タイマーを始める。
     if (usesFalseKingTheme && falseKingPhase != falseKingBossHudPreviousPhase_) {
         falseKingBossHudPreviousPhase_ = falseKingPhase;
         falseKingBossHudPhasePulseTimer_ = 0.82f;
     }
 
     // 状態から描画に渡す共通の揺れ・拡大・低HP点滅の係数を作る。
-    const bool hudVisible = visualAlpha > 0.001f && prismBossHudPhase_ != PrismBossHudPhase::Hidden;
+    const bool hudVisible = visualAlpha > 0.001f && prismBossHudPhase_ != PrismBossHudPhase::kHidden;
     const float damagePulseRate = (std::clamp)(prismBossHudDamagePulseTimer_ / 0.44f, 0.0f, 1.0f);
     const float damageImpact = std::sin((1.0f - damagePulseRate) * kPi) * damagePulseRate;
     const float barShake = damagePulseRate > 0.0f ? std::sin(prismBossHudDamagePulseTimer_ * 96.0f) *
-                                                        SpriteLayoutScaler::ScaleDesignX(4.0f) * damagePulseRate
+                                                        spriteLayoutScaler::ScaleDesignX(4.0f) * damagePulseRate
                                                   : 0.0f;
     const float barScale = 0.12f + frameReveal * 0.88f;
     const float displayedRate = (std::clamp)(prismBossHudDisplayedRate_, 0.0f, 1.0f);
@@ -792,6 +820,7 @@ void GamePlayScene::UpdateBossHud(const BossHudDisplay& display, float deltaTime
     // 各部品の可視性・位置・大きさ・色を同じ手順で反映する。
     auto updateSprite = [](HudSpriteState& state, bool visible, const engine::Vector2& position, const engine::Vector2& size,
                            const engine::Vector4& color, float rotation = 0.0f) {
+        // 配置にない部品は更新できないため、この呼び出しだけ終了する。
         if (!state.sprite) {
             return;
         }
@@ -808,33 +837,52 @@ void GamePlayScene::UpdateBossHud(const BossHudDisplay& display, float deltaTime
     const float phasePulseRate = (std::clamp)(falseKingBossHudPhasePulseTimer_ / 0.82f, 0.0f, 1.0f);
     const float phaseImpact = std::sin((1.0f - phasePulseRate) * kPi) * phasePulseRate;
     const float glowPulse = 0.82f + std::sin(prismBossHudAnimationTimer_ * 3.6f) * 0.18f + phaseImpact * 0.34f;
-    const engine::Vector3 glowColor =
-        usesFalseKingTheme
-            ? (falseKingPhase >= 3 ? engine::Vector3{0.72f, 0.22f + phaseImpact * 0.28f, 1.0f}
-                                   : (falseKingPhase == 2 ? engine::Vector3{1.0f, 0.28f + phaseImpact * 0.22f, 0.72f}
-                                                          : engine::Vector3{1.0f, 0.54f + lowHpPulse * 0.22f, 0.18f}))
-            : (usesMagmaTheme ? engine::Vector3{1.0f, 0.26f + lowHpPulse * 0.14f, 0.025f}
-                              : engine::Vector3{0.34f + lowHpPulse * 0.30f, 0.58f, 1.0f});
-    const engine::Vector3 fillColor =
-        usesFalseKingTheme
-            ? (falseKingPhase >= 3
-                   ? engine::Vector3{0.72f + phaseImpact * 0.22f, 0.16f, 1.0f}
-                   : (falseKingPhase == 2 ? engine::Vector3{1.0f, 0.34f, 0.72f + phaseImpact * 0.20f}
-                                          : engine::Vector3{1.0f, 0.72f - lowHpPulse * 0.32f, 0.12f + lowHpPulse * 0.18f}))
-            : (usesMagmaTheme ? engine::Vector3{1.0f, 0.48f - lowHpPulse * 0.30f, 0.035f}
-                              : engine::Vector3{0.16f + lowHpPulse * 0.58f, 0.84f - lowHpPulse * 0.34f, 1.0f});
-    const engine::Vector3 frameTopColor =
-        usesFalseKingTheme
-            ? (falseKingPhase >= 3 ? engine::Vector3{0.88f, 0.52f, 1.0f}
-                                   : (falseKingPhase == 2 ? engine::Vector3{1.0f, 0.54f, 0.86f} : engine::Vector3{1.0f, 0.90f, 0.42f}))
-            : (usesMagmaTheme ? engine::Vector3{1.0f, 0.88f, 0.32f} : engine::Vector3{0.54f + lowHpPulse * 0.30f, 0.94f, 1.0f});
-    const engine::Vector3 frameBottomColor =
-        usesFalseKingTheme
-            ? (falseKingPhase >= 3 ? engine::Vector3{0.32f, 0.72f, 1.0f}
-                                   : (falseKingPhase == 2 ? engine::Vector3{0.72f, 0.20f, 1.0f}
-                                                          : engine::Vector3{0.62f + lowHpPulse * 0.20f, 0.22f, 0.92f}))
-            : (usesMagmaTheme ? engine::Vector3{0.62f + lowHpPulse * 0.30f, 0.045f, 0.015f}
-                              : engine::Vector3{0.66f + lowHpPulse * 0.24f, 0.44f, 1.0f});
+    engine::Vector3 glowColor{0.34f + lowHpPulse * 0.30f, 0.58f, 1.0f};
+    engine::Vector3 fillColor{0.16f + lowHpPulse * 0.58f, 0.84f - lowHpPulse * 0.34f, 1.0f};
+    engine::Vector3 frameTopColor{0.54f + lowHpPulse * 0.30f, 0.94f, 1.0f};
+    engine::Vector3 frameBottomColor{0.66f + lowHpPulse * 0.24f, 0.44f, 1.0f};
+    engine::Vector3 damageFillColor{1.0f, 0.24f + lowHpPulse * 0.12f, 0.88f};
+    engine::Vector3 highlightColor{1.0f, 1.0f, 1.0f};
+    engine::Vector3 shardLeftColor{0.42f + lowHpPulse * 0.35f, 0.90f, 1.0f};
+    engine::Vector3 shardRightColor{0.76f + lowHpPulse * 0.20f, 0.42f, 1.0f};
+    engine::Vector3 nameColor{1.0f, 1.0f, 1.0f};
+    engine::Vector3 glintColor{0.72f + lowHpPulse * 0.20f, 0.96f, 1.0f};
+    // 偽王の配色を優先し、戦闘段階で変わる発光・HP帯・枠だけを内側で切り替える。
+    if (usesFalseKingTheme) {
+        if (falseKingPhase >= 3) {
+            glowColor = {0.72f, 0.22f + phaseImpact * 0.28f, 1.0f};
+            fillColor = {0.72f + phaseImpact * 0.22f, 0.16f, 1.0f};
+            frameTopColor = {0.88f, 0.52f, 1.0f};
+            frameBottomColor = {0.32f, 0.72f, 1.0f};
+        } else if (falseKingPhase == 2) {
+            glowColor = {1.0f, 0.28f + phaseImpact * 0.22f, 0.72f};
+            fillColor = {1.0f, 0.34f, 0.72f + phaseImpact * 0.20f};
+            frameTopColor = {1.0f, 0.54f, 0.86f};
+            frameBottomColor = {0.72f, 0.20f, 1.0f};
+        } else {
+            glowColor = {1.0f, 0.54f + lowHpPulse * 0.22f, 0.18f};
+            fillColor = {1.0f, 0.72f - lowHpPulse * 0.32f, 0.12f + lowHpPulse * 0.18f};
+            frameTopColor = {1.0f, 0.90f, 0.42f};
+            frameBottomColor = {0.62f + lowHpPulse * 0.20f, 0.22f, 0.92f};
+        }
+        damageFillColor = {1.0f, 0.28f, 0.52f};
+        highlightColor = {1.0f, 0.96f, 0.72f};
+        shardLeftColor = {1.0f, 0.68f, 0.18f};
+        shardRightColor = {0.72f, 0.24f, 1.0f};
+        nameColor = {1.0f, 0.96f, 0.84f};
+        glintColor = {1.0f, 0.78f, 0.28f};
+    } else if (usesMagmaTheme) {
+        glowColor = {1.0f, 0.26f + lowHpPulse * 0.14f, 0.025f};
+        fillColor = {1.0f, 0.48f - lowHpPulse * 0.30f, 0.035f};
+        frameTopColor = {1.0f, 0.88f, 0.32f};
+        frameBottomColor = {0.62f + lowHpPulse * 0.30f, 0.045f, 0.015f};
+        damageFillColor = {1.0f, 0.10f, 0.025f};
+        highlightColor = {1.0f, 0.86f, 0.36f};
+        shardLeftColor = {1.0f, 0.31f, 0.025f};
+        shardRightColor = {1.0f, 0.66f, 0.08f};
+        nameColor = {1.0f, 0.96f, 0.78f};
+        glintColor = {1.0f, 0.58f, 0.12f};
+    }
 
     // 背景と枠は出現率で横幅を開き、被弾時だけ短く揺らす。
     updateSprite(prismBossHudGlow_, hudVisible,
@@ -866,8 +914,7 @@ void GamePlayScene::UpdateBossHud(const BossHudDisplay& display, float deltaTime
     updateSprite(prismBossHudDamageFill_, hudVisible && delayedRate > 0.001f,
                  {damageFillLeft, prismBossHudDamageFill_.basePosition.y},
                  {damageFillWidth * delayedRate, prismBossHudDamageFill_.baseSize.y},
-                 {1.0f, usesFalseKingTheme ? 0.28f : (usesMagmaTheme ? 0.10f : 0.24f + lowHpPulse * 0.12f),
-                  usesFalseKingTheme ? 0.52f : (usesMagmaTheme ? 0.025f : 0.88f),
+                 {damageFillColor.x, damageFillColor.y, damageFillColor.z,
                   prismBossHudDamageFill_.baseColor.w * visualAlpha});
     updateSprite(prismBossHudFill_, hudVisible && displayedRate > 0.001f,
                  {fullFillLeft, prismBossHudFill_.basePosition.y},
@@ -876,8 +923,7 @@ void GamePlayScene::UpdateBossHud(const BossHudDisplay& display, float deltaTime
     updateSprite(prismBossHudHighlight_, hudVisible && displayedRate > 0.001f,
                  {highlightLeft, prismBossHudHighlight_.basePosition.y},
                  {highlightWidth * displayedRate, prismBossHudHighlight_.baseSize.y},
-                 {1.0f, usesFalseKingTheme ? 0.96f : (usesMagmaTheme ? 0.86f : 1.0f),
-                  usesFalseKingTheme ? 0.72f : (usesMagmaTheme ? 0.36f : 1.0f),
+                 {highlightColor.x, highlightColor.y, highlightColor.z,
                   prismBossHudHighlight_.baseColor.w * visualAlpha * (0.74f + glowPulse * 0.26f)});
     // HP表示の外側は実HPによる幅変更を受けず、開く途中の枠の幅と被弾の揺れだけを共有する。
     updateSprite(prismBossHudFrameTop_, hudVisible,
@@ -896,17 +942,13 @@ void GamePlayScene::UpdateBossHud(const BossHudDisplay& display, float deltaTime
     updateSprite(prismBossHudShardLeft_, hudVisible,
                  {prismBossHudShardLeft_.basePosition.x + barShake, prismBossHudShardLeft_.basePosition.y},
                  {prismBossHudShardLeft_.baseSize.x * shardScale, prismBossHudShardLeft_.baseSize.y * shardScale},
-                 {usesFalseKingTheme ? 1.0f : (usesMagmaTheme ? 1.0f : 0.42f + lowHpPulse * 0.35f),
-                  usesFalseKingTheme ? 0.68f : (usesMagmaTheme ? 0.31f : 0.90f),
-                  usesFalseKingTheme ? 0.18f : (usesMagmaTheme ? 0.025f : 1.0f),
+                 {shardLeftColor.x, shardLeftColor.y, shardLeftColor.z,
                   prismBossHudShardLeft_.baseColor.w * shardAlpha},
                  -0.18f + std::sin(prismBossHudAnimationTimer_ * 2.8f) * 0.025f);
     updateSprite(prismBossHudShardRight_, hudVisible,
                  {prismBossHudShardRight_.basePosition.x + barShake, prismBossHudShardRight_.basePosition.y},
                  {prismBossHudShardRight_.baseSize.x * shardScale, prismBossHudShardRight_.baseSize.y * shardScale},
-                 {usesFalseKingTheme ? 0.72f : (usesMagmaTheme ? 1.0f : 0.76f + lowHpPulse * 0.20f),
-                  usesFalseKingTheme ? 0.24f : (usesMagmaTheme ? 0.66f : 0.42f),
-                  usesFalseKingTheme ? 1.0f : (usesMagmaTheme ? 0.08f : 1.0f),
+                 {shardRightColor.x, shardRightColor.y, shardRightColor.z,
                   prismBossHudShardRight_.baseColor.w * shardAlpha},
                  0.18f - std::sin(prismBossHudAnimationTimer_ * 2.8f) * 0.025f);
 
@@ -914,10 +956,9 @@ void GamePlayScene::UpdateBossHud(const BossHudDisplay& display, float deltaTime
     const float nameScale = 0.82f + nameReveal * 0.18f + damageImpact * 0.035f;
     updateSprite(prismBossHudName_, hudVisible && nameReveal > 0.001f,
                  {prismBossHudName_.basePosition.x + barShake * 0.45f,
-                  prismBossHudName_.basePosition.y - SpriteLayoutScaler::ScaleDesignY((1.0f - nameReveal) * 11.0f)},
+                  prismBossHudName_.basePosition.y - spriteLayoutScaler::ScaleDesignY((1.0f - nameReveal) * 11.0f)},
                  {prismBossHudName_.baseSize.x * nameScale, prismBossHudName_.baseSize.y * nameScale},
-                 {1.0f, usesFalseKingTheme ? 0.96f : (usesMagmaTheme ? 0.96f : 1.0f),
-                  usesFalseKingTheme ? 0.84f : (usesMagmaTheme ? 0.78f : 1.0f),
+                 {nameColor.x, nameColor.y, nameColor.z,
                   prismBossHudName_.baseColor.w * visualAlpha * nameReveal});
 
     // 偽王だけに段階境界と王冠を重ね、現在・通過済み・未到達を色と動きで区別する。
@@ -933,7 +974,7 @@ void GamePlayScene::UpdateBossHud(const BossHudDisplay& display, float deltaTime
 
     for (size_t i = 0; i < falseKingBossHudPhaseCrowns_.size(); ++i) {
         HudSpriteState& crown = falseKingBossHudPhaseCrowns_[i];
-        const int markerPhase = static_cast<int>(i) + 1;
+        const std::int32_t markerPhase = static_cast<std::int32_t>(i) + 1;
         const bool currentPhase = markerPhase == falseKingPhase;
         const bool clearedPhase = markerPhase < falseKingPhase;
         const float markerPulse = currentPhase ? 0.5f + 0.5f * std::sin(prismBossHudAnimationTimer_ * 5.6f) : 0.0f;
@@ -942,35 +983,25 @@ void GamePlayScene::UpdateBossHud(const BossHudDisplay& display, float deltaTime
                                   (0.72f + nameReveal * 0.28f);
         engine::Vector4 markerColor;
 
+        // 現在の段階を明るく点滅させ、最終段階では紫、それ以前は金にする。
         if (currentPhase) {
             markerColor = falseKingPhase >= 3
                               ? engine::Vector4{0.88f, 0.48f, 1.0f, visualAlpha * (0.86f + markerPulse * 0.14f)}
                               : engine::Vector4{1.0f, 0.82f, 0.24f, visualAlpha * (0.86f + markerPulse * 0.14f)};
         } else if (clearedPhase) {
+            // 通過済みの段階は薄い紫で残す。
             markerColor = {0.72f, 0.44f, 0.92f, visualAlpha * 0.54f};
         } else {
+            // これから到達する段階は暗く描く。
             markerColor = {0.22f, 0.10f, 0.34f, visualAlpha * 0.46f};
         }
 
         updateSprite(crown, showFalseKingPhases,
                      {crown.basePosition.x + barShake,
-                      crown.basePosition.y - markerPulse * SpriteLayoutScaler::ScaleDesignY(2.5f)},
+                      crown.basePosition.y - markerPulse * spriteLayoutScaler::ScaleDesignY(2.5f)},
                      {crown.baseSize.x * markerScale, crown.baseSize.y * markerScale}, markerColor,
                      currentPhase ? std::sin(prismBossHudAnimationTimer_ * 4.2f) * 0.035f : 0.0f);
     }
-
-    // 第二段階の詠唱中は残り時間に比例したゲージを表示する。
-    const float castRemaining = display.sealCastRemaining;
-    const bool showCast = showFalseKingPhases && falseKingPhase == 2 && castRemaining > 0.0f;
-    // 残り秒数を詠唱の全秒数で割るので、詠唱が完了に近づくほど幅が短くなる。
-    const float castRate = showCast
-                               ? (std::clamp)(castRemaining / CrownFinaleTuning::Get().sealCastTime, 0.0f, 1.0f)
-                               : 0.0f;
-    updateSprite(falseKingCastTrack_, showCast, falseKingCastTrack_.basePosition,
-                 falseKingCastTrack_.baseSize, {0.20f, 0.07f, 0.30f, 0.82f * visualAlpha});
-    updateSprite(falseKingCastFill_, showCast, falseKingCastFill_.basePosition,
-                 {falseKingCastFill_.baseSize.x * castRate, falseKingCastFill_.baseSize.y},
-                 {0.77f + (1.0f - castRate) * 0.22f, 0.29f, 1.0f, 0.96f * visualAlpha});
 
     // 最後の光点だけHPバーの現在値末端を追い、残りは固定位置で明滅させる。
     for (size_t i = 0; i < prismBossHudGlints_.size(); ++i) {
@@ -980,6 +1011,7 @@ void GamePlayScene::UpdateBossHud(const BossHudDisplay& display, float deltaTime
         const float sparkle = std::pow((std::max)(0.0f, std::sin(phase)), 7.0f);
         engine::Vector2 position = glint.basePosition;
 
+        // 最後の光点だけは固定位置を外し、現在表示しているHP帯の末端へ合わせる。
         if (i == prismBossHudGlints_.size() - 1) {
             position.x = fullFillLeft + fullFillWidth * displayedRate;
             position.y = prismBossHudFill_.basePosition.y;
@@ -990,9 +1022,7 @@ void GamePlayScene::UpdateBossHud(const BossHudDisplay& display, float deltaTime
         const float glintAlpha = visualAlpha * frameReveal * (0.08f + sparkle * 0.92f);
         updateSprite(glint, hudVisible && frameReveal > 0.1f, position,
                      {glint.baseSize.x * glintScale, glint.baseSize.y * glintScale},
-                     {usesFalseKingTheme ? 1.0f : (usesMagmaTheme ? 1.0f : 0.72f + lowHpPulse * 0.20f),
-                      usesFalseKingTheme ? 0.78f : (usesMagmaTheme ? 0.58f : 0.96f),
-                      usesFalseKingTheme ? 0.28f : (usesMagmaTheme ? 0.12f : 1.0f), glint.baseColor.w * glintAlpha},
+                     {glintColor.x, glintColor.y, glintColor.z, glint.baseColor.w * glintAlpha},
                      phase * 0.18f);
     }
 }
@@ -1045,7 +1075,7 @@ void GamePlayScene::DrawBossHud() {
     DrawGameplayHUDSprite(prismBossHudShardRight_);
     DrawGameplayHUDSprite(prismBossHudName_);
 
-    // 偽王専用の段階表示と詠唱表示は、共通の名前・HPバーより前面に置く。
+    // 偽王専用の段階表示は、共通の名前・HPバーより前面に置く。
     for (const HudSpriteState& divider : falseKingBossHudPhaseDividers_) {
         DrawGameplayHUDSprite(divider);
     }
@@ -1054,8 +1084,6 @@ void GamePlayScene::DrawBossHud() {
         DrawGameplayHUDSprite(crown);
     }
 
-    DrawGameplayHUDSprite(falseKingCastTrack_);
-    DrawGameplayHUDSprite(falseKingCastFill_);
 
     // 光点はすべての表示部品の最後に描き、ゲージ末端も隠れないようにする。
     for (const HudSpriteState& glint : prismBossHudGlints_) {
@@ -1070,6 +1098,7 @@ void GamePlayScene::DrawStageStarHUD() {
     }
 
     for (const auto& particle : hudStageStarFlyParticles_) {
+        // 飛行粒子の描画用Spriteがあれば描く。
         if (particle.sprite) {
             particle.sprite->Draw();
         }

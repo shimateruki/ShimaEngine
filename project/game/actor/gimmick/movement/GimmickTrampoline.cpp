@@ -12,10 +12,12 @@ constexpr float kSquashStiffness = 110.0f;
 constexpr float kSquashDamping = 16.0f;
 }
 
+// プレイヤーの着地で反発する傘の判定と、反発速度の設定を初期化します。
 void GimmickTrampoline::Initialize(engine::Object3DCommon* common, const std::string& modelName) {
     BaseGimmick::Initialize(common, modelName);
     SetClassName("Gimmick");
     SetGimmickType("Trampoline");
+    // 共通パラメーターが無ければ、ジャンプ力を書き込めるよう作成する。
     if (!GetParameters())
         ResetParameters();
     SetParameter(&engine::EntityParameter::jumpPower, 30.0f);
@@ -23,15 +25,15 @@ void GimmickTrampoline::Initialize(engine::Object3DCommon* common, const std::st
     // 傘全体を床と側面に使い、モデルの曲面から着地高さを求める。
     // 柄と根元はシーン側の子コライダーに分け、反発対象にはしない。
     engine::ColliderConfig config = GetColliderConfig();
-    config.type = ColliderType::Obb;
+    config.type = engine::ColliderType::kObb;
     config.center = {0.0f, 1.20f, 0.0f};
     config.size = {1.40f, 0.40f, 1.40f};
     config.useModelSurface = true;
     SetColliderConfig(config);
-    SetCollisionAttribute(CollisionCategories::Get("ground"));
-    SetCollisionMask(CollisionCategories::Get("player"));
+    SetCollisionAttribute(engine::collisionCategories::Get("ground"));
+    SetCollisionMask(engine::collisionCategories::Get("player"));
 
-    // 編集項目の宣言です。動作処理と旧paramの保存キーは変更しません。
+    // 着地時に与える上向き速度をInspectorのジャンプ力として公開する。
     using Self = GimmickTrampoline;
     engine::ObjectPropertyDefinition<Self> properties(*this, kTypeId, "トランポリン",
         "");
@@ -41,7 +43,7 @@ void GimmickTrampoline::Initialize(engine::Object3DCommon* common, const std::st
 }
 
 void GimmickTrampoline::Update(float deltaTime) {
-    // 保存済みの配置スケールを基準に、着地直後につぶれ、ばねで戻る。
+    // 初回だけ配置時の大きさと回転を保存し、以後の変形の基準にする。
     if (!authoredTransformCaptured_) {
         authoredScale_ = GetScale();
         authoredRotation_ = GetRotation();
@@ -76,26 +78,27 @@ void GimmickTrampoline::Update(float deltaTime) {
 
 bool GimmickTrampoline::OnCollision(engine::Object3D* other) {
     Player* player = dynamic_cast<Player*>(other);
+    // 相手がプレイヤーでなければ、反発しなかったことを返す。
     if (!player)
         return false;
-    const CollisionInfo info = CheckCollision(other);
+    const engine::CollisionInfo info = CheckCollision(other);
 
-    // Collider の法線は「相手から自分へ」向く。キノコ側の下向きをプレイヤー側へ反転する。
+    // 実際に衝突していなければ反発しない。衝突した場合は法線をプレイヤー側の接地方向へ反転する。
     if (!info.isColliding)
         return false;
     return TryBounce(player, info.normal * -1.0f);
 }
 
 bool GimmickTrampoline::TryBounce(Player* player, const engine::Vector3& playerGroundNormal) {
-    // 連続反発の待ち時間中や上昇中は、足場との接触が残っていても跳ね直しません。
+    // 対象なし、再反発の待機中、法線が上向きでない、上昇中のいずれかなら跳ね直さない。
     if (!player || bounceCooldown_ > 0.0f || playerGroundNormal.y <= 0.5f ||
         player->GetVelocity().y > 0.0f) return false;
 
-    // 傘の下から側面へ押し込まれた接触は、法線が上寄りでも着地と見なさない。
     const engine::Collider* capCollider = GetCollider();
+    // モデル上面を調べる判定が無ければ、着地面を確認できないため反発しない。
     if (!capCollider)
         return false;
-    const Aabb playerBounds = player->GetAabb();
+    const engine::Aabb playerBounds = player->GetAabb();
     const engine::Vector3 footCenter = {
         (playerBounds.min.x + playerBounds.max.x) * 0.5f,
         playerBounds.min.y,
@@ -105,11 +108,12 @@ bool GimmickTrampoline::TryBounce(Player* player, const engine::Vector3& playerG
     engine::Vector3 capNormal{};
     // 互換モーターの１フレーム分の沈み込みは許し、傘の下から来た接触は除く。
     const float landingTolerance = (std::max)(0.15f, std::abs(authoredScale_.y) * 0.20f);
+    // 曲面を取得できない、足元が許容範囲より下、または面が急すぎる場合は着地とみなさない。
     if (!capCollider->SampleModelSurface(footCenter, capHeight, capNormal) ||
         footCenter.y < capHeight - landingTolerance || capNormal.y <= 0.5f)
         return false;
 
-    // 一回の着地に一回だけ上向き速度を与える。見た目の縮みと同時に開始する。
+    // 指定の上昇速度を Y に設定し、接地を解除する。水平速度はそのまま引き継ぐ。
     engine::Vector3 velocity = player->GetVelocity();
     velocity.y = GetParameters() ? GetParameters()->jumpPower : 30.0f;
     player->SetVelocity(velocity);

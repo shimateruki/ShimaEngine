@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "engine/utility/math/Math.h"
 
@@ -11,26 +12,26 @@
 // 移動値は見た目用の補正。物理座標へ適用するかは利用側が決める。
 class BodyAnimationClip {
 public:
-    static constexpr int kCurrentVersion = 2;
+    static constexpr std::int32_t kCurrentVersion = 2;
 
     /// <summary>指定時刻の移動、回転、拡縮、せん断と次キーへの補間方法。</summary>
     // 関連：BodyAnimationClip（この型を使う機能の本体）
     struct Key {
         // timeは秒、rotateはラジアン、scaleは基準姿勢への倍率。せん断は見た目だけに適用する。
         float time = 0.0f;
-        engine::Vector3 translate = engine::Vector3::ZERO;
-        engine::Vector3 rotate = engine::Vector3::ZERO; // 見た目の回転（ラジアン）。
+        engine::Vector3 translate = engine::Vector3::kZero;
+        engine::Vector3 rotate = engine::Vector3::kZero; // 見た目の回転（ラジアン）。
         engine::Vector3 scale = { 1.0f, 1.0f, 1.0f };
         engine::Vector3 shear = {}; // 見た目のせん断量。
         float shearPivotY = 0.0f; // せん断の基準となるローカルY位置。
-        int easingToNext = 4; // 次キーまでの補間方式。
+        std::int32_t easingToNext = 4; // 次キーまでの補間方式。
     };
 
     /// <summary>Evaluateが計算した任意時刻の身体姿勢。</summary>
     // 関連：BodyAnimationClip（この型を使う機能の本体）
     struct Sample {
-        engine::Vector3 translate = engine::Vector3::ZERO;
-        engine::Vector3 rotate = engine::Vector3::ZERO; // 見た目の回転（ラジアン）。
+        engine::Vector3 translate = engine::Vector3::kZero;
+        engine::Vector3 rotate = engine::Vector3::kZero; // 見た目の回転（ラジアン）。
         engine::Vector3 scale = { 1.0f, 1.0f, 1.0f };
         engine::Vector3 shear = {}; // 見た目のせん断量。
         float shearPivotY = 0.0f; // せん断の基準となるローカルY位置。

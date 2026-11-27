@@ -1,4 +1,5 @@
 #define NOMINMAX
+#include <cstdint>
 #include "EnemyBomb.h"
 #include "game/actor/player/Player.h"
 #include "game/actor/player/state/PlayerState.h"
@@ -36,13 +37,15 @@ float MaxScaleComponent(const nlohmann::json& values) {
 
 // 爆発エフェクトの衝突半径を読み、失敗時は既定半径へ戻します。
 float LoadExplosionRadiusFromEffectJson() {
-    // 表示用エフェクトの設定から半径を求め、読めない場合は既定半径へ戻す。
+    // エフェクト設定の球半径を終端スケールの最大軸で補正する。
     std::ifstream file(kExplosionEffectPath);
+    // 設定ファイルを開けなければ、既定の爆発半径を使う。
     if (!file.is_open())
         return kFallbackExplosionRadius;
 
     nlohmann::json effectJson;
     try {
+        // JSON を構文解析できなかった場合も、既定半径で続行する。
         file >> effectJson;
     } catch (...) {
         return kFallbackExplosionRadius;
@@ -50,14 +53,17 @@ float LoadExplosionRadiusFromEffectJson() {
 
     const float endScale = effectJson.contains("EndScale") ? MaxScaleComponent(effectJson["EndScale"]) : 1.0f;
 
+    // 新形式の Collision オブジェクトが存在すれば、先にそちらの球判定を探す。
     if (effectJson.contains("Collision") && effectJson["Collision"].is_object()) {
         const auto& collision = effectJson["Collision"];
 
+        // 衝突が有効で形状が球かつ Size が指定されていれば、先頭要素を半径に使う。
         if (collision.value("HasCollision", false) && collision.value("Shape", -1) == 0 && collision.contains("Size")) {
             return collision["Size"][0].get<float>() * endScale;
         }
     }
 
+    // 新形式の球設定を採用できない場合は、旧形式の SphereRadius があれば使う。
     if (effectJson.contains("SphereRadius")) {
         return effectJson["SphereRadius"].get<float>() * endScale;
     }
@@ -66,12 +72,13 @@ float LoadExplosionRadiusFromEffectJson() {
 }
 } // namespace
 
+// 通常の敵として初期化し、爆弾の見た目と球形 Collider の基準を揃える。
 void EnemyBomb::Initialize(engine::Object3DCommon* common, const std::string& modelName) {
     BaseEnemy::Initialize(common, modelName);
     managedBaseScale_ = {kBombVisualScale, kBombVisualScale, kBombVisualScale};
     SetScale(managedBaseScale_);
 
-    state_ = State::Chase;
+    state_ = State::kChase;
     fuseTimer_ = 3.0f; // 初期状態では3秒の導火線を用意します。
     flashTimer_ = 0.0f;
     pulseTimer_ = 0.0f;
@@ -80,17 +87,18 @@ void EnemyBomb::Initialize(engine::Object3DCommon* common, const std::string& mo
     isAbilityExecuted_ = false;
     playerOwned_ = false;
 
-    SetColliderType(ColliderType::Sphere);
+    SetColliderType(engine::ColliderType::kSphere);
     SetCollisionRadius(kBombCollisionRadius);
     auto collider = GetColliderConfig();
     collider.center = {0.0f, 0.0f, 0.0f};
     SetColliderConfig(collider);
+    // Collider が生成済みなら基準スケールを固定し、点滅の伸縮で判定サイズを変えない。
     if (GetCollider())
         GetCollider()->SetScaleOverride(managedBaseScale_);
 
     // 通常時は敵として接触を受け付け、爆発時に属性を切り替えます。
-    SetCollisionAttribute(CollisionCategories::Get("enemy"));
-    SetCollisionMask(CollisionCategories::Get("player") | CollisionCategories::Get("ground") | CollisionCategories::Get("player_attack") | CollisionCategories::Get("player_bullet"));
+    SetCollisionAttribute(engine::collisionCategories::Get("enemy"));
+    SetCollisionMask(engine::collisionCategories::Get("player") | engine::collisionCategories::Get("ground") | engine::collisionCategories::Get("player_attack") | engine::collisionCategories::Get("player_bullet"));
 }
 
 void EnemyBomb::ApplyManagedScale(const engine::Vector3& scale) {
@@ -104,7 +112,7 @@ void EnemyBomb::ApplyManagedScale(const engine::Vector3& scale) {
 
 // 運搬、投擲、通常移動では位置の更新担当が異なるため、処理を分けます。
 void EnemyBomb::Update(float deltaTime) {
-    if (state_ == State::Exploded) {
+    if (state_ == State::kExploded) {
         // 爆発判定を出した次の更新で、再接触と再描画を止めます。
         HideAttackTelegraph();
         SetCollisionAttribute(0);
@@ -113,6 +121,7 @@ void EnemyBomb::Update(float deltaTime) {
         return;
     }
 
+    // 経過時間が不正なら、追跡と導火線を進めない。0秒は状態判定に使える。
     if (!std::isfinite(deltaTime) || deltaTime < 0.0f)
         return;
     // 休眠や撃破演出が優先される間は、追跡と導火線を共通の敵処理へ譲る。
@@ -123,44 +132,51 @@ void EnemyBomb::Update(float deltaTime) {
 
     if (IsCarried()) {
         // 運搬中はプレイヤーが位置を管理し、導火線だけを進める。
-        if (state_ != State::Ignited)
+        // 捕まえられてからまだ点火していない場合だけ、3秒の導火線を開始する。
+        if (state_ != State::kIgnited)
             Ignite(3.0f);
         UpdateIgnited(deltaTime);
         return;
     }
 
-    // 設置中は追跡を進め、着火後は爆発までの処理へ渡す。
-    if (state_ == State::Chase)
+    // 追跡状態では標的に近づき、接近条件から点火へ切り替える。
+    if (state_ == State::kChase)
         UpdateChase(deltaTime);
+    // 点火後は導火線と警告表示を更新する。
     else
         UpdateIgnited(deltaTime);
     // 今回の更新で爆発した場合は、通常の移動や共通更新をそのフレームで止める。
-    if (state_ == State::Exploded)
+    if (state_ == State::kExploded)
         return;
 
     // 感知・被弾・表示の共通処理は残し、移動の積分は専用Motorへ一本化する。
     SetMotorSuspended(true);
     BaseEnemy::Update(deltaTime);
     SetMotorSuspended(false);
+    // 共通の敵更新で死亡・撃破演出へ移った場合は、専用の移動を重ねない。
     if (IsDead() || ShouldHandleDefeatEffect())
         return;
     UpdateBombPhysics(deltaTime);
 
     // 実際の爆発位置は接地後の移動で決まる。現在の爆弾を中心に判定半径を示す。
-    if (state_ == State::Ignited && !IsCarried() && !playerOwned_ && IsGrounded()) {
+    // 着火済みの敵の爆弾が地面にある間だけ、爆風を床に表示する。
+    if (state_ == State::kIgnited && !IsCarried() && !playerOwned_ && IsGrounded()) {
         const float progress = std::clamp(1.0f - fuseTimer_ / 2.8f, 0.0f, 1.0f);
 
         // 爆弾の中心は床より高い。予告円だけ足元の接地面へ投影する。
         const engine::Vector3 bombPosition = GetTranslate();
-        const RaycastHit ground = CollisionManager::GetInstance()->Raycast(
+        const engine::RaycastHit ground = engine::CollisionManager::GetInstance()->Raycast(
             bombPosition + engine::Vector3{0.0f, 1.0f, 0.0f}, {0.0f, -1.0f, 0.0f}, 4.0f,
-            CollisionCategories::Get("ground"));
+            engine::collisionCategories::Get("ground"));
+        // 床の交点を取得できたときは、その直上に警告の円を置く。
         if (ground.isHit) {
             ShowAttackTelegraphCircle({bombPosition.x, ground.hitPoint.y + 0.02f, bombPosition.z},
                                       explosionRadius_, progress, {1.0f, 0.30f, 0.08f, 0.72f});
+        // 床を取得できなければ、以前の位置に残った予告を消す。
         } else {
             HideAttackTelegraph();
         }
+    // 未点火・運搬中・プレイヤー所有・空中の場合も床の予告を消す。
     } else {
         HideAttackTelegraph();
     }
@@ -168,6 +184,7 @@ void EnemyBomb::Update(float deltaTime) {
 
 // 爆弾はキャラクター用の投げ反射を使わず、一つのMotorで床・壁を解決する。
 void EnemyBomb::UpdateBombPhysics(float deltaTime) {
+    // 正の経過秒がない場合は、速度の積分とサブステップを省く。
     if (deltaTime <= 0.0f)
         return;
     // 通常の敵設定を読みつつ、転がる爆弾には段差登りを適用せず、経路に沿った衝突と接地を有効にします。
@@ -182,14 +199,15 @@ void EnemyBomb::UpdateBombPhysics(float deltaTime) {
     motor.SetSettings(settings);
 
     // 大きなフレームでも同じ軌道と減速になるよう、計算量を制限して分割する。
-    const int steps = std::clamp(static_cast<int>(std::ceil(std::min(deltaTime, 0.25f) * 120.0f)), 1, 32);
+    const std::int32_t steps = std::clamp(static_cast<std::int32_t>(std::ceil(std::min(deltaTime, 0.25f) * 120.0f)), 1, 32);
     const float step = std::min(deltaTime, 0.25f) / static_cast<float>(steps);
-    for (int i = 0; i < steps; ++i) {
+    for (std::int32_t i = 0; i < steps; ++i) {
         // 接地中の点火済み爆弾だけ抵抗を掛け、水平速度が小さくなったら投擲中フラグを外します。
-        if (IsGrounded() && state_ == State::Ignited) {
+        if (IsGrounded() && state_ == State::kIgnited) {
             const float keep = std::exp(-kGroundDragPerSecond * step);
             SetVelocityX(GetVelocity().x * (keep));
             SetVelocityZ(GetVelocity().z * (keep));
+            // 水平速度が停止のしきい値を下回れば、転がる状態を解除して水平速度を0にする。
             if (GetVelocity().x * GetVelocity().x + GetVelocity().z * GetVelocity().z < kStopSpeed * kStopSpeed) {
                 SetVelocityX(SetVelocityZ(0.0f));
                 isThrown_ = false;
@@ -215,13 +233,16 @@ void EnemyBomb::BeginThrown(const engine::Vector3& initialVelocity) {
     // スライム共通の着地バウンド・起き上がりへ入らず、残りの導火線を保つ。
     SetCarried(false);
     CancelNoticeReaction();
-    if (state_ != State::Ignited)
+    // 点火前の個体だけ、投げられた時点から3秒を数える。
+    if (state_ != State::kIgnited)
         Ignite(3.0f);
     SetGrounded(false);
     SetVelocity(initialVelocity);
 }
 
+// 標的との水平距離と発見リアクションから、徘徊・追跡・点火を選ぶ。
 void EnemyBomb::UpdateChase(float deltaTime) {
+    // 標的がまだ接続されていなければ、追跡方向と点火距離を評価しない。
     if (!GetTarget())
         return;
     engine::Vector3 playerPos = GetTarget()->GetTranslate();
@@ -236,6 +257,7 @@ void EnemyBomb::UpdateChase(float deltaTime) {
         SetVelocityX(0.0f);
         SetVelocityZ(0.0f);
 
+        // 標的と水平に離れている場合だけ、反応中の向きを標的へ合わせる。
         if (distance > 0.001f) {
             SetRotationY(std::atan2(toPlayer.x, toPlayer.z));
         }
@@ -252,6 +274,7 @@ void EnemyBomb::UpdateChase(float deltaTime) {
 
         const float speedXZ = std::sqrt(GetVelocity().x * GetVelocity().x + GetVelocity().z * GetVelocity().z);
 
+        // 徘徊で十分な水平速度が出た場合だけ、進行方向へ向き直る。
         if (speedXZ > 0.05f) {
             SetRotationY(std::atan2(GetVelocity().x, GetVelocity().z));
         }
@@ -282,9 +305,9 @@ void EnemyBomb::UpdateChase(float deltaTime) {
 // 点火後の減速、導火線、点滅と脈動を更新します。
 void EnemyBomb::UpdateIgnited(float deltaTime) {
     // 空中の水平速度は保ち、接地時の減速はUpdateBombPhysicsで扱う。
-    // 導火線が尽きたら一度だけ爆発へ移行します。
     fuseTimer_ -= deltaTime;
 
+    // 残りが0秒以下になったフレームで一度だけ爆発へ移行し、警告表示の更新を止める。
     if (fuseTimer_ <= 0.0f) {
         Explode();
         return;
@@ -296,6 +319,7 @@ void EnemyBomb::UpdateIgnited(float deltaTime) {
     // 導火線の残り時間から次の点滅までの間隔を決めます。
     float flashLimit = (fuseTimer_ / 3.0f) * 0.2f + 0.03f;
 
+    // 残り時間から求めた点滅間隔に達したら、前の点灯状態を反転する。
     if (flashTimer_ >= flashLimit) {
         flashTimer_ = 0.0f;
         flashState_ = !flashState_;
@@ -316,8 +340,10 @@ void EnemyBomb::UpdateIgnited(float deltaTime) {
 
     // 大きな変形は転がりと競合するため、脈動の振幅は控えめにします。
     float progress = 1.0f - (fuseTimer_ / 3.0f);
+    // 導火線が基準の3秒より長い場合は、脈動の進行率を開始位置で止める。
     if (progress < 0.0f)
         progress = 0.0f;
+    // 進行率が終了側の範囲を超えた場合は、最大振幅に制限する。
     if (progress > 1.0f)
         progress = 1.0f;
     float amplitude = 0.015f + 0.045f * progress;
@@ -327,26 +353,27 @@ void EnemyBomb::UpdateIgnited(float deltaTime) {
     // 見た目のスケールだけを変え、衝突半径を揺らしません。
     engine::Vector3 targetScale = {managedBaseScale_.x * scaleRate, managedBaseScale_.y * scaleRate,
                            managedBaseScale_.z * scaleRate};
-    engine::Vector3 reactionRotation = engine::Vector3::ZERO;
+    engine::Vector3 reactionRotation = engine::Vector3::kZero;
     ApplyDamageReactionPose(targetScale, reactionRotation, nullptr, 0.90f);
     SetScale(targetScale);
 }
 
 void EnemyBomb::Explode() {
     // 接触と導火線が同じフレームに成立しても、爆風を二度発生させない。
-    if (state_ == State::Exploded)
+    if (state_ == State::kExploded)
         return;
-    state_ = State::Exploded;
+    state_ = State::kExploded;
     SetScale(managedBaseScale_);
     UpdateWorldMatrix(false);
 
-    // 爆発エフェクトと判定を出した後は、本体を表示しません。
+    // 状態を爆発済みに切り替えて本体を隠し、以降は爆風と専用エフェクトだけを出す。
     SetIsVisible(false);
 
     // プレイヤーの爆風はワールド単位で扱い、小さな爆弾モデルの縮小率を掛けない。
     // 敵の爆弾は既存の予告・攻撃設定を維持する。
     const float effectScale = playerOwned_ ? kPlayerExplosionScale : 1.0f;
-    SetColliderType(ColliderType::Sphere);
+    SetColliderType(engine::ColliderType::kSphere);
+    // プレイヤー所有の爆風で Collider がある場合、描画の縮小率を除いて実寸で判定する。
     if (playerOwned_ && GetCollider())
         GetCollider()->SetScaleOverride({1.0f, 1.0f, 1.0f});
     SetCollisionRadius(explosionRadius_ * effectScale);
@@ -354,11 +381,12 @@ void EnemyBomb::Explode() {
     // 所有者によって攻撃属性と対象マスクを切り替えます。
     // 投げ返した爆弾がプレイヤーへ即座に当たるのを防ぎます。
     if (playerOwned_) {
-        SetCollisionAttribute(CollisionCategories::Get("player_attack"));
-        SetCollisionMask(CollisionCategories::Get("enemy") | CollisionCategories::Get("ground"));
+        SetCollisionAttribute(engine::collisionCategories::Get("player_attack"));
+        SetCollisionMask(engine::collisionCategories::Get("enemy") | engine::collisionCategories::Get("ground"));
+    // 敵側の爆発は両陣営の攻撃属性を持ち、プレイヤー・敵・地形を対象にする。
     } else {
-        SetCollisionAttribute(CollisionCategories::Get("player_attack") | CollisionCategories::Get("enemy_attack"));
-        SetCollisionMask(CollisionCategories::Get("player") | CollisionCategories::Get("enemy") | CollisionCategories::Get("ground"));
+        SetCollisionAttribute(engine::collisionCategories::Get("player_attack") | engine::collisionCategories::Get("enemy_attack"));
+        SetCollisionMask(engine::collisionCategories::Get("player") | engine::collisionCategories::Get("enemy") | engine::collisionCategories::Get("ground"));
     }
 
     // 命中演出とメッシュエフェクトは同じ爆発位置から発生させます。
@@ -367,6 +395,7 @@ void EnemyBomb::Explode() {
     const size_t firstNewEffect = effects ? effects->GetActiveEffects().size() : 0;
     HitEffectDirector::SpawnBombExplosionHit(myPos);
 
+    // メッシュ演出管理を利用できる場合に、同じ中心と爆風倍率で表示を出す。
     if (effects) {
         effects->SpawnEffectAt(kExplosionEffectPath, myPos, {0.0f, 0.0f, 0.0f},
                                {effectScale, effectScale, effectScale});
@@ -375,8 +404,9 @@ void EnemyBomb::Explode() {
             const auto& activeEffects = effects->GetActiveEffects();
             for (size_t i = firstNewEffect; i < activeEffects.size(); ++i) {
                 auto* visual = activeEffects[i].get();
+                // 表示用エフェクトが衝突管理に登録される設定なら、無効化に先立って管理から外す。
                 if (visual->GetMeshSettings().hasCollision)
-                    CollisionManager::GetInstance()->RemoveObject(visual);
+                    engine::CollisionManager::GetInstance()->RemoveObject(visual);
                 visual->SetMeshSetting(&EffectObject3D::MeshSettings::hasCollision, false);
                 visual->SetCollisionAttribute(0);
                 visual->SetCollisionMask(0);
@@ -386,12 +416,13 @@ void EnemyBomb::Explode() {
 
     if (playerOwned_ && GetCollider()) {
         // 導火線と直撃を同じ経路へ集約する。消滅前に爆風内の敵と破壊壁へ一度だけ通知する。
-        PhysicsQueryFilter filter;
-        filter.mask = CollisionCategories::Get("enemy") | CollisionCategories::Get("ground");
+        engine::PhysicsQueryFilter filter;
+        filter.mask = engine::collisionCategories::Get("enemy") | engine::collisionCategories::Get("ground");
         filter.ignoredObject = this;
-        for (const PhysicsOverlapHit& hit : CollisionManager::GetInstance()->OverlapSphere(
+        for (const engine::PhysicsOverlapHit& hit : engine::CollisionManager::GetInstance()->OverlapSphere(
                  myPos, GetCollider()->GetRadius(), filter)) {
             engine::Object3D* target = hit.object;
+            // 爆風内でも、敵または破壊ブロックで、双方の衝突フィルターが許した相手だけに通知する。
             if ((dynamic_cast<BaseEnemy*>(target) || dynamic_cast<GimmickBreakableBlock*>(target)) &&
                 (GetCollisionMask() & target->GetCollisionAttribute()) &&
                 (target->GetCollisionMask() & GetCollisionAttribute())) {
@@ -425,12 +456,14 @@ void EnemyBomb::SetCarried(bool isCarried) {
         isThrown_ = true;
         SetThrowRecoveryTime(0.0f);
 
+        // プレイヤー所有の投擲物は、敵と地形だけを対象とする攻撃として登録する。
         if (playerOwned_) {
-            SetCollisionAttribute(CollisionCategories::Get("player_attack"));
-            SetCollisionMask(CollisionCategories::Get("enemy") | CollisionCategories::Get("ground"));
+            SetCollisionAttribute(engine::collisionCategories::Get("player_attack"));
+            SetCollisionMask(engine::collisionCategories::Get("enemy") | engine::collisionCategories::Get("ground"));
+        // 敵側の投擲物は、通常の敵と同じ接触マスクへ戻す。
         } else {
-            SetCollisionAttribute(CollisionCategories::Get("enemy"));
-            SetCollisionMask(CollisionCategories::Get("player") | CollisionCategories::Get("ground") | CollisionCategories::Get("player_attack") | CollisionCategories::Get("player_bullet"));
+            SetCollisionAttribute(engine::collisionCategories::Get("enemy"));
+            SetCollisionMask(engine::collisionCategories::Get("player") | engine::collisionCategories::Get("ground") | engine::collisionCategories::Get("player_attack") | engine::collisionCategories::Get("player_bullet"));
         }
     }
 }
@@ -439,18 +472,20 @@ void EnemyBomb::SetPlayerOwned(bool playerOwned) {
     // 投げ返し後は攻撃の所有者に合わせ、接触属性と対象マスクを切り替える。
     playerOwned_ = playerOwned;
 
+    // プレイヤー所有へ切り替えた場合は、敵と地形を対象とする攻撃属性にする。
     if (playerOwned_) {
-        SetCollisionAttribute(CollisionCategories::Get("player_attack"));
-        SetCollisionMask(CollisionCategories::Get("enemy") | CollisionCategories::Get("ground"));
+        SetCollisionAttribute(engine::collisionCategories::Get("player_attack"));
+        SetCollisionMask(engine::collisionCategories::Get("enemy") | engine::collisionCategories::Get("ground"));
+    // 所有を解除した場合は、敵属性とその接触先に戻す。
     } else {
-        SetCollisionAttribute(CollisionCategories::Get("enemy"));
-        SetCollisionMask(CollisionCategories::Get("player") | CollisionCategories::Get("ground") | CollisionCategories::Get("player_attack") | CollisionCategories::Get("player_bullet"));
+        SetCollisionAttribute(engine::collisionCategories::Get("enemy"));
+        SetCollisionMask(engine::collisionCategories::Get("player") | engine::collisionCategories::Get("ground") | engine::collisionCategories::Get("player_attack") | engine::collisionCategories::Get("player_bullet"));
     }
 }
 
 void EnemyBomb::Ignite(float fuseTime) {
     // 再点火時に光の周期も戻し、導火線の開始と警告表示を同期する。
-    state_ = State::Ignited;
+    state_ = State::kIgnited;
     fuseTimer_ = fuseTime;
     explosionRadius_ = LoadExplosionRadiusFromEffectJson();
     pulseTimer_ = 0.0f;
@@ -459,6 +494,7 @@ void EnemyBomb::Ignite(float fuseTime) {
 }
 
 void EnemyBomb::ExecuteAbility(Player* player) {
+    // 運搬中の能力は一度だけ使えるため、実行済みならプレイヤーの状態を再変更しない。
     if (isAbilityExecuted_)
         return;
     isAbilityExecuted_ = true;
@@ -472,6 +508,7 @@ void EnemyBomb::ExecuteAbility(Player* player) {
     throwBackDir.y = 0.0f;
     float distanceValue = std::sqrt(throwBackDir.x * throwBackDir.x + throwBackDir.z * throwBackDir.z);
 
+    // 水平距離が十分ある場合は、位置差の長さに依存しない押し出し方向を作る。
     if (distanceValue > 0.001f) {
         throwBackDir.x /= distanceValue;
         throwBackDir.z /= distanceValue;
@@ -491,8 +528,8 @@ void EnemyBomb::ExecuteAbility(Player* player) {
 bool EnemyBomb::OnCollision(engine::Object3D* other) {
     // プレイヤーの爆弾は敵との実際の接触で導火線を待たずに爆発させます。
     // 爆発後に同じフレームで再接触しても、演出や攻撃判定を作り直しません。
-    if (playerOwned_ && !IsCarried() && state_ == State::Ignited &&
-        dynamic_cast<BaseEnemy*>(other) && (other->GetCollisionAttribute() & CollisionCategories::Get("enemy"))) {
+    if (playerOwned_ && !IsCarried() && state_ == State::kIgnited &&
+        dynamic_cast<BaseEnemy*>(other) && (other->GetCollisionAttribute() & engine::collisionCategories::Get("enemy"))) {
         Explode();
 
 

@@ -1,0 +1,11 @@
+{
+  "assetType": "Texture",
+  "guid": "9fa571d2b126a5420020971e123a2756",
+  "importSettings": {
+    "colorSpace": "Auto",
+    "generateMipmaps": true
+  },
+  "importer": "TextureImporter",
+  "source": "Resources/sprite/ui/result/clear/japanese/heading.png",
+  "version": 1
+}

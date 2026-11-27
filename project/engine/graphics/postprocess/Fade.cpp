@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "Fade.h"
 #include "Easing.h"
 
@@ -14,12 +15,12 @@
 #include <utility>
 
 namespace {
-// フェード演出に使う画面の設計幅と高さを返します。
+// 現在のクライアント領域の幅をピクセルで返します。
 float ScreenW() {
     return static_cast<float>(WinApp::GetClientWidth());
 }
 
-// フェード演出に使う画面の設計高さを返します。
+// 現在のクライアント領域の高さをピクセルで返します。
 float ScreenH() {
     return static_cast<float>(WinApp::GetClientHeight());
 }
@@ -32,7 +33,7 @@ float Clamp01(float value) {
 
 
 // フェード用連番画像の番号を2桁に揃えてファイルパスを作ります。
-std::string MakeFramePath(const std::string& directory, int index) {
+std::string MakeFramePath(const std::string& directory, std::int32_t index) {
     char buffer[256] = {};
     std::snprintf(buffer, sizeof(buffer), "%s/frame_%02d.png", directory.c_str(), index);
     return buffer;
@@ -40,11 +41,11 @@ std::string MakeFramePath(const std::string& directory, int index) {
 }
 
 Fade* Fade::GetInstance() {
-    static Fade instance;
-    return &instance;
+    static Fade sInstance;
+    return &sInstance;
 }
 
-// ノイズ素材とSpriteを準備し、旧PostEffectのフェード値を解除します。
+// 深度や色の後処理側へノイズ画像を登録し、Spriteで描くフェードの初期状態を準備します。
 void Fade::Initialize() {
     ResolveNoiseTexture();
     ResetPostEffectFade();
@@ -53,18 +54,21 @@ void Fade::Initialize() {
 
 // 描画基盤と黒画面用Spriteを一度だけ作り、画像列が欠けても暗転できるようにします。
 void Fade::InitializeSprites() {
+    // 黒い代替画面用のSpriteを作成済みなら、同じ描画資源を使い続ける。
     if (fallbackBlack_) {
         return;
     }
 
+    // Sprite共通の描画設定が未初期化なら、先にDirectXのデバイスで使える状態にする。
     if (!spriteCommon_) {
         spriteCommon_ = std::make_unique<engine::SpriteCommon>();
         spriteCommon_->Initialize(engine::DirectXCommon::GetInstance());
     }
 
     // 連番画像を読み込めない場合も画面を覆えるよう、白一枚を黒く着色するSpriteを持つ。
-    const uint32_t whiteHandle = TextureManager::GetInstance()->GetSrvHandle("Resources/sprite/common/white.png");
+    const uint32_t whiteHandle = engine::TextureManager::GetInstance()->GetSrvHandle("Resources/sprite/common/white.png");
 
+    // 白画像のハンドルが無効なら、この呼び出しでは黒い代替画面を作れない。
     if (whiteHandle == 0) {
         return;
     }
@@ -74,18 +78,20 @@ void Fade::InitializeSprites() {
     fallbackBlack_->SetAnchorPoint({ 0.5f, 0.5f });
 }
 
-void Fade::LoadSequence(FrameSequence& sequence, const std::string& directory, int frameCount) {
+// 指定ディレクトリの連番を0番から読み込み、全フレームが揃ったときだけ再生用Spriteを作ります。
+void Fade::LoadSequence(FrameSequence& sequence, const std::string& directory, std::int32_t frameCount) {
+    // 登録済みの連番は再取得せず、以後の描画で同じ画像ハンドルを使う。
     if (!sequence.textureHandles.empty()) {
         return;
     }
 
-    // 1枚でも欠けていたら系列を確定せず、描画側の黒フェードに任せる。
     std::vector<uint32_t> resolvedHandles;
     resolvedHandles.reserve(frameCount);
 
-    for (int i = 0; i < frameCount; ++i) {
-        const uint32_t handle = TextureManager::GetInstance()->GetSrvHandle(MakeFramePath(directory, i));
+    for (std::int32_t i = 0; i < frameCount; ++i) {
+        const uint32_t handle = engine::TextureManager::GetInstance()->GetSrvHandle(MakeFramePath(directory, i));
 
+        // 途中の1枚でも取得できなければ一覧を登録せず、DrawFrameSequence()の黒画面に任せる。
         if (handle == 0) {
             return;
         }
@@ -96,6 +102,7 @@ void Fade::LoadSequence(FrameSequence& sequence, const std::string& directory, i
     // すべて揃ってから確定し、途中までのフレームを誤って再生しない。
     sequence.textureHandles = std::move(resolvedHandles);
 
+    // 読み込んだフレームが1枚以上ある場合だけ、先頭画像で再生用Spriteを初期化する。
     if (!sequence.textureHandles.empty()) {
         sequence.sprite = std::make_unique<engine::Sprite>();
         sequence.sprite->Initialize(spriteCommon_.get(), sequence.textureHandles.front());
@@ -104,13 +111,14 @@ void Fade::LoadSequence(FrameSequence& sequence, const std::string& directory, i
 }
 
 void Fade::ResolveNoiseTexture() {
-    // ノイズ素材が使える場合だけSRVを解決し、フェード描画に渡す。
+    // 既にPostEffectへノイズのSRVを渡していれば、同じ素材を探し直さない。
     if (noiseTextureResolved_) {
         return;
     }
 
-    const uint32_t noiseHandle = TextureManager::GetInstance()->GetSrvHandle(
+    const uint32_t noiseHandle = engine::TextureManager::GetInstance()->GetSrvHandle(
         "Resources/sprite/effect/noise0.png");
+    // ノイズのハンドルを取得できなければ解決済みにせず、次回の更新で再取得を試す。
     if (noiseHandle == 0) {
         return;
     }
@@ -119,11 +127,12 @@ void Fade::ResolveNoiseTexture() {
     noiseTextureResolved_ = true;
 }
 
-// 開閉方向から被覆率を計算し、演出時間を使い切ったらFinishedへ進めます。
+// フレーム時間（秒）で開閉を進め、演出時間を使い切ったら完了状態にします。
 void Fade::Update(float deltaTime) {
     ResolveNoiseTexture();
 
-    if (status_ == Status::None || status_ == Status::Finished) {
+    // 未開始または完了済みなら、タイマーや現在の被覆率を進めない。
+    if (status_ == Status::kNone || status_ == Status::kFinished) {
         return;
     }
 
@@ -136,9 +145,10 @@ void Fade::Update(float deltaTime) {
     // このフェードはSpriteで描画し、旧PostEffect側のフェード値は毎回解除する。
     ResetPostEffectFade();
 
+    // 規定時間へ達したら、閉じる演出は全面を覆い、開く演出は覆いを消した状態で止める。
     if (t >= 1.0f) {
         coverage_ = IsClosing() ? 1.0f : 0.0f;
-        status_ = Status::Finished;
+        status_ = Status::kFinished;
     }
 }
 
@@ -151,10 +161,11 @@ void Fade::Draw() {
 
     InitializeSprites();
 
-    // 演出の種類に応じた画像列を選び、使えないときは描画側で黒板へ戻す。
-    if (style_ == VisualStyle::CrownIris) {
+    // 王冠アイリスでは専用の48枚を読み込み、被覆率に対応する絵を描く。
+    if (style_ == VisualStyle::kCrownIris) {
         LoadSequence(crownIris_, "Resources/sprite/fade/crown_iris", 48);
         DrawFrameSequence(crownIris_, coverage_);
+    // その他のスタイルではスライムワイプの48枚を使う。
     } else {
         LoadSequence(slimeWipe_, "Resources/sprite/fade/slime_wipe", 48);
         DrawFrameSequence(slimeWipe_, coverage_);
@@ -163,27 +174,27 @@ void Fade::Draw() {
 
 // 王冠アイリスを閉状態から開くフェードを開始します。
 void Fade::StartFadeIn(float duration) {
-    Begin(Status::FadeIn, VisualStyle::CrownIris, duration, { 0.5f, 0.5f }, 1.0f);
+    Begin(Status::kFadeIn, VisualStyle::kCrownIris, duration, { 0.5f, 0.5f }, 1.0f);
 }
 
 // 王冠アイリスを開状態から閉じるフェードを開始します。
 void Fade::StartFadeOut(float duration) {
-    Begin(Status::FadeOut, VisualStyle::CrownIris, duration, { 0.5f, 0.5f }, 0.0f);
+    Begin(Status::kFadeOut, VisualStyle::kCrownIris, duration, { 0.5f, 0.5f }, 0.0f);
 }
 
-// 王冠アイリスを開状態から閉じます。中心指定は開始引数として保持します。
+// 王冠アイリスを閉じます。中心は0〜1の画面座標として保持します。
 void Fade::StartIrisOut(float duration, const engine::Vector2& center) {
-    Begin(Status::IrisOut, VisualStyle::CrownIris, duration, center, 0.0f);
+    Begin(Status::kIrisOut, VisualStyle::kCrownIris, duration, center, 0.0f);
 }
 
-// 王冠アイリスを閉状態から開きます。中心指定は開始引数として保持します。
+// 王冠アイリスを開きます。中心は0〜1の画面座標として保持します。
 void Fade::StartIrisIn(float duration, const engine::Vector2& center) {
-    Begin(Status::IrisIn, VisualStyle::CrownIris, duration, center, 1.0f);
+    Begin(Status::kIrisIn, VisualStyle::kCrownIris, duration, center, 1.0f);
 }
 
 // 進行中の演出と被覆率を消し、旧PostEffectのフェード値も解除します。
 void Fade::Stop() {
-    status_ = Status::None;
+    status_ = Status::kNone;
     counter_ = 0.0f;
     coverage_ = 0.0f;
     ResetPostEffectFade();
@@ -194,6 +205,7 @@ void Fade::Begin(Status status, VisualStyle style, float duration, const engine:
     InitializeSprites();
     status_ = status;
     style_ = style;
+    // 0秒以下などの指定でも進行率を計算できるよう、演出時間の下限を0.001秒にする。
     duration_ = (std::max)(duration, 0.001f);
     counter_ = 0.0f;
     // 指定中心は正規化座標として保持します。現在の連番Spriteの描画位置は画面中央固定です。
@@ -204,6 +216,7 @@ void Fade::Begin(Status status, VisualStyle style, float duration, const engine:
 
 // 被覆率から対応フレームを選び、画像列が未準備なら黒画面へ切り替えます。
 void Fade::DrawFrameSequence(FrameSequence& sequence, float coverage) {
+    // 再生用Spriteか連番のどちらかが未準備なら、同じ被覆率を黒画面の透過度に使う。
     if (!sequence.sprite || sequence.textureHandles.empty()) {
         DrawFallbackBlack(coverage);
         return;
@@ -215,6 +228,7 @@ void Fade::DrawFrameSequence(FrameSequence& sequence, float coverage) {
     const size_t frameIndex = static_cast<size_t>(std::round(framePosition));
     const uint32_t textureHandle = sequence.textureHandles[(std::min)(frameIndex, sequence.textureHandles.size() - 1)];
 
+    // 選んだ画像をクライアント領域の中央に置き、画面全体に広げる。
     sequence.sprite->SetTextureHandle(textureHandle);
     sequence.sprite->SetPosition({ ScreenW() * 0.5f, ScreenH() * 0.5f });
     sequence.sprite->SetSize({ ScreenW(), ScreenH() });
@@ -226,6 +240,7 @@ void Fade::DrawFrameSequence(FrameSequence& sequence, float coverage) {
 
 // 画面端に隙間を作らない大きさで黒Spriteを描きます。
 void Fade::DrawFallbackBlack(float alpha) {
+    // 白画像をもとにした代替Spriteが未準備なら、黒い画面を描けないため終了する。
     if (!fallbackBlack_) {
         return;
     }
@@ -247,11 +262,12 @@ float Fade::GetNormalizedTime() const {
 
 // 現在の状態が被覆率を増やす方向か判定します。
 bool Fade::IsClosing() const {
-    return status_ == Status::FadeOut || status_ == Status::IrisOut;
+    return status_ == Status::kFadeOut || status_ == Status::kIrisOut;
 }
 
 // Sprite描画へ移したフェードと旧PostEffectの値が重複しないようにします。
 void Fade::ResetPostEffectFade() {
+    // PostEffectの定数バッファが使えるときだけ、2種類のフェード強度を0にする。
     if (PostEffect::Params* params = PostEffect::GetInstance()->GetParams()) {
         params->slimeFadeIntensity = 0.0f;
         params->irisFadeIntensity = 0.0f;

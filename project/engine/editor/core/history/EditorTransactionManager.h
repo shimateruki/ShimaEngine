@@ -75,7 +75,7 @@ private:
     std::deque<EditorTransaction> redoStack_;
     std::vector<EditorTransaction> groupTransactions_;
     std::string groupLabel_;
-    int groupDepth_ = 0;
+    std::int32_t groupDepth_ = 0;
     bool isApplying_ = false;
     std::optional<InteractiveTransaction> interactiveTransaction_;
 };

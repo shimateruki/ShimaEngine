@@ -49,7 +49,7 @@ public:
 private:
     std::string presetName_ = "";
     engine::Object3D* targetObject_ = nullptr; // 所有しない追従先。
-    engine::Vector3 offset_ = engine::Vector3::ZERO; // 対象からの位置補正。対象なしならワールド位置。
+    engine::Vector3 offset_ = engine::Vector3::kZero; // 対象からの位置補正。対象なしならワールド位置。
 
     bool isPlaying_ = false;
     float emitTimer_ = 0.0f; // 次回発生へ向けた蓄積秒数。

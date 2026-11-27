@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "engine/utility/math/Math.h"
 #include "Easing.h"
@@ -10,12 +11,12 @@
 #include <vector>
 
 /// <summary>キー間を補間する際の時間の進み方。</summary>
-enum class VfxCurveEasing : int {
-    Linear = 0,
-    EaseIn = 1,
-    EaseOut = 2,
-    EaseInOut = 3,
-    SmoothStep = 4,
+enum class VfxCurveEasing : std::int32_t {
+    kLinear = 0,
+    kEaseIn = 1,
+    kEaseOut = 2,
+    kEaseInOut = 3,
+    kSmoothStep = 4,
 };
 
 /// <summary>0～1の入力を指定のイージングで変換する。</summary>
@@ -23,16 +24,21 @@ inline float ApplyVfxCurveEasing(VfxCurveEasing easing, float value) {
     // 補間割合を先に0～1へ収め、曲線ごとの式が区間外へはみ出さないようにする。
     const float t = std::clamp(value, 0.0f, 1.0f);
     switch (easing) {
-    case VfxCurveEasing::EaseIn:
+    // 開始を緩やかにし、終点へ向けて加速させる。
+    case VfxCurveEasing::kEaseIn:
         return t * t;
-    case VfxCurveEasing::EaseOut:
+    // 開始を速くし、終点へ向けて減速させる。
+    case VfxCurveEasing::kEaseOut:
         return 1.0f - (1.0f - t) * (1.0f - t);
-    case VfxCurveEasing::EaseInOut:
+    // 前半を加速、後半を減速し、区間の中央でつなぐ。
+    case VfxCurveEasing::kEaseInOut:
         return t < 0.5f ? 2.0f * t * t : 1.0f - std::pow(-2.0f * t + 2.0f, 2.0f) * 0.5f;
-    case VfxCurveEasing::SmoothStep:
+    // 両端で傾きを0にする滑らかな曲線を使う。
+    case VfxCurveEasing::kSmoothStep:
         return Easing::SmoothStep(t);
-    case VfxCurveEasing::Linear:
+    case VfxCurveEasing::kLinear:
     default:
+        // 線形指定か未対応の指定では、入力の割合をそのまま使う。
         return t;
     }
 }
@@ -42,15 +48,15 @@ inline float ApplyVfxCurveEasing(VfxCurveEasing easing, float value) {
 struct VfxFloatCurveKey {
     float time = 0.0f; // 寿命に対する位置。0が発生、1が末尾。
     float value = 1.0f;
-    VfxCurveEasing easing = VfxCurveEasing::Linear; // 次キーへの補間方式。
+    VfxCurveEasing easing = VfxCurveEasing::kLinear; // 次キーへの補間方式。
 };
 
 /// <summary>寿命に対する色グラデーションのキー。timeは0～1の再生割合。</summary>
 // 関連：VfxColorGradient（色の補間）
 struct VfxColorGradientKey {
     float time = 0.0f; // 寿命に対する位置。0が発生、1が末尾。
-    engine::Vector4 color = engine::Colors::White;
-    VfxCurveEasing easing = VfxCurveEasing::Linear; // 次キーへの補間方式。
+    engine::Vector4 color = engine::colors::kWhite;
+    VfxCurveEasing easing = VfxCurveEasing::kLinear; // 次キーへの補間方式。
 };
 
 /// <summary>数値カーブのキーを時刻順に並べるための比較関数。</summary>
@@ -66,7 +72,7 @@ inline bool VfxGradientKeyTimeLess(const VfxColorGradientKey& lhs, const VfxColo
 // 担当：粒子寿命に対する数値変化をキーで編集・補間する。
 // 関連：VfxFloatCurveKey（キー）、VfxBakedFloatCurve（実行用サンプル）
 // 主な入口：Normalize / Evaluate / FromLegacySamples
-class VfxFloatCurve {
+struct VfxFloatCurve {
 public:
     std::vector<VfxFloatCurveKey> keys;
 
@@ -82,19 +88,23 @@ public:
     /// <summary>指定した再生割合で値を評価する。キーがなければfallbackを返す。</summary>
     /// <remarks>keysはNormalize等で昇順にしておく。範囲外は端の値、区間の補間には左側キーのイージングを使う。</remarks>
     float Evaluate(float time, float fallback = 1.0f) const {
-        // 左側キーのイージングを、そのキーから次のキーへ向かう区間に適用する。
+        // キーが無ければ、呼び出し側が指定した既定値を返す。
         if (keys.empty())
             return fallback;
+        // キーが一つだけの場合と、先頭の時刻までは最初の値を保つ。
         if (keys.size() == 1 || time <= keys.front().time)
             return keys.front().value;
+        // 末尾の時刻以降は最後の値を保ち、外挿しない。
         if (time >= keys.back().time)
             return keys.back().value;
 
         for (std::size_t index = 1; index < keys.size(); ++index) {
             const VfxFloatCurveKey& right = keys[index];
+            // 時刻が右側キーを越えていれば、次の区間へ進む。
             if (time > right.time)
                 continue;
             const VfxFloatCurveKey& left = keys[index - 1];
+            // 見つけた区間の長さを下限付きで求め、左側キーの補間方法で時刻の割合を変換する。
             const float duration = (std::max)(right.time - left.time, 0.0001f);
             const float localTime = ApplyVfxCurveEasing(left.easing, (time - left.time) / duration);
             return std::lerp(left.value, right.value, localTime);
@@ -105,13 +115,14 @@ public:
     /// <summary>旧形式の等間隔サンプルを編集用キーへ変換する。</summary>
     static VfxFloatCurve FromLegacySamples(const float* values, std::size_t count) {
         VfxFloatCurve curve;
+        // 元サンプルが無ければ、生成するキーも空のまま返す。
         if (!values || count == 0)
             return curve;
         curve.keys.reserve(count);
         for (std::size_t index = 0; index < count; ++index) {
             // 0と1の両端を含むため、サンプル番号を点の数ではなく点間の区間数で割ります。
             const float time = count > 1 ? static_cast<float>(index) / static_cast<float>(count - 1) : 0.0f;
-            curve.keys.push_back({ time, values[index], VfxCurveEasing::Linear });
+            curve.keys.push_back({ time, values[index], VfxCurveEasing::kLinear });
         }
         return curve;
     }
@@ -123,12 +134,12 @@ public:
         float middleTime,
         float middleValue,
         float endValue,
-        VfxCurveEasing easing = VfxCurveEasing::Linear) {
+        VfxCurveEasing easing = VfxCurveEasing::kLinear) {
         VfxFloatCurve curve;
         curve.keys = {
             { 0.0f, startValue, easing },
             { std::clamp(middleTime, 0.01f, 0.99f), middleValue, easing },
-            { 1.0f, endValue, VfxCurveEasing::Linear },
+            { 1.0f, endValue, VfxCurveEasing::kLinear },
         };
         return curve;
     }
@@ -137,7 +148,7 @@ public:
 // 担当：粒子寿命に対する色変化をキーで編集・補間する。
 // 関連：VfxColorGradientKey（キー）、VfxBakedColorGradient（実行用サンプル）
 // 主な入口：Normalize / Evaluate / FromTwoColors
-class VfxColorGradient {
+struct VfxColorGradient {
 public:
     std::vector<VfxColorGradientKey> keys;
 
@@ -153,19 +164,23 @@ public:
     /// <summary>指定した再生割合で色を評価する。キーがなければfallbackを返す。</summary>
     /// <remarks>keysはNormalize等で昇順にしておく。RGBA各成分を補間し、色空間変換は行わない。</remarks>
     engine::Vector4 Evaluate(float time, const engine::Vector4& fallback = { 1.0f, 1.0f, 1.0f, 1.0f }) const {
-        // RGBAを同じ時刻割合で補間し、キーがない場合だけ呼び出し側の色へ戻す。
+        // キーが無ければ、呼び出し側が指定した既定色を返す。
         if (keys.empty())
             return fallback;
+        // 色キーが一つだけの場合と、先頭の時刻までは最初の色を保つ。
         if (keys.size() == 1 || time <= keys.front().time)
             return keys.front().color;
+        // 末尾の時刻以降は最後の色を保ち、外挿しない。
         if (time >= keys.back().time)
             return keys.back().color;
 
         for (std::size_t index = 1; index < keys.size(); ++index) {
             const VfxColorGradientKey& right = keys[index];
+            // 時刻が右側キーを越えていれば、次の区間へ進む。
             if (time > right.time)
                 continue;
             const VfxColorGradientKey& left = keys[index - 1];
+            // 区間内では左側キーの補間方法を評価し、RGBAの各成分へ同じ割合を使う。
             const float duration = (std::max)(right.time - left.time, 0.0001f);
             const float localTime = ApplyVfxCurveEasing(left.easing, (time - left.time) / duration);
             return {
@@ -182,8 +197,8 @@ public:
     static VfxColorGradient FromTwoColors(const engine::Vector4& startColor, const engine::Vector4& endColor) {
         VfxColorGradient gradient;
         gradient.keys = {
-            { 0.0f, startColor, VfxCurveEasing::Linear },
-            { 1.0f, endColor, VfxCurveEasing::Linear },
+            { 0.0f, startColor, VfxCurveEasing::kLinear },
+            { 1.0f, endColor, VfxCurveEasing::kLinear },
         };
         return gradient;
     }
@@ -195,12 +210,12 @@ public:
         float middleTime,
         const engine::Vector4& middleColor,
         const engine::Vector4& endColor,
-        VfxCurveEasing easing = VfxCurveEasing::Linear) {
+        VfxCurveEasing easing = VfxCurveEasing::kLinear) {
         VfxColorGradient gradient;
         gradient.keys = {
             { 0.0f, startColor, easing },
             { std::clamp(middleTime, 0.01f, 0.99f), middleColor, easing },
-            { 1.0f, endColor, VfxCurveEasing::Linear },
+            { 1.0f, endColor, VfxCurveEasing::kLinear },
         };
         return gradient;
     }
@@ -275,7 +290,7 @@ struct VfxLodSettings {
     float nearDistance = 12.0f; // 発生数を減らし始めるカメラ距離。
     float farDistance = 45.0f; // 遠距離用の発生倍率へ到達する距離。
     float farEmissionScale = 0.25f; // 遠距離で適用する発生数の倍率。
-    int maxAliveParticles = 0; // 0は個別の生存数上限を指定しない。
+    std::int32_t maxAliveParticles = 0; // 0は個別の生存数上限を指定しない。
 
     /// <summary>距離・発生倍率・粒子上限を有効な範囲へ正規化する。</summary>
     void Sanitize() {
@@ -288,8 +303,10 @@ struct VfxLodSettings {
 
     /// <summary>指定距離で使用する発生倍率を返す。</summary>
     float EvaluateEmissionScale(float distance) const {
+        // LODが無効か近距離の境界までの場合は、発生数を減らさない。
         if (!enabled || distance <= nearDistance)
             return 1.0f;
+        // 遠距離の境界以上なら、遠距離用の倍率を0〜1に収めて使う。
         if (distance >= farDistance)
             return std::clamp(farEmissionScale, 0.0f, 1.0f);
         const float range = (std::max)(farDistance - nearDistance, 0.01f);

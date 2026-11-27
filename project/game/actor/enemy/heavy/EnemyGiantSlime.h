@@ -54,10 +54,10 @@ class EnemyGiantSlime : public BaseEnemy {
     float GetBodyAttackDamage() const override;
 
     // 巨大スライムの待機、チャージ、ジャンプ、着地回復などの状態です。
-    enum class State { Idle, ChargeJump, Airborne, Recovery };
+    enum class State { kIdle, kChargeJump, kAirborne, kRecovery };
 
     // フック拘束中の落下、着地、踏ん張り、破断を分離した見た目用ステートです。
-    enum class HookSplitPhase { None, AirborneTether, LandingSquash, Brace, Slip, Tear };
+    enum class HookSplitPhase { kNone, kAirborneTether, kLandingSquash, kBrace, kSlip, kTear };
 
     /// 行動不能中の更新を処理し、通常行動を止める場合は true を返す。
     bool UpdateInactiveState(float deltaTime);
@@ -146,27 +146,27 @@ class EnemyGiantSlime : public BaseEnemy {
 
     engine::Vector3 baseScale_ = {1.0f, 1.0f, 1.0f};
 
-    engine::Vector3 hookSplitBasePosition_ = engine::Vector3::ZERO;
+    engine::Vector3 hookSplitBasePosition_ = engine::Vector3::kZero;
     engine::Vector3 hookSplitBaseScale_ = {1.0f, 1.0f, 1.0f};
-    engine::Vector3 hookSplitOwnerPosition_ = engine::Vector3::ZERO;
+    engine::Vector3 hookSplitOwnerPosition_ = engine::Vector3::kZero;
     engine::Vector3 hookSplitDirection_ = {0.0f, 0.0f, 1.0f};
 
     engine::Vector3 hookVisualScale_ = {1.0f, 1.0f, 1.0f};
-    engine::Vector3 hookVisualScaleVelocity_ = engine::Vector3::ZERO;
+    engine::Vector3 hookVisualScaleVelocity_ = engine::Vector3::kZero;
 
-    engine::Vector3 hookVisualRotation_ = engine::Vector3::ZERO;
-    engine::Vector3 hookVisualRotationVelocity_ = engine::Vector3::ZERO;
+    engine::Vector3 hookVisualRotation_ = engine::Vector3::kZero;
+    engine::Vector3 hookVisualRotationVelocity_ = engine::Vector3::kZero;
 
-    engine::Vector3 hookVisualOffset_ = engine::Vector3::ZERO;
-    engine::Vector3 hookVisualOffsetVelocity_ = engine::Vector3::ZERO;
+    engine::Vector3 hookVisualOffset_ = engine::Vector3::kZero;
+    engine::Vector3 hookVisualOffsetVelocity_ = engine::Vector3::kZero;
 
-    engine::Vector3 hookVisualShear_ = engine::Vector3::ZERO;
-    engine::Vector3 hookVisualShearVelocity_ = engine::Vector3::ZERO;
+    engine::Vector3 hookVisualShear_ = engine::Vector3::kZero;
+    engine::Vector3 hookVisualShearVelocity_ = engine::Vector3::kZero;
 
-    engine::Vector3 landingTelegraphPosition_ = engine::Vector3::ZERO;
+    engine::Vector3 landingTelegraphPosition_ = engine::Vector3::kZero;
 
-    State state_ = State::Idle;
-    HookSplitPhase hookSplitPhase_ = HookSplitPhase::None;
+    State state_ = State::kIdle;
+    HookSplitPhase hookSplitPhase_ = HookSplitPhase::kNone;
     float stateTimer_ = 0.0f; // 現在の状態に使う経過秒数。
     float telegraphTimer_ = 0.0f;
 

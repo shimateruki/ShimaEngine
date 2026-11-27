@@ -12,12 +12,12 @@ void GimmickAppearingFloor::Initialize(engine::Object3DCommon* common, const std
     SetClassName("Gimmick");
     SetGimmickType("AppearingFloor");
     SetName("Gimmick_AppearingFloor");
-    SetCollisionAttribute(CollisionCategories::Get("ground"));
-    SetCollisionMask(CollisionCategories::GetDefaultGameplayMask());
+    SetCollisionAttribute(engine::collisionCategories::Get("ground"));
+    SetCollisionMask(engine::collisionCategories::GetDefaultGameplayMask());
     SetColor({0.55f, 1.0f, 0.7f, 1.0f});
     SetStatic(false);
 
-    // 編集項目の宣言です。動作処理と旧paramの保存キーは変更しません。
+    // イベント受信後の出現時間をintervalとして登録する。
     using Self = GimmickAppearingFloor;
     engine::ObjectPropertyDefinition<Self> properties(*this, kTypeId, "出現床",
         "イベントを受けた後に出現します。0以下は従来どおり3秒として実行し、保存値自体は書き換えません。");
@@ -27,15 +27,17 @@ void GimmickAppearingFloor::Initialize(engine::Object3DCommon* common, const std
 
 // Play中だけタイマーを進め、Editorでは足場を常に見える状態に戻します。
 void GimmickAppearingFloor::Update(float deltaTime) {
-    // 保持時間は配置値を毎回参照し、0以下のときは実行時だけ3秒を使います。
+    // 配置パラメーターがあれば、出現時間をそこから読み取る。
     if (GetParameters().has_value()) {
         appearDuration_ = GetParameters()->interval;
+        // 設定値が0秒以下なら実行時の出現時間に3秒を使う。
         if (appearDuration_ <= 0.0f)
             appearDuration_ = 3.0f;
     }
 
     bool isPlaying = false;
 
+    // シーン管理があれば、その実行状態を使う。取得できなければ編集中として扱う。
     if (SceneManager* sceneManager = SceneManager::GetInstance()) {
         isPlaying = sceneManager->IsPlaying();
     }
@@ -48,14 +50,16 @@ void GimmickAppearingFloor::Update(float deltaTime) {
         return;
     }
 
+    // プレイへ入った最初の更新では、床の衝突属性を保存してから非表示・無効にする。
     if (!initializedForPlay_) {
-        // 初回だけEditorで設定された衝突属性を退避し、待機中の当たり判定を外します。
         originalCollisionAttribute_ = GetCollisionAttribute();
         originalCollisionMask_ = GetCollisionMask();
+        // 属性が設定されていなければ、出現時に使う地面属性を補う。
         if (originalCollisionAttribute_ == 0)
-            originalCollisionAttribute_ = CollisionCategories::Get("ground");
+            originalCollisionAttribute_ = engine::collisionCategories::Get("ground");
+        // マスクが設定されていなければ、出現時に標準のゲームプレイ用マスクを使う。
         if (originalCollisionMask_ == 0)
-            originalCollisionMask_ = CollisionCategories::GetDefaultGameplayMask();
+            originalCollisionMask_ = engine::collisionCategories::GetDefaultGameplayMask();
 
         visibleTimer_ = 0.0f;
         SetFloorActive(false);
@@ -65,6 +69,7 @@ void GimmickAppearingFloor::Update(float deltaTime) {
     // 秒単位で有効時間を減らす。点滅中もタイマーが残る間は衝突を有効に保ちます。
     if (visibleTimer_ > 0.0f) {
         visibleTimer_ -= deltaTime;
+        // 今フレームで表示時間を使い切った場合は0秒で止める。
         if (visibleTimer_ < 0.0f)
             visibleTimer_ = 0.0f;
     }
@@ -72,14 +77,16 @@ void GimmickAppearingFloor::Update(float deltaTime) {
     bool shouldBeActive = visibleTimer_ > 0.0f;
     SetFloorActive(shouldBeActive);
 
+    // 有効時間が残っていれば、消滅前の点滅表示を判定する。
     if (shouldBeActive) {
-        // 消滅直前に点滅させ、プレイヤーに残り時間を知らせます。
         float warningTime = (std::min)(blinkWarningTime_, appearDuration_ * 0.5f);
 
+        // 残りが予告時間以内なら表示だけを点滅させ、床の衝突は保持する。
         if (visibleTimer_ <= warningTime) {
             bool blinkOn = std::fmod(visibleTimer_, blinkInterval_ * 2.0f) >= blinkInterval_;
             SetIsVisible(blinkOn);
             SetColor(blinkOn ? engine::Vector4{0.9f, 1.0f, 0.35f, 1.0f} : engine::Vector4{0.55f, 1.0f, 0.7f, 1.0f});
+        // 予告時間に入るまでは、常時表示して通常色を使う。
         } else {
             SetIsVisible(true);
             SetColor({0.55f, 1.0f, 0.7f, 1.0f});
@@ -97,17 +104,19 @@ void GimmickAppearingFloor::OnTrigger() {
 }
 
 void GimmickAppearingFloor::SetFloorActive(bool active) {
-    // 見た目と床としての接触状態を同じフラグへそろえる。
+    // 実行状態と表示の両方が要求に一致していれば、衝突と表示を設定し直さない。
     if (isActive_ == active && GetIsVisible() == active)
         return;
 
     isActive_ = active;
     SetIsVisible(active);
 
+    // 出現時は保存した属性とマスクを戻し、未設定値には既定を使う。
     if (active) {
-        SetCollisionAttribute(originalCollisionAttribute_ != 0 ? originalCollisionAttribute_ : CollisionCategories::Get("ground"));
-        SetCollisionMask(originalCollisionMask_ != 0 ? originalCollisionMask_ : CollisionCategories::GetDefaultGameplayMask());
+        SetCollisionAttribute(originalCollisionAttribute_ != 0 ? originalCollisionAttribute_ : engine::collisionCategories::Get("ground"));
+        SetCollisionMask(originalCollisionMask_ != 0 ? originalCollisionMask_ : engine::collisionCategories::GetDefaultGameplayMask());
         SetColor({0.55f, 1.0f, 0.7f, 1.0f});
+    // 消える場合は、見えなくなった足場に触れないよう属性とマスクを0にする。
     } else {
         SetCollisionAttribute(0);
         SetCollisionMask(0);

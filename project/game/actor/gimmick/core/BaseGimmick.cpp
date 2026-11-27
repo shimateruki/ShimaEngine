@@ -2,25 +2,25 @@
 #include "ModelManager.h"
 #include <typeinfo>
 
+// モデルと基本のOBBを設定します。ギミック固有の判定形状や属性は派生側で設定できます。
 void BaseGimmick::Initialize(engine::Object3DCommon* common, const std::string& modelName) {
     engine::Object3D::Initialize(common);
 
-    // モデル読み込みと設定
     ModelManager::GetInstance()->LoadModel(modelName);
     SetModel(modelName);
 
-    // デフォルトの当たり判定設定 (OBB想定)
+    // 派生側が判定を上書きするまで、各軸1のOBBを使う。
     engine::ColliderConfig config;
-    config.type = ColliderType::Obb;
-    config.size = {1.0f, 1.0f, 1.0f}; // 仮のサイズ
+    config.type = engine::ColliderType::kObb;
+    config.size = {1.0f, 1.0f, 1.0f};
     SetColliderConfig(config);
 
-    // 衝突属性 (必要に応じてサブクラスで上書き)
-    SetCollisionAttribute(0b0010); // 例: 敵やギミックなどのオブジェクト属性
-    SetCollisionMask(0b1111);      // 全てと当たる
+    // 初期マスクは下位4ビットを対象とし、派生側が必要な衝突カテゴリへ変更する。
+    SetCollisionAttribute(0b0010);
+    SetCollisionMask(0b1111);
 
     SetClassName("Gimmick");
-    SetSaveCategory("Object"); // Json保存カテゴリ
+    SetSaveCategory("Object");
 }
 
 void BaseGimmick::Update(float deltaTime) {
@@ -29,7 +29,7 @@ void BaseGimmick::Update(float deltaTime) {
 }
 
 bool BaseGimmick::OnCollision(engine::Object3D* other) {
-    // 基底クラスでは特に何もしない。派生クラスで処理する
+    // 基底では接触による状態変更を行わず、falseを返す。
     (void)other;
     return false;
 }
@@ -40,6 +40,7 @@ std::unique_ptr<engine::Object3D> BaseGimmick::Clone() const {
         return nullptr;
     }
 
+    // 基底型そのものなら、描画基盤とモデルで初期化してから配置と設定を写す。
     auto newObj = std::make_unique<BaseGimmick>();
     assert(GetObjectCommon() != nullptr);
     newObj->Initialize(GetObjectCommon(), GetModelName());

@@ -1153,9 +1153,9 @@
                 "targetMode": 1,
                 "targetObjectName": "player",
                 "targetOffset": [
-                    0,
+                    3,
                     2,
-                    7
+                    10
                 ],
                 "version": 1,
                 "region": {
@@ -1268,9 +1268,9 @@
                 "targetMode": 1,
                 "targetObjectName": "player",
                 "targetOffset": [
-                    8,
+                    11,
                     2,
-                    0
+                    2
                 ],
                 "version": 1,
                 "region": {
@@ -1728,9 +1728,9 @@
                 "targetMode": 1,
                 "targetObjectName": "player",
                 "targetOffset": [
-                    8,
+                    15,
                     2,
-                    0
+                    3
                 ],
                 "version": 1,
                 "region": {
@@ -1958,9 +1958,9 @@
                 "targetMode": 1,
                 "targetObjectName": "player",
                 "targetOffset": [
-                    4,
+                    7,
                     2,
-                    -4
+                    -6
                 ],
                 "version": 1,
                 "region": {
@@ -2073,9 +2073,9 @@
                 "targetMode": 1,
                 "targetObjectName": "player",
                 "targetOffset": [
-                    0,
+                    4,
                     2,
-                    -6
+                    -9
                 ],
                 "version": 1,
                 "region": {
@@ -2303,9 +2303,9 @@
                 "targetMode": 1,
                 "targetObjectName": "player",
                 "targetOffset": [
-                    0,
+                    3,
                     2,
-                    -10
+                    -14
                 ],
                 "version": 1,
                 "region": {
@@ -2418,9 +2418,9 @@
                 "targetMode": 1,
                 "targetObjectName": "player",
                 "targetOffset": [
-                    0,
+                    5,
                     2,
-                    -8
+                    -9
                 ],
                 "version": 1,
                 "region": {
@@ -2533,7 +2533,7 @@
                 "targetMode": 1,
                 "targetObjectName": "player",
                 "targetOffset": [
-                    8,
+                    12,
                     2,
                     0
                 ],
@@ -2623,7 +2623,7 @@
                 "blendOutDuration": 1.4,
                 "easing": 4,
                 "enabled": true,
-                "eyeFollowMode": 1,
+                "eyeFollowMode": 0,
                 "eyeFollowResponse": 5,
                 "eyeObjectName": "",
                 "eyeOffset": [
@@ -2635,15 +2635,15 @@
                 "eyeSource": 0,
                 "farClip": 1000.0,
                 "fixedTarget": [
-                    83.0,
-                    -0.4,
+                    78.0,
+                    -3.6,
                     -89.0
                 ],
                 "forwardDistance": 10.0,
-                "fovY": 0.35,
+                "fovY": 0.63,
                 "nearClip": 0.10000000149011612,
                 "role": 0,
-                "targetFollowMode": 1,
+                "targetFollowMode": 0,
                 "targetFollowResponse": 5,
                 "targetMode": 0,
                 "targetObjectName": "",
@@ -2687,9 +2687,10 @@
                         -89
                     ],
                     "clearForegroundBarriers": true,
-                    "barrierFloorHeight": -1.5857916,
-                    "barrierEdgeHeight": 0.55,
-                    "barrierOpacity": 0.02
+                    "barrierFloorHeight": -3.5857916,
+                    "barrierEdgeHeight": 0.550000011920929,
+                    "barrierOpacity": 0.019999999552965164,
+                    "barrierLatticeOpacity": 0.0
                 }
             },
             "enemyType": "",
@@ -2701,8 +2702,8 @@
             "parentGuid": "",
             "parentName": "",
             "position": [
-                -72.88457268119896,
-                89.59999999999998,
+                -10.0,
+                84.0,
                 -89.0
             ],
             "quaternion": [
@@ -3091,9 +3092,9 @@
                 "eyeFollowResponse": 5,
                 "eyeObjectName": "player",
                 "eyeOffset": [
-                    0,
-                    36,
-                    -44
+                    9,
+                    32,
+                    -43
                 ],
                 "eyeReferenceObjectName": "",
                 "eyeSource": 1,
@@ -3112,9 +3113,9 @@
                 "targetMode": 1,
                 "targetObjectName": "player",
                 "targetOffset": [
-                    -4,
+                    -12,
                     4,
-                    2
+                    3
                 ],
                 "version": 1,
                 "region": {
@@ -3126,7 +3127,7 @@
                     ],
                     "size": [
                         33,
-                        50,
+                        56,
                         69
                     ],
                     "color": [
@@ -3161,9 +3162,9 @@
             "parentGuid": "",
             "parentName": "",
             "position": [
-                305.5,
-                36.0,
-                -102.5
+                314.5,
+                32.0,
+                -101.5
             ],
             "quaternion": [
                 0,
@@ -3206,9 +3207,9 @@
                 "eyeFollowResponse": 5,
                 "eyeObjectName": "player",
                 "eyeOffset": [
-                    0,
-                    35,
-                    -44
+                    9,
+                    32,
+                    -43
                 ],
                 "eyeReferenceObjectName": "",
                 "eyeSource": 1,
@@ -3219,7 +3220,7 @@
                     -50
                 ],
                 "forwardDistance": 10.0,
-                "fovY": 0.88,
+                "fovY": 0.9,
                 "nearClip": 0.10000000149011612,
                 "role": 0,
                 "targetFollowMode": 1,
@@ -3227,22 +3228,22 @@
                 "targetMode": 1,
                 "targetObjectName": "player",
                 "targetOffset": [
-                    -8,
-                    2,
-                    0
+                    -12,
+                    4,
+                    3
                 ],
                 "version": 1,
                 "region": {
                     "enabled": true,
                     "center": [
-                        254.5,
+                        259.5,
                         16.75,
-                        -30.0
+                        -31
                     ],
                     "size": [
-                        69,
+                        79,
                         11.5,
-                        34
+                        38
                     ],
                     "color": [
                         0.3,
@@ -3276,9 +3277,9 @@
             "parentGuid": "",
             "parentName": "",
             "position": [
-                254.5,
-                51.75,
-                -74.0
+                263.5,
+                48.75,
+                -73.0
             ],
             "quaternion": [
                 0,
@@ -3687,9 +3688,9 @@
                 "targetMode": 1,
                 "targetObjectName": "player",
                 "targetOffset": [
-                    6,
+                    8,
                     2,
-                    2
+                    4
                 ],
                 "version": 1,
                 "region": {
@@ -3781,9 +3782,9 @@
                 "eyeFollowResponse": 5,
                 "eyeObjectName": "player",
                 "eyeOffset": [
-                    0,
-                    36,
-                    -46
+                    -9,
+                    33,
+                    -44
                 ],
                 "eyeReferenceObjectName": "",
                 "eyeSource": 1,
@@ -3794,7 +3795,7 @@
                     -50
                 ],
                 "forwardDistance": 10.0,
-                "fovY": 0.9,
+                "fovY": 0.91,
                 "nearClip": 0.10000000149011612,
                 "role": 0,
                 "targetFollowMode": 1,
@@ -3802,20 +3803,20 @@
                 "targetMode": 1,
                 "targetObjectName": "player",
                 "targetOffset": [
-                    8,
-                    2,
-                    1
+                    13,
+                    3,
+                    2
                 ],
                 "version": 1,
                 "region": {
                     "enabled": true,
                     "center": [
-                        340.0,
-                        38.0,
+                        346.5,
+                        38,
                         -15.5
                     ],
                     "size": [
-                        54,
+                        67,
                         36,
                         65
                     ],
@@ -3827,7 +3828,7 @@
                     ],
                     "priority": 40,
                     "activationDelay": 0.12,
-                    "exitMargin": 1.0,
+                    "exitMargin": 1.5,
                     "routeEnabled": false,
                     "endCameraGuid": "",
                     "pathStart": [
@@ -3851,9 +3852,9 @@
             "parentGuid": "",
             "parentName": "",
             "position": [
-                340.0,
-                74.0,
-                -61.5
+                331.0,
+                71.0,
+                -59.5
             ],
             "quaternion": [
                 0,
@@ -3888,7 +3889,7 @@
             },
             "camera": {
                 "blendFov": true,
-                "blendInDuration": 1.6,
+                "blendInDuration": 1.15,
                 "blendOutDuration": 1.6,
                 "easing": 4,
                 "enabled": true,
@@ -3896,9 +3897,9 @@
                 "eyeFollowResponse": 5,
                 "eyeObjectName": "player",
                 "eyeOffset": [
-                    0,
+                    -6,
                     30,
-                    -38
+                    -40
                 ],
                 "eyeReferenceObjectName": "",
                 "eyeSource": 1,
@@ -3909,7 +3910,7 @@
                     -50
                 ],
                 "forwardDistance": 10.0,
-                "fovY": 0.83,
+                "fovY": 0.86,
                 "nearClip": 0.10000000149011612,
                 "role": 0,
                 "targetFollowMode": 1,
@@ -3917,7 +3918,7 @@
                 "targetMode": 1,
                 "targetObjectName": "player",
                 "targetOffset": [
-                    0,
+                    4,
                     2,
                     1
                 ],
@@ -3925,12 +3926,12 @@
                 "region": {
                     "enabled": true,
                     "center": [
-                        387.0,
-                        40.0,
-                        -9.0
+                        392.5,
+                        40,
+                        -9
                     ],
                     "size": [
-                        40,
+                        29,
                         40,
                         66
                     ],
@@ -3940,8 +3941,8 @@
                         1,
                         0.8
                     ],
-                    "priority": 40,
-                    "activationDelay": 0.12,
+                    "priority": 41,
+                    "activationDelay": 0.26,
                     "exitMargin": 1.0,
                     "routeEnabled": false,
                     "endCameraGuid": "",
@@ -3966,9 +3967,9 @@
             "parentGuid": "",
             "parentName": "",
             "position": [
-                387.0,
+                381.0,
                 70.0,
-                -47.0
+                -49.0
             ],
             "quaternion": [
                 0,

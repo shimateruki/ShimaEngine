@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "IEditable.h"
 #include "engine/utility/math/Math.h"
@@ -16,13 +17,13 @@ class SceneManager;
 class EffectPreviewStage : public IEditable {
 public:
     enum class ToolKind {
-        None,
-        CpuParticle,
-        GpuParticle,
-        MeshEffect,
-        VfxSequence,
-        Debris,
-        Trail
+        kNone,
+        kCpuParticle,
+        kGpuParticle,
+        kMeshEffect,
+        kVfxSequence,
+        kDebris,
+        kTrail
     };
 
     // プレビュー時間軸へ表示する区間と色。これ自体はゲームのイベントを発火しない。
@@ -41,7 +42,7 @@ public:
     struct PerformanceMetrics {
         // falseのとき測定値は呼び出し元から提供されていない。
         bool available = false;
-        int particleCount = 0;
+        std::int32_t particleCount = 0;
         float cpuTimeMs = 0.0f; // 呼出元から渡されたCPU計測値（ミリ秒）。
         float gpuTimeMs = 0.0f; // 呼出元から渡されたGPU計測値（ミリ秒）。
         float frameDeltaSeconds = 0.0f; // 対象フレームの経過秒数。
@@ -90,11 +91,11 @@ public:
     engine::Vector3 GetPreviewPosition() const;
 
     // 各番号は対応する操作要求のたびに増える。ツール側は前回見た番号との差で新しい要求を検出する。
-    int GetPlayRequestSerial() const { return playRequestSerial_; }
+    std::int32_t GetPlayRequestSerial() const { return playRequestSerial_; }
 
-    int GetStopRequestSerial() const { return stopRequestSerial_; }
+    std::int32_t GetStopRequestSerial() const { return stopRequestSerial_; }
 
-    int GetSeekRequestSerial() const { return seekRequestSerial_; }
+    std::int32_t GetSeekRequestSerial() const { return seekRequestSerial_; }
 
     /// シーク要求先の時刻。単位は秒。
     float GetSeekTargetTime() const { return seekTargetTime_; }
@@ -107,7 +108,7 @@ public:
         float currentTime,
         float duration,
         bool isPlaying,
-        int activeCount,
+        std::int32_t activeCount,
         const std::vector<TimelineEvent>& events = {},
         const PerformanceMetrics& performance = {});
 
@@ -154,7 +155,7 @@ private:
     void SetEnvironmentObjectVisible(const std::string& name, bool visible);
 
     // 選択したスタジオ背景と照明のプリセットを反映する。
-    void ApplyStudioPreset(int presetIndex);
+    void ApplyStudioPreset(std::int32_t presetIndex);
 
     // プレビュー用照明を適用し、終了時には退避した照明へ戻す。
     void ApplyStudioLighting();
@@ -220,12 +221,12 @@ private:
     float studioLightIntensity_ = 1.35f;
     float studioAmbientIntensity_ = 0.42f;
 
-    engine::Vector3 origin_ = engine::Vector3::ZERO;
+    engine::Vector3 origin_ = engine::Vector3::kZero;
     engine::Vector3 isolatedBase_ = { 2048.0f, 2048.0f, 2048.0f };
 
-    engine::Vector3 storedEye_ = engine::Vector3::ZERO;
-    engine::Vector3 storedTarget_ = engine::Vector3::ZERO;
-    engine::Vector3 storedRotation_ = engine::Vector3::ZERO;
+    engine::Vector3 storedEye_ = engine::Vector3::kZero;
+    engine::Vector3 storedTarget_ = engine::Vector3::kZero;
+    engine::Vector3 storedRotation_ = engine::Vector3::kZero;
 
     engine::Vector4 backgroundColor_ = { 0.095f, 0.105f, 0.125f, 1.0f };
     engine::Vector4 floorColor_ = { 0.20f, 0.215f, 0.24f, 1.0f };
@@ -245,18 +246,18 @@ private:
     float storedDirectionalIntensity_ = 0.0f;
     float storedVolumetricIntensity_ = 0.0f;
 
-    int storedEnableFog_ = 0;
+    std::int32_t storedEnableFog_ = 0;
     bool storedSkyboxEnabled_ = false;
 
-    int studioPresetIndex_ = 0;
+    std::int32_t studioPresetIndex_ = 0;
 
-    int playRequestSerial_ = 0; // 再生要求の番号。各ツールが処理済み番号と比較する。
-    int stopRequestSerial_ = 0; // 停止要求の番号。
-    int seekRequestSerial_ = 0; // シーク要求の番号。
+    std::int32_t playRequestSerial_ = 0; // 再生要求の番号。各ツールが処理済み番号と比較する。
+    std::int32_t stopRequestSerial_ = 0; // 停止要求の番号。
+    std::int32_t seekRequestSerial_ = 0; // シーク要求の番号。
 
-    int storedCameraMode_ = 0;
+    std::int32_t storedCameraMode_ = 0;
 
-    ToolKind activeToolKind_ = ToolKind::None;
+    ToolKind activeToolKind_ = ToolKind::kNone;
     std::string activeToolTitle_ = "プレビュー未選択";
 
     float reportedCurrentTime_ = 0.0f;
@@ -271,7 +272,7 @@ private:
     float lastDispatchedSeekTarget_ = -1.0f; // 直近に通知したシーク秒数。負値は未通知。
     double lastSeekDispatchTimestamp_ = -1.0;
 
-    int reportedActiveCount_ = 0;
+    std::int32_t reportedActiveCount_ = 0;
     float timelinePixelsPerSecond_ = 220.0f;
     std::vector<TimelineEvent> reportedEvents_;
 
@@ -281,16 +282,16 @@ private:
     bool performanceMeasurementRunning_ = false;
     bool performanceMeasurementValid_ = false;
 
-    int performanceWarmupFrames_ = 30;
-    int performanceSampleFrames_ = 120;
+    std::int32_t performanceWarmupFrames_ = 30;
+    std::int32_t performanceSampleFrames_ = 120;
 
-    int performanceWarmupProgress_ = 0;
-    int performanceSampleProgress_ = 0;
+    std::int32_t performanceWarmupProgress_ = 0;
+    std::int32_t performanceSampleProgress_ = 0;
 
     double performanceCpuTimeAccumMs_ = 0.0;
     double performanceGpuTimeAccumMs_ = 0.0;
     double performanceElapsedSeconds_ = 0.0; // 計測開始からの経過秒数。
     double performanceParticleCountAccum_ = 0.0;
 
-    ToolKind performanceMeasurementTool_ = ToolKind::None;
+    ToolKind performanceMeasurementTool_ = ToolKind::kNone;
 };

@@ -16,11 +16,12 @@ class Object3D;
 class InspectorExtensionRegistry {
 public:
     // 既存の表示位置を維持する。ItemはStatsが開かれ、ClassがItemの場合だけ呼ばれる。
-    enum class Slot { Gameplay, Item };
+    enum class Slot { kGameplay, kItem };
 
     /// <summary>起動時に対象型と描画処理を登録。同じIDは元の順番で置換し、重複表示を防ぐ。</summary>
     template<class Owner>
     static bool Register(std::string id, Slot slot, std::function<void(Owner&)> draw) {
+        // 識別子が空か描画処理を受け取っていない場合は、登録できない。
         if (id.empty() || !draw) return false;
         Entry entry{std::move(id), slot, [draw = std::move(draw)](Object3D& object) {
             // 現在の選択Objectを毎回判定し、対応型だけへ渡す。Objectのアドレスは登録しない。
@@ -29,15 +30,19 @@ public:
         auto& entries = Entries();
         const auto found = std::find_if(entries.begin(), entries.end(),
             [&entry](const Entry& value) { return value.id == entry.id; });
+        // 新しい識別子なら一覧の末尾へ登録する。
         if (found == entries.end()) entries.push_back(std::move(entry));
+        // 同じ識別子の再登録では、表示順を保ってその位置の処理を置き換える。
         else *found = std::move(entry);
         return true;
     }
 
     /// <summary>代表選択Objectだけを描く。UI自身の保存・無効化・ImGui IDの扱いを維持する。</summary>
     static void Draw(Slot slot, Object3D* target) {
+        // 選択対象がなければ、専用UIに渡すObjectがない。
         if (!target) return;
         for (const auto& entry : Entries()) {
+            // 現在描いている表示枠に対応する登録だけ、その対象型を確認して描く。
             if (entry.slot == slot) entry.draw(*target);
         }
     }
@@ -53,8 +58,8 @@ private:
 
     // 登録は初期化時だけに行い、描画中に追加・置換しない。戻り値を外部へ公開しない。
     static std::vector<Entry>& Entries() {
-        static std::vector<Entry> entries;
-        return entries;
+        static std::vector<Entry> sEntries;
+        return sEntries;
     }
 };
 } // namespace engine

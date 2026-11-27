@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "engine/editor/scene/inspector/InspectorWindow.h"
 #include "Object3D.h"
 #include "MeshRenderer.h"
@@ -7,14 +8,16 @@
 #include "IconsFontAwesome5.h"
 #endif
 
-// UIの順序・ID・設定値は従来と同じ。既存の変更フラグを参照で受け、先行する編集結果も保持する。
-void InspectorWindow::DrawEffectMaterialSettings(engine::Object3D* selectedObject, int currentMatType, bool& isGraphicsChanged) {
+// 特殊材質の共有定数を、材質ごとの設定UIから編集する。先行パネルの変更フラグも保持する。
+void InspectorWindow::DrawEffectMaterialSettings(engine::Object3D* selectedObject, std::int32_t currentMatType, bool& isGraphicsChanged) {
 #ifdef USE_IMGUI
     // 特殊材質の各 Shader は WaterParamData を共用し、同じフィールドを材質ごとに別の意味で使います。
-    // 編集フラグは呼び出し元から受けた値へ加算し、このパネルより前の変更を消しません。
+    // 各DragFloatとSliderFloatは値が変わった場合だけtrueを返す。成功時だけisGraphicsChangedを立て、呼び出し前の変更も保持する。
+    // 特殊材質を選択している場合だけ、共用する材質パラメーターの画面を開く。
     if ((currentMatType >= 8 && currentMatType <= 22) || currentMatType == 26) {
         ImGui::Separator();
 
+        // 選択オブジェクトから材質用の定数データを取得できる場合に、編集欄を描く。
         if (selectedObject->GetMeshRenderer() && selectedObject->GetMeshRenderer()->GetWaterParamData()) {
             auto* waterData = selectedObject->GetMeshRenderer()->GetWaterParamData();
 
@@ -30,14 +33,14 @@ void InspectorWindow::DrawEffectMaterialSettings(engine::Object3D* selectedObjec
                     "立体かがり火 (Volumetric Brazier)"
                 };
 
-                int fireType = std::clamp(static_cast<int>(waterData->effectType + 0.5f), 0, 4);
+                std::int32_t fireType = std::clamp(static_cast<std::int32_t>(waterData->effectType + 0.5f), 0, 4);
 
+                // 選び直したときだけ一覧の番号を書き戻す。
                 if (ImGui::Combo("炎タイプ (Fire Type)", &fireType, fireTypes, IM_ARRAYSIZE(fireTypes))) {
                     waterData->effectType = static_cast<float>(fireType);
                     isGraphicsChanged = true;
                 }
 
-                // 立体炎だけ奥行き・乱流・傾きの調整が必要です。
                 if (ImGui::DragFloat("揺らぎ速度 (Speed)", &waterData->waveSpeed, 0.05f, 0.05f, 10.0f))
                     isGraphicsChanged = true;
                 if (ImGui::DragFloat("炎の細かさ (Detail)", &waterData->waveFrequency, 0.05f, 0.1f, 20.0f))
@@ -50,6 +53,7 @@ void InspectorWindow::DrawEffectMaterialSettings(engine::Object3D* selectedObjec
                     isGraphicsChanged = true;
                 if (ImGui::DragFloat("炎の高さ (Height)", &waterData->effectScaleY, 0.01f, 0.12f, 4.0f))
                     isGraphicsChanged = true;
+                // まとい炎と立体かがり火だけ、立体形状の奥行き・乱流・傾きを調整できる。
                 if (fireType == 2 || fireType == 4) {
                     if (ImGui::DragFloat("炎の奥行き (Depth)", &waterData->effectScaleZ, 0.01f, 0.12f, 4.0f))
                         isGraphicsChanged = true;
@@ -113,8 +117,9 @@ void InspectorWindow::DrawEffectMaterialSettings(engine::Object3D* selectedObjec
             else if (currentMatType == 15) {
                 ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.18f, 1.0f), ICON_FA_BURN " --- Liquid Contact Settings ---");
                 const char* contactTypes[] = { "水の泡 (Foam)", "マグマ蒸気 (Steam)" };
-                int contactType = std::clamp(static_cast<int>(waterData->effectType + 0.5f), 0, 1);
+                std::int32_t contactType = std::clamp(static_cast<std::int32_t>(waterData->effectType + 0.5f), 0, 1);
 
+                // 種類の確定時だけ、泡または蒸気の番号を保存する。
                 if (ImGui::Combo("接触タイプ (Contact Type)", &contactType, contactTypes, IM_ARRAYSIZE(contactTypes))) {
                     waterData->effectType = static_cast<float>(contactType);
                     isGraphicsChanged = true;
@@ -143,8 +148,9 @@ void InspectorWindow::DrawEffectMaterialSettings(engine::Object3D* selectedObjec
             else if (currentMatType == 16) {
                 ImGui::TextColored(ImVec4(1.0f, 0.32f, 0.18f, 1.0f), ICON_FA_EXCLAMATION_TRIANGLE " --- Damage Crack Settings ---");
                 const char* crackTypes[] = { "ブロック亀裂 (Block Crack)", "ガラス亀裂 (Glass Crack)", "弱点コア亀裂 (Core Crack)" };
-                int crackType = std::clamp(static_cast<int>(waterData->effectType + 0.5f), 0, 2);
+                std::int32_t crackType = std::clamp(static_cast<std::int32_t>(waterData->effectType + 0.5f), 0, 2);
 
+                // 種類の確定時だけ、亀裂の描画方式を切り替える。
                 if (ImGui::Combo("亀裂タイプ (Crack Type)", &crackType, crackTypes, IM_ARRAYSIZE(crackTypes))) {
                     waterData->effectType = static_cast<float>(crackType);
                     isGraphicsChanged = true;
@@ -167,8 +173,9 @@ void InspectorWindow::DrawEffectMaterialSettings(engine::Object3D* selectedObjec
             else if (currentMatType == 17) {
                 ImGui::TextColored(ImVec4(0.45f, 0.95f, 1.0f, 1.0f), ICON_FA_WIND " --- Updraft Settings ---");
                 const char* updraftTypes[] = { "上昇柱 (Column)", "渦リング (Vortex Ring)", "横風スラッシュ (Wind Slash)" };
-                int updraftType = std::clamp(static_cast<int>(waterData->effectType + 0.5f), 0, 2);
+                std::int32_t updraftType = std::clamp(static_cast<std::int32_t>(waterData->effectType + 0.5f), 0, 2);
 
+                // 種類の確定時だけ、上昇柱・渦・横風の描画方式を切り替える。
                 if (ImGui::Combo("風タイプ (Wind Type)", &updraftType, updraftTypes, IM_ARRAYSIZE(updraftTypes))) {
                     waterData->effectType = static_cast<float>(updraftType);
                     isGraphicsChanged = true;
@@ -191,8 +198,9 @@ void InspectorWindow::DrawEffectMaterialSettings(engine::Object3D* selectedObjec
             else if (currentMatType == 18) {
                 ImGui::TextColored(ImVec4(1.0f, 0.9f, 0.25f, 1.0f), ICON_FA_BOLT " --- Stun Bind Settings ---");
                 const char* stunTypes[] = { "拘束リング (Bind Rings)", "電撃ケージ (Electric Cage)", "スタン球 (Stun Orb)" };
-                int stunType = std::clamp(static_cast<int>(waterData->effectType + 0.5f), 0, 2);
+                std::int32_t stunType = std::clamp(static_cast<std::int32_t>(waterData->effectType + 0.5f), 0, 2);
 
+                // 種類の確定時だけ、リング・ケージ・球の描画方式を切り替える。
                 if (ImGui::Combo("拘束タイプ (Bind Type)", &stunType, stunTypes, IM_ARRAYSIZE(stunTypes))) {
                     waterData->effectType = static_cast<float>(stunType);
                     isGraphicsChanged = true;
@@ -213,8 +221,9 @@ void InspectorWindow::DrawEffectMaterialSettings(engine::Object3D* selectedObjec
             else if (currentMatType == 19) {
                 ImGui::TextColored(ImVec4(1.0f, 0.84f, 0.25f, 1.0f), ICON_FA_MAGIC " --- Crown Unlock Settings ---");
                 const char* crownTypes[] = { "魔法陣 (Magic Circle)", "王冠バースト (Crown Burst)", "解放ポータル (Unlock Portal)" };
-                int crownType = std::clamp(static_cast<int>(waterData->effectType + 0.5f), 0, 2);
+                std::int32_t crownType = std::clamp(static_cast<std::int32_t>(waterData->effectType + 0.5f), 0, 2);
 
+                // 種類の確定時だけ、王冠解放演出の番号を材質データへ保存する。
                 if (ImGui::Combo("解放タイプ (Unlock Type)", &crownType, crownTypes, IM_ARRAYSIZE(crownTypes))) {
                     waterData->effectType = static_cast<float>(crownType);
                     isGraphicsChanged = true;
@@ -235,8 +244,9 @@ void InspectorWindow::DrawEffectMaterialSettings(engine::Object3D* selectedObjec
             else if (currentMatType == 20) {
                 ImGui::TextColored(ImVec4(0.55f, 1.0f, 0.25f, 1.0f), ICON_FA_SMOG " --- Poison Spore Settings ---");
                 const char* sporeTypes[] = { "毒霧 (Poison Mist)", "胞子雲 (Spore Cloud)", "毒リング (Poison Ring)" };
-                int sporeType = std::clamp(static_cast<int>(waterData->effectType + 0.5f), 0, 2);
+                std::int32_t sporeType = std::clamp(static_cast<std::int32_t>(waterData->effectType + 0.5f), 0, 2);
 
+                // 種類の確定時だけ、霧・胞子雲・リングを切り替える。
                 if (ImGui::Combo("毒タイプ (Poison Type)", &sporeType, sporeTypes, IM_ARRAYSIZE(sporeTypes))) {
                     waterData->effectType = static_cast<float>(sporeType);
                     isGraphicsChanged = true;
@@ -259,8 +269,9 @@ void InspectorWindow::DrawEffectMaterialSettings(engine::Object3D* selectedObjec
             else if (currentMatType == 21) {
                 ImGui::TextColored(ImVec4(0.75f, 0.9f, 1.0f, 1.0f), ICON_FA_CLOUD " --- Cloud Settings ---");
                 const char* cloudTypes[] = { "雲の塊 (Puff)", "流れる雲 (Drift)", "足元の煙 (Ground Mist)" };
-                int cloudType = std::clamp(static_cast<int>(waterData->effectType + 0.5f), 0, 2);
+                std::int32_t cloudType = std::clamp(static_cast<std::int32_t>(waterData->effectType + 0.5f), 0, 2);
 
+                // 種類の確定時だけ、雲や足元の煙の描画方式を切り替える。
                 if (ImGui::Combo("雲タイプ (Cloud Type)", &cloudType, cloudTypes, IM_ARRAYSIZE(cloudTypes))) {
                     waterData->effectType = static_cast<float>(cloudType);
                     isGraphicsChanged = true;
@@ -281,12 +292,14 @@ void InspectorWindow::DrawEffectMaterialSettings(engine::Object3D* selectedObjec
                 if (ImGui::DragFloat("明るさ (Intensity)", &waterData->effectIntensity, 0.05f, 0.05f, 5.0f))
                     isGraphicsChanged = true;
             }
+            // ゲートの材質を選んだときは、渦の種類と各軸の寸法を調整できる。
             else if (currentMatType == 22) {
                 // ゲートは幅・高さ・厚みを別々に調整するため、より細かい Drag 刻みを使います。
                 ImGui::TextColored(ImVec4(1.0f, 0.58f, 0.18f, 1.0f), ICON_FA_MAGIC " --- Gate Portal Settings ---");
                 const char* gateTypes[] = { "渦ポータル (Swirl Portal)", "暖色ゲート (Warm Gate)", "封印ゲート (Sealed Gate)" };
-                int gateType = std::clamp(static_cast<int>(waterData->effectType + 0.5f), 0, 2);
+                std::int32_t gateType = std::clamp(static_cast<std::int32_t>(waterData->effectType + 0.5f), 0, 2);
 
+                // 種類の確定時だけ、ゲートの描画方式を切り替える。
                 if (ImGui::Combo("ゲートタイプ (Gate Type)", &gateType, gateTypes, IM_ARRAYSIZE(gateTypes))) {
                     waterData->effectType = static_cast<float>(gateType);
                     isGraphicsChanged = true;
@@ -317,8 +330,9 @@ void InspectorWindow::DrawEffectMaterialSettings(engine::Object3D* selectedObjec
             else if (currentMatType == 26) {
                 ImGui::TextColored(ImVec4(0.42f, 1.0f, 0.82f, 1.0f), ICON_FA_WIND " --- Wind Orb Settings ---");
                 const char* windOrbTypes[] = { "安定した風弾 (Stable)", "高速の渦 (Fast)", "圧縮した風 (Compressed)" };
-                int windOrbType = std::clamp(static_cast<int>(waterData->effectType + 0.5f), 0, 2);
+                std::int32_t windOrbType = std::clamp(static_cast<std::int32_t>(waterData->effectType + 0.5f), 0, 2);
 
+                // 種類の確定時だけ、風弾の描画方式を切り替える。
                 if (ImGui::Combo("風弾タイプ (Wind Orb Type)", &windOrbType, windOrbTypes, IM_ARRAYSIZE(windOrbTypes))) {
                     waterData->effectType = static_cast<float>(windOrbType);
                     isGraphicsChanged = true;
@@ -359,19 +373,22 @@ void InspectorWindow::DrawEffectMaterialSettings(engine::Object3D* selectedObjec
                 if (ImGui::DragFloat("Flow Speed Y", &waterData->flowSpeedY, 0.01f, -5.0f, 5.0f))
                     isGraphicsChanged = true;
             }
+            // ここまでの専用欄に該当しない水と氷では、波や水平方向の流れを同じ欄で編集する。
             else {
                 // 残る材質は水と氷。水だけはスタイルと元モデル使用の組み合わせを選べます。
                 const char* settingTitle = (currentMatType == 8) ? ICON_FA_TINT " --- Water Settings ---" :
                     ICON_FA_SNOWFLAKE " --- Ice Settings ---";
                 ImGui::TextColored(ImVec4(0.0f, 0.8f, 1.0f, 1.0f), settingTitle);
 
+                // 水に限って、見た目と水面形状を別々の一覧で選べる。
                 if (currentMatType == 8) {
                     // effectType は「スタイル * 2 + メッシュ種別」の符号化値です。
-                    // 既存の0/1を維持したまま、表現と形状を独立して選択します。
-                    int waterStyle = waterData->effectType >= 1.5f ? 1 : 0;
-                    int waterMeshType = std::clamp(static_cast<int>(waterData->effectType + 0.5f), 0, 3) % 2;
+                    // スタイル0と1がそれぞれ2種類の形状を持つため、下位の1ビットで形状を表す。
+                    std::int32_t waterStyle = waterData->effectType >= 1.5f ? 1 : 0;
+                    std::int32_t waterMeshType = std::clamp(static_cast<std::int32_t>(waterData->effectType + 0.5f), 0, 3) % 2;
                     const char* waterStyles[] = { "従来の海", "明るく穏やかな海" };
 
+                    // 表現を変更したときは、現在の水面形状と組み合わせて番号を作り直す。
                     if (ImGui::Combo("水の表現", &waterStyle, waterStyles, IM_ARRAYSIZE(waterStyles))) {
                         waterData->effectType = static_cast<float>(waterStyle * 2 + waterMeshType);
                         isGraphicsChanged = true;
@@ -382,15 +399,18 @@ void InspectorWindow::DrawEffectMaterialSettings(engine::Object3D* selectedObjec
                         "元モデルを使用 (Legacy)"
                     };
 
+                    // 形状を変更したときは、現在の表現を保持して番号を作り直す。
                     if (ImGui::Combo("水面形状 (Surface Mesh)", &waterMeshType, waterMeshTypes, IM_ARRAYSIZE(waterMeshTypes))) {
                         waterData->effectType = static_cast<float>(waterStyle * 2 + waterMeshType);
                         isGraphicsChanged = true;
                     }
 
+                    // 明るく穏やかな海の設定では、そのスタイル用の推奨値ボタンを表示する。
                     if (waterStyle == 1) {
                         // スタイル切替自体では調整値を変えず、推奨値は明示ボタンで適用します。
                         ImGui::TextWrapped("従来の屈折・反射・岸の泡を残し、上下の波を抑えた明るい海です。切替だけでは調整値を変更しません。");
 
+                        // ボタンを押したフレームだけ、波の上下動を0にして関連する推奨値をまとめて設定する。
                         if (ImGui::Button("明るく穏やかな海・推奨値を適用")) {
                             waterData->waveSpeed = 0.85f;
                             waterData->waveHeight = 0.0f;
@@ -410,8 +430,10 @@ void InspectorWindow::DrawEffectMaterialSettings(engine::Object3D* selectedObjec
 
                         ImGui::TextWrapped("色味はマテリアル色で調整できます。推奨値の適用は共通の水パラメーターを変更します。");
                         ImGui::TextWrapped("この海の Flow Speed は揺らぎの位相速度です。模様全体は流さず、複数方向に往復して反射が変化します。");
+                    // 従来の海を選んだ場合は、専用グリッドと水の調整値を同時に指定するプリセットを表示する。
                     } else {
                         // 従来の海には用途別の二つの値セットを用意し、選んだときだけ共通パラメータを書き換えます。
+                        // 南国の海を選んだ場合は、透明な浅瀬を想定した調整値を適用する。
                         if (ImGui::Button(ICON_FA_MAGIC " 南国の透明な海プリセット")) {
                             waterData->effectType = 0.0f;
                             waterData->waveSpeed = 0.85f;
@@ -432,6 +454,7 @@ void InspectorWindow::DrawEffectMaterialSettings(engine::Object3D* selectedObjec
 
                         ImGui::SameLine();
 
+                        // 穏やかな水を選んだ場合は、波高と波の速さを抑えた調整値を適用する。
                         if (ImGui::Button(ICON_FA_WATER " 穏やかな水プリセット")) {
                             waterData->effectType = 0.0f;
                             waterData->waveSpeed = 0.70f;
@@ -458,11 +481,13 @@ void InspectorWindow::DrawEffectMaterialSettings(engine::Object3D* selectedObjec
                     // 表現を切り替えても同じ時計を確認できるように、共通部分に表示します。
                     ImGui::Text("水面時間: %.3f 秒", waterData->time);
 
+                    // 診断欄を開いているときだけ、確認用の表示切替と時間送りを操作できる。
                     if (ImGui::TreeNode("水面アニメーションの確認")) {
                         // 診断表示と時間送りは保存用の材質変更フラグを立てません。
-                        int debugView = static_cast<int>(waterData->waterDebugView);
+                        std::int32_t debugView = static_cast<std::int32_t>(waterData->waterDebugView);
                         const char* debugViews[] = { "通常の水面", "GPU時間（色で確認）", "水面の動き（法線）" };
 
+                        // 表示切替があった場合だけ診断モードを書き換える。保存用フラグは更新しない。
                         if (ImGui::Combo("描画診断（保存対象外）", &debugView, debugViews, IM_ARRAYSIZE(debugViews))) {
                             waterData->waterDebugView = static_cast<float>(debugView);
                         }
@@ -479,6 +504,7 @@ void InspectorWindow::DrawEffectMaterialSettings(engine::Object3D* selectedObjec
 
                         ImGui::SameLine();
 
+                        // 5秒送りが押されたときも、時計と流れを同じ更新経路で進める。
                         if (ImGui::Button("水面を5秒進める")) {
                             selectedObject->GetMeshRenderer()->AdvanceWaterAnimation(5.0f);
                         }
@@ -503,10 +529,12 @@ void InspectorWindow::DrawEffectMaterialSettings(engine::Object3D* selectedObjec
                     isGraphicsChanged = true;
                 if (ImGui::DragFloat("Flow Speed Y", &waterData->flowSpeedY, 0.01f, -50.0f, 50.0f))
                     isGraphicsChanged = true;
+                // 水の場合だけ、波と流れに続いて水面の光学表現を調整できる。
                 if (currentMatType == 8) {
                     ImGui::Separator();
                     ImGui::Text(ICON_FA_TINT " --- Surface Settings ---");
 
+                    // 明るく穏やかな海のときは、上下動と細波の値が独立していることを案内する。
                     if (waterData->effectType >= 1.5f) {
                         ImGui::TextWrapped("水面の上下動はありません。細波の強さは細かな揺らぎだけを調整し、0でも大きな流れと反射は残ります。");
                     }

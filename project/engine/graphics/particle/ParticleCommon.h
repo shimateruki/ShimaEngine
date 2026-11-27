@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <wrl.h>
 #include <d3d12.h>
 #include <array>
@@ -6,12 +7,12 @@ namespace engine { class DirectXCommon; }
 
 /// <summary>CPUパーティクル描画で使う色合成方式。</summary>
 enum class ParticleBlendMode {
-    Alpha,     // 通常 (Alpha Blend)
-    Add,       // 加算 (Additive)
-    Subtract,  // 減算 (Subtract)
-    Multiply,  // 乗算 (Multiply)
-    Screen,    // スクリーン (Screen)
-    Count      // 最大数
+    kAlpha,     // 通常 (Alpha Blend)
+    kAdd,       // 加算 (Additive)
+    kSubtract,  // 減算 (Subtract)
+    kMultiply,  // 乗算 (Multiply)
+    kScreen,    // スクリーン (Screen)
+    kCount      // 最大数
 };
 
 /// <summary>CPUパーティクル描画用の共通ルートシグネチャと合成方式別パイプラインを管理する。</summary>
@@ -30,7 +31,7 @@ public:
     engine::DirectXCommon* GetDxCommon() const { return dxCommon_; }
 
     /// <summary>指定した合成方式のパイプラインをコマンドリストに設定する。</summary>
-    void SetPipeline(ID3D12GraphicsCommandList* commandList, ParticleBlendMode mode = ParticleBlendMode::Alpha);
+    void SetPipeline(ID3D12GraphicsCommandList* commandList, ParticleBlendMode mode = ParticleBlendMode::kAlpha);
 
 private:
     // CPUパーティクル描画で使うルートシグネチャと合成方式別PipelineStateを作る。
@@ -50,7 +51,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12PipelineState> graphicsPipelineState_;
 
     // ParticleBlendModeの値を添字として選ぶ描画PSO。
-    std::array<Microsoft::WRL::ComPtr<ID3D12PipelineState>, (int)ParticleBlendMode::Count> graphicsPipelines_;
+    std::array<Microsoft::WRL::ComPtr<ID3D12PipelineState>, (std::int32_t)ParticleBlendMode::kCount> graphicsPipelines_;
 };
 
 } // namespace engine

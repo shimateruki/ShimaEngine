@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #ifdef USE_IMGUI
 #include "DebugEditor.h"
 #include "SceneManager.h"
@@ -16,7 +17,7 @@
 #include "EditorPropertyJsonBinding.h"
 
 // 専用環境変数で起動したプロセスだけで検証します。Scene JSONそのものは書き換えません。
-namespace GimmickPropertyRuntimeProbe {
+namespace gimmickPropertyRuntimeProbe {
 inline bool Enabled() { return GetEnvironmentVariableA("CG2_GIMMICK_PROPERTY_TEST", nullptr, 0) > 0; }
 inline void Require(bool success, const char* message) { if (!success) throw std::runtime_error(message); }
 inline bool Near(float left, float right) { return std::abs(left - right) < 0.0001f; }
@@ -32,7 +33,7 @@ public:
     }
 private:
     bool enabled_ = true;
-    int count_ = 2;
+    std::int32_t count_ = 2;
     std::string text_ = "保存互換";
 };
 
@@ -55,7 +56,7 @@ inline void CheckSettings(engine::Object3DCommon* common, DebugEditor* editor, B
                          {"param", {{"actionMode", 1}, {"speed", 3.75f}, {"moveAmount", 4.25f},
                                     {"interval", 1.2f}, {"shakeDuration", 0.7f}}}};
     floor->DeserializeFeatureComponents(legacy);
-    SceneEntityParameterCodec::Apply(*floor, legacy["param"]);
+    sceneEntityParameterCodec::Apply(*floor, legacy["param"]);
     Require(floor->GetParameters()->actionMode == 1 && Near(floor->GetParameters()->moveAmount, 4.25f) &&
             Near(floor->GetParameters()->speed, 3.75f) && Near(floor->GetParameters()->shakeDuration, 0.7f), "legacy param migration");
     Require(Near(registry->GetValue(floor.get(), prefix + "sinkDepth_").get<float>(), 2.0f), "legacy shallow default");
@@ -139,14 +140,14 @@ inline void CheckAllGimmicks(engine::Object3DCommon* common, DebugEditor* editor
     auto* registry = EditorPropertyRegistry::GetInstance();
     const auto types = factory->GetRegisteredTypes();
     Require(types.size() == 33, "registered type count including Default and aliases");
-    Require(EditorObjectFactoryRegistry::GetTypes(EditorObjectFactoryRegistry::Kind::Gimmick).size() == types.size(), "editor type list drift");
+    Require(EditorObjectFactoryRegistry::GetTypes(EditorObjectFactoryRegistry::Kind::kGimmick).size() == types.size(), "editor type list drift");
     std::set<std::string> seen;
     std::size_t fieldCount = 0;
     for (const auto& type : types) {
         Require(seen.insert(type.id).second, "duplicate type id");
         auto object = factory->CreateGimmick(type.id, common);
         if (type.id != "DashPanelWhiteGlass" && type.id != "ContactHazard") {
-            auto legacy = LegacyGimmickCreation::Create(type.id, common);
+            auto legacy = legacyGimmickCreation::Create(type.id, common);
             auto currentJson = object->ExportToJson();
             auto oldJson = legacy->ExportToJson();
             currentJson.erase("guid"); oldJson.erase("guid");
@@ -168,13 +169,13 @@ inline void CheckAllGimmicks(engine::Object3DCommon* common, DebugEditor* editor
         auto second = factory->CreateGimmick(type.id, common);
         Require(count == registry->GetProperties().size(), "class registered properties twice");
         const auto defaults = object->ExportToJson();
-        const auto defaultParams = SceneEntityParameterCodec::Serialize(*object);
+        const auto defaultParams = sceneEntityParameterCodec::Serialize(*object);
         auto presetWithValues = defaults;
         presetWithValues["param"]["speed"] = 77.0f;
-        EditorPropertyJsonBinding::Restore(*object, defaults, presetWithValues);
+        editorPropertyJsonBinding::Restore(*object, defaults, presetWithValues);
         Require(object->GetParameters() && Near(object->GetParameters()->speed, 77.0f), "preset context failed to load values");
-        EditorPropertyJsonBinding::Restore(*object, defaults, json{{"type", "Gimmick"}, {"gimmickType", type.id}});
-        Require(SceneEntityParameterCodec::Serialize(*object) == defaultParams, "preset context carried absent parameters from previous preset");
+        editorPropertyJsonBinding::Restore(*object, defaults, json{{"type", "Gimmick"}, {"gimmickType", type.id}});
+        Require(sceneEntityParameterCodec::Serialize(*object) == defaultParams, "preset context carried absent parameters from previous preset");
         const auto beforeRead = object->ExportToJson();
         for (const auto* component : registry->GetComponentsForObject(object.get())) {
             if (component->typeId.rfind("Game_", 0) != 0) continue;
@@ -201,7 +202,7 @@ inline void CheckAllGimmicks(engine::Object3DCommon* common, DebugEditor* editor
                 if (!property->enumValues.empty()) edited = property->enumValues.front();
                 else if (!property->enumLabels.empty()) edited = 0;
                 else if (current.is_boolean()) edited = !current.get<bool>();
-                else if (current.is_number_integer()) edited = static_cast<int>(property->ui.minValue);
+                else if (current.is_number_integer()) edited = static_cast<std::int32_t>(property->ui.minValue);
                 else if (current.is_number()) edited = property->ui.minValue + 0.25f;
                 else edited = "__registration_probe";
                 auto presetData = savedBeforeEdit;
@@ -209,7 +210,7 @@ inline void CheckAllGimmicks(engine::Object3DCommon* common, DebugEditor* editor
                 presetData["children"] = json::array({{{"name", "keep-child"}}});
                 presetData["components"]["FutureComponent"]["payload"] = 913;
                 // 同じ値の場合もあるため、Applyの返値ではなく実値と保存結果を確認します。
-                EditorPropertyJsonBinding::Apply(*object, *property, presetData, edited);
+                editorPropertyJsonBinding::Apply(*object, *property, presetData, edited);
                 Require(presetData["param"]["futureAuthoringSetting"] == "keep" &&
                     presetData["children"][0]["name"] == "keep-child" &&
                     presetData["components"]["FutureComponent"]["payload"] == 913, "preset adapter lost unknown data");
@@ -229,17 +230,17 @@ inline void CheckAllGimmicks(engine::Object3DCommon* common, DebugEditor* editor
         }
         auto saved = object->ExportToJson();
         second->ImportFromJson(saved);
-        if (SceneEntityParameterCodec::Serialize(*object) != SceneEntityParameterCodec::Serialize(*second))
-            log << "PARAM DIFF " << type.id << ": " << json::diff(SceneEntityParameterCodec::Serialize(*object), SceneEntityParameterCodec::Serialize(*second)).dump() << std::endl;
-        Require(SceneEntityParameterCodec::Serialize(*object) == SceneEntityParameterCodec::Serialize(*second), "param round trip");
+        if (sceneEntityParameterCodec::Serialize(*object) != sceneEntityParameterCodec::Serialize(*second))
+            log << "PARAM DIFF " << type.id << ": " << json::diff(sceneEntityParameterCodec::Serialize(*object), sceneEntityParameterCodec::Serialize(*second)).dump() << std::endl;
+        Require(sceneEntityParameterCodec::Serialize(*object) == sceneEntityParameterCodec::Serialize(*second), "param round trip");
         auto clone = object->Clone();
         Require(clone && typeid(*clone) == typeid(*object), "clone runtime class");
-        Require(clone->GetGimmickType() == type.id && SceneEntityParameterCodec::Serialize(*clone) == SceneEntityParameterCodec::Serialize(*object), "clone alias or params");
-        const auto params = SceneEntityParameterCodec::Serialize(*object);
+        Require(clone->GetGimmickType() == type.id && sceneEntityParameterCodec::Serialize(*clone) == sceneEntityParameterCodec::Serialize(*object), "clone alias or params");
+        const auto params = sceneEntityParameterCodec::Serialize(*object);
         const auto replay = object->CaptureReplayState();
         if (object->GetParameters()) object->SetParameter(&engine::EntityParameter::speed, object->GetParameters()->speed + (12.5f));
         object->RestoreReplayState(replay);
-        Require(params == SceneEntityParameterCodec::Serialize(*object), "replay params");
+        Require(params == sceneEntityParameterCodec::Serialize(*object), "replay params");
         log << "OK factory, read-only inspection, roundtrip, clone, replay: " << type.id << std::endl;
     }
     // 旧シーンの各種類から一例ずつ取り、現行Codecで往復します。
@@ -252,26 +253,26 @@ inline void CheckAllGimmicks(engine::Object3DCommon* common, DebugEditor* editor
             if (record.value("type", "") != "Gimmick") continue;
             const std::string id = record.value("gimmickType", "");
             if (!factory->IsKnownType(id) || !legacySeen.insert(id).second) continue;
-            auto original = LegacyGimmickCreation::Create(id, common);
+            auto original = legacyGimmickCreation::Create(id, common);
             auto migrated = factory->CreateGimmick(id, common);
             original->ImportFromJson(record);
             migrated->ImportFromJson(record);
-            Require(SceneEntityParameterCodec::Serialize(*original) == SceneEntityParameterCodec::Serialize(*migrated), "legacy stage parameters changed");
-            const auto expected = SceneEntityParameterCodec::Serialize(*migrated);
+            Require(sceneEntityParameterCodec::Serialize(*original) == sceneEntityParameterCodec::Serialize(*migrated), "legacy stage parameters changed");
+            const auto expected = sceneEntityParameterCodec::Serialize(*migrated);
             const auto exported = migrated->ExportToJson();
             auto restored = factory->CreateGimmick(id, common);
             restored->ImportFromJson(exported);
-            Require(SceneEntityParameterCodec::Serialize(*restored) == expected, "legacy stage round trip");
+            Require(sceneEntityParameterCodec::Serialize(*restored) == expected, "legacy stage round trip");
         }
     }
     // 旧4枠を表示するだけでは消さず、選択を変更した場合だけ単体へ移行します。
     auto copy = factory->CreateGimmick("CopyMemoryStation", common);
     copy->SetParameter(&engine::EntityParameter::copyMemoryTypeA, {}); copy->SetParameter(&engine::EntityParameter::copyMemoryTypeB, "WindSlime");
     copy->SetParameter(&engine::EntityParameter::copyMemoryTypeC, "Bomber"); copy->SetParameter(&engine::EntityParameter::copyMemoryTypeD, "Slime");
-    const auto copyBefore = SceneEntityParameterCodec::Serialize(*copy);
+    const auto copyBefore = sceneEntityParameterCodec::Serialize(*copy);
     Require(registry->GetValue(copy.get(), "class.Game_CopyMemoryStation.copyMemoryTypeA") == "" &&
         registry->Find("class.Game_CopyMemoryStation.copyMemoryTypeA")->displayValue(*copy) == "WindSlime", "legacy copy display and canonical storage");
-    Require(copyBefore == SceneEntityParameterCodec::Serialize(*copy), "legacy copy changed on read");
+    Require(copyBefore == sceneEntityParameterCodec::Serialize(*copy), "legacy copy changed on read");
     auto otherCopy = factory->CreateGimmick("CopyMemoryStation", common);
     otherCopy->SetParameter(&engine::EntityParameter::copyMemoryTypeA, {}); otherCopy->SetParameter(&engine::EntityParameter::copyMemoryTypeB, "ThunderSlime");
     Require(registry->HasMixedValue({copy.get(), otherCopy.get()}, "class.Game_CopyMemoryStation.copyMemoryTypeA"), "legacy copy mixed display");
@@ -343,12 +344,12 @@ inline void CheckAllGimmicks(engine::Object3DCommon* common, DebugEditor* editor
     for (const auto& type : types) {
         if (type.id == "Default") continue;
         const auto beforeType = typeid(*raw).name();
-        const auto beforeParams = SceneEntityParameterCodec::Serialize(*raw);
-        Require(editor->ChangeObjectType(raw, EditorObjectFactoryRegistry::Kind::Gimmick, type.id), "registered type change failed");
+        const auto beforeParams = sceneEntityParameterCodec::Serialize(*raw);
+        Require(editor->ChangeObjectType(raw, EditorObjectFactoryRegistry::Kind::kGimmick, type.id), "registered type change failed");
         raw = find();
         Require(raw && type.matches(*raw), "type change left wrong runtime class");
         editor->PerformUndo(); raw = find();
-        Require(raw && std::string(typeid(*raw).name()) == beforeType && SceneEntityParameterCodec::Serialize(*raw) == beforeParams, "all type undo");
+        Require(raw && std::string(typeid(*raw).name()) == beforeType && sceneEntityParameterCodec::Serialize(*raw) == beforeParams, "all type undo");
         editor->PerformRedo(); raw = find();
         Require(raw && type.matches(*raw) && raw->GetGimmickType() == type.id, "all type redo");
     }
@@ -383,8 +384,8 @@ inline std::string CheckTypeChange(engine::Object3DCommon* common, DebugEditor* 
         return nullptr;
     };
     editor->SetSelectedObject(raw);
-    Require(!editor->ChangeObjectType(raw, Registry::Kind::Gimmick, "__UnknownType"), "unknown type replaced object");
-    Require(editor->ChangeObjectType(raw, Registry::Kind::Gimmick, "SinkingFloor"), "type replacement");
+    Require(!editor->ChangeObjectType(raw, Registry::Kind::kGimmick, "__UnknownType"), "unknown type replaced object");
+    Require(editor->ChangeObjectType(raw, Registry::Kind::kGimmick, "SinkingFloor"), "type replacement");
     raw = find();
     Require(dynamic_cast<GimmickSinkingFloor*>(raw) && raw->GetParent() == parentRaw &&
             childRaw->GetParent() == raw && Near(childRaw->GetTranslate().y, 2) &&
@@ -396,7 +397,7 @@ inline std::string CheckTypeChange(engine::Object3DCommon* common, DebugEditor* 
     editor->PerformRedo();
     raw = find();
     Require(dynamic_cast<GimmickSinkingFloor*>(raw) && childRaw->GetParent() == raw, "type redo");
-    Require(editor->ChangeObjectType(raw, Registry::Kind::Gimmick, "MovingFloor"), "switch away from registered class");
+    Require(editor->ChangeObjectType(raw, Registry::Kind::kGimmick, "MovingFloor"), "switch away from registered class");
     raw = find();
     Require(raw && !dynamic_cast<GimmickSinkingFloor*>(raw), "old dynamic type remained");
     // 同じ種類名のまま実体だけを直す場合は、旧JSONの調整値を失わないようにします。
@@ -404,7 +405,7 @@ inline std::string CheckTypeChange(engine::Object3DCommon* common, DebugEditor* 
     raw->ResetParameters();
     raw->SetParameter(&engine::EntityParameter::actionMode, 1);
     raw->SetParameter(&engine::EntityParameter::moveAmount, 6.3f);
-    Require(editor->ChangeObjectType(raw, Registry::Kind::Gimmick, "SinkingFloor"), "metadata repair");
+    Require(editor->ChangeObjectType(raw, Registry::Kind::kGimmick, "SinkingFloor"), "metadata repair");
     raw = find();
     Require(raw && raw->GetParameters()->actionMode == 1 && Near(raw->GetParameters()->moveAmount, 6.3f), "metadata repair lost parameter");
     editor->PerformUndo();
@@ -413,49 +414,49 @@ inline std::string CheckTypeChange(engine::Object3DCommon* common, DebugEditor* 
     editor->PerformRedo();
     raw = find();
     Require(dynamic_cast<GimmickSinkingFloor*>(raw) && Near(raw->GetParameters()->moveAmount, 6.3f), "metadata repair redo");
-    Require(editor->ChangeObjectType(raw, Registry::Kind::Gimmick, "MovingFloor"), "second switch away");
+    Require(editor->ChangeObjectType(raw, Registry::Kind::kGimmick, "MovingFloor"), "second switch away");
     raw = find();
-    editor->RequestObjectTypeChange(raw, Registry::Kind::Gimmick, "SinkingFloor");
+    editor->RequestObjectTypeChange(raw, Registry::Kind::kGimmick, "SinkingFloor");
     Require(!dynamic_cast<GimmickSinkingFloor*>(raw), "queued replacement executed during drawing");
     return guid;
 }
 
 inline void AfterDraw(SceneManager* manager, DebugEditor* editor, const std::string& path) {
     static std::ofstream log(path, std::ios::trunc);
-    static int phase = 0;
-    static std::string guid;
-    static bool done = false;
-    if (done || !manager || !editor || manager->IsTransitioning()) return;
+    static std::int32_t sPhase = 0;
+    static std::string sGuid;
+    static bool sDone = false;
+    if (sDone || !manager || !editor || manager->IsTransitioning()) return;
     try {
-        if (phase == 0) {
+        if (sPhase == 0) {
             StageManager::GetInstance()->SetCurrentStageById("stage1");
             // 今回はFactory・保存・Editor操作のテストです。大量の装飾読込には依存させません。
             if (manager->GetCurrentSceneName() != "TITLE") manager->ChangeScene("TITLE");
-            phase = 1;
+            sPhase = 1;
             return;
         }
         if (manager->GetCurrentSceneName() != "TITLE") return;
         manager->SetIsPlaying(false);
         auto* scene = manager->GetCurrentScene();
-        if (phase == 1) {
+        if (sPhase == 1) {
             auto* common = scene->GetObject3DCommon();
             log << "HOST: TITLE, isolated factory/serialization/editor compatibility tests" << std::endl;
             CheckSettings(common, editor, scene, log);
             CheckAllGimmicks(common, editor, scene, log);
-            guid = CheckTypeChange(common, editor, scene);
-            phase = 2;
+            sGuid = CheckTypeChange(common, editor, scene);
+            sPhase = 2;
             return;
         }
         engine::Object3D* changed = nullptr;
-        for (const auto& object : scene->GetObjects()) if (object->GetPersistentGuid() == guid) changed = object.get();
+        for (const auto& object : scene->GetObjects()) if (object->GetPersistentGuid() == sGuid) changed = object.get();
         Require(dynamic_cast<GimmickSinkingFloor*>(changed) && editor->GetSelectedObject() == changed, "deferred type change or selection");
         log << "OK actual class replacement, GUID, parent/children, transform, selection, type Undo/Redo and deferred Inspector change" << std::endl;
         log << "PASS: all gimmick registrations, legacy data compatibility and shared UI" << std::endl;
     } catch (const std::exception& error) {
         log << "FAIL: " << error.what() << std::endl;
     }
-    done = true;
+    sDone = true;
     WinApp::CloseNow();
 }
-} // namespace GimmickPropertyRuntimeProbe
+} // namespace gimmickPropertyRuntimeProbe
 #endif

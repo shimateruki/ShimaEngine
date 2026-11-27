@@ -19,7 +19,33 @@ VSOutput main(VSInput input)
     float portalDepthScale = max(effectScaleZ, 0.0f);
     float3 axisZNormal = axisZ / axisZLength;
     float3 portalLocalPos;
-    if (effectType > 3.5f)
+    float3 roundedNormal = axisZNormal;
+    if (effectType == 3.25f)
+    {
+        // Reserve four grid intervals at each end for half of a quarter-circle join.
+        const float cornerStart = 2.0f / 3.0f;
+        float halfWidth = axisXLength * portalScale.x * max(billboardScale, 0.05f);
+        // A magnitude of one uses the default. Larger values set the radius in world units.
+        float authoredRadius = abs(effectScaleZ);
+        float radius = min(authoredRadius > 1.0f ? authoredRadius : 2.4f, halfWidth * 0.25f);
+        float straightEnd = halfWidth - radius;
+        float u = abs(quad.x);
+        float side = sign(quad.x);
+        float theta = saturate((u - cornerStart) / (1.0f - cornerStart)) * 0.7853981634f;
+        float along = straightEnd * saturate(u / cornerStart) + radius * sin(theta);
+        float inward = sign(effectScaleZ);
+        float inset = radius * (1.0f - cos(theta));
+
+        // Matching radial normals keep the two layers aligned across the shared endpoint.
+        float2 normalXZ = float2(side * sin(theta), -inward * cos(theta));
+        float normalOffset = layerDepth * 0.0144f;
+        portalLocalPos = float3(
+            (side * along + normalXZ.x * normalOffset) / axisXLength,
+            quad.y * portalScale.y * max(billboardScale, 0.05f),
+            (inward * inset + normalXZ.y * normalOffset) / axisZLength);
+        roundedNormal = normalXZ.x * axisX / axisXLength + normalXZ.y * axisZNormal;
+    }
+    else if (effectType > 3.5f)
     {
         // The arena barrier uses a continuous cylindrical proxy and unwrapped UVs.
         portalLocalPos = float3(input.pos.x * portalScale.x,
@@ -54,7 +80,7 @@ VSOutput main(VSInput input)
         : float3(quad, layerDepth);
     output.normal = effectType > 3.5f
         ? normalize(mul(float4(input.normal, 0.0f), WorldInverseTranspose).xyz)
-        : axisZNormal;
+        : roundedNormal;
     output.uv = input.uv;
 
     return output;

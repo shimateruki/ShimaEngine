@@ -5,7 +5,7 @@
 #include <unordered_map>
 
 #ifdef USE_IMGUI
-namespace PlayerLocomotionRuntimeProbe { struct Access; }
+namespace playerLocomotionRuntimeProbe { struct Access; }
 #endif
 
 // 前方宣言
@@ -72,16 +72,18 @@ class PlayerMover {
     // ワープや演出復帰時に、継続中のダッシュ・床補正・ジャンプ溜めを破棄します。
     void ResetTransientState();
 
-    // 連続してパネルを踏んでも効果時間は短縮せず、速度だけ不足分を補う。
-    void ApplyDashPanelBoost(float duration, float speedMultiplier, float turnMultiplier);
+    // 速度と旋回の倍率を登録し、水平速度がパネルの目標値に足りない分を補う。
+    void ApplyDashPanelBoost(float speedMultiplier, float turnMultiplier);
 
-    // パネルの加速時間が残っている間だけ、疾走演出の強度を計算できる。
-    bool IsDashPanelBoostActive() const { return dashPanelTimer_ > 0.0f; }
+    // 移動・疾走演出・専用破壊条件が参照する加速状態。
+    bool IsDashPanelBoostActive() const { return dashPanelBoostActive_; }
     void CancelDashPanelBoost();
+    bool IsDashPanelWall(const engine::Vector3& normal) const;
+    void StopDashPanelAtWall();
 
   private:
 #ifdef USE_IMGUI
-    friend struct PlayerLocomotionRuntimeProbe::Access;
+    friend struct playerLocomotionRuntimeProbe::Access;
 #endif
     engine::Vector3 platformVelocity_{}; // 接地中の床から受け取る移動速度。
     engine::Vector3 platformAirVelocity_{}; // 床から離れた後も保持する床由来の速度。
@@ -99,7 +101,7 @@ class PlayerMover {
     engine::ParticleSystem* particleSystem_ = nullptr;
 
     // 移動戦略 (2D/3Dなど)
-    std::unique_ptr<IMoveStrategy> strategy_ = nullptr;
+    std::unique_ptr<IMoveStrategy> strategy_;
 
     // --- ダッシュ回避関連 ---
     bool isDashing_ = false;
@@ -127,7 +129,9 @@ class PlayerMover {
     float currentDashDuration_ = 0.20f;
 
     // --- Surface gimmick effects ---
-    float dashPanelTimer_ = 0.0f;
+    bool dashPanelBoostActive_ = false; // 解除要求まで保持する、通常ダッシュとは独立した状態。
+    float dashPanelEntryYaw_ = 0.0f; // 踏んだ時のワールド進行角（ラジアン）。
+    float dashPanelYaw_ = 0.0f; // 前方の範囲内で入力に追従する進行角（ラジアン）。
     float dashPanelSpeedMultiplier_ = 1.0f; // ダッシュパネルの速度倍率。1なら通常値。
     float dashPanelTurnMultiplier_ = 1.0f; // パネル効果中の方向転換倍率。1なら通常値。
 

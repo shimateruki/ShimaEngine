@@ -16,31 +16,41 @@ public:
 
     // 排他的な再生条件。旧データは常時再生として扱う。
     // Alwaysは常時、WhileRidingは乗車中だけ、RideToEndは乗車を契機に終端まで進む指定。
-    enum class PlaybackMode { Always, WhileRiding, RideToEnd };
+    enum class PlaybackMode { kAlways, kWhileRiding, kRideToEnd };
+    // 記録経路を再生する条件を返す。
     PlaybackMode GetPlaybackMode() const { return playbackMode_; }
+    // 再生する条件を保存する。条件を評価して再生する処理は利用側が担当する。
     void SetPlaybackMode(PlaybackMode mode) { playbackMode_ = mode; }
+    // 再生条件をシーンへ保存する識別文字列に変換する。
     std::string GetPlaybackModeName() const {
         switch (playbackMode_) {
-        case PlaybackMode::WhileRiding: return "whileRiding";
-        case PlaybackMode::RideToEnd: return "rideToEnd";
+        // 乗り続けている間だけ再生する設定。
+        case PlaybackMode::kWhileRiding: return "whileRiding";
+        // 乗車後は降りても終端まで再生する設定。
+        case PlaybackMode::kRideToEnd: return "rideToEnd";
+        // 常時再生と未定義の列挙値は従来のalwaysとして保存する。
         default: return "always";
         }
     }
+    // 保存されている識別文字列を読み、再生条件に変換する。
     void SetPlaybackModeName(const std::string& name) {
         // 不明な値も旧版と同じ動作へ戻す。
-        playbackMode_ = name == "whileRiding" ? PlaybackMode::WhileRiding :
-            name == "rideToEnd" ? PlaybackMode::RideToEnd : PlaybackMode::Always;
+        playbackMode_ = name == "whileRiding" ? PlaybackMode::kWhileRiding :
+            name == "rideToEnd" ? PlaybackMode::kRideToEnd : PlaybackMode::kAlways;
     }
 
     // 経路名、ループ、相対座標再生の設定。
     const std::string& GetPathName() const { return pathName_; }
 
+    // 既存の記録経路を参照する名前を保存する。空で解除する。
     void SetPathName(const std::string& name) { pathName_ = name; }
 
+    // 記録の終端から先頭に戻る設定か返す。
     bool IsLoop() const { return loop_; }
 
     void SetLoop(bool loop) { loop_ = loop; }
 
+    // 現在の配置を基準に相対座標で再生するか返す。
     bool IsRelative() const { return relative_; }
 
     void SetRelative(bool relative) { relative_ = relative; }
@@ -53,10 +63,11 @@ public:
     // 乗車型の床は演出タイムラインを実行する。空なら従来のPath再生を維持する。
     const std::string& GetRideSequence() const { return rideSequence_; }
 
+    // 乗車用のタイムラインのパスを設定する。空なら記録経路の設定を使う。
     void SetRideSequence(const std::string& path) { rideSequence_ = path; }
 
 private:
-    PlaybackMode playbackMode_ = PlaybackMode::Always; // 常時・乗車中・乗車後終端までの再生条件。
+    PlaybackMode playbackMode_ = PlaybackMode::kAlways; // 常時・乗車中・乗車後終端までの再生条件。
     std::string pathName_; // 記録経路の名前。空なら未設定。
     bool loop_ = false; // 経路の終端から先頭へ戻すか。
     bool relative_ = false; // 記録経路を基準姿勢に対する相対座標で使うか。

@@ -6,7 +6,7 @@
 
 // 前方宣言
 namespace engine { class Object3DCommon; }
-class CollisionManager;
+namespace engine { class CollisionManager; }
 
 // 弾の描画と追跡・着弾演出をまとめて指定します。衝突半径と寿命は Fire() の引数です。
 struct BulletVisualConfig {
@@ -18,8 +18,8 @@ struct BulletVisualConfig {
     float explosionRadius = 0.0f; // 0なら爆発範囲を付けない。正値は爆風判定の半径。
 
     int32_t materialType = 0;
-    BlendMode blendMode = BlendMode::Normal;
-    engine::Vector4 color = engine::Colors::White;
+    BlendMode blendMode = BlendMode::kNormal;
+    engine::Vector4 color = engine::colors::kWhite;
     float emissive = 1.0f;
     float visualScale = 1.0f;
 
@@ -71,7 +71,7 @@ class BulletManager {
     /// <summary>
     /// 描画と衝突管理への参照を受け取る。どちらも所有しない。
     /// </summary>
-    void Initialize(engine::Object3DCommon* common, CollisionManager* colManager);
+    void Initialize(engine::Object3DCommon* common, engine::CollisionManager* colManager);
 
     /// <summary>
     /// 終了処理
@@ -120,7 +120,7 @@ class BulletManager {
     void Fire(const engine::Vector3& pos, const engine::Vector3& vel, uint32_t attr, uint32_t mask,
               const std::string& model = "Primitives/sphere", float radius = 0.2f, float life = 120,
               const BulletVisualConfig& visualConfig = {}, float damage = 1.0f,
-              const StatusEffectApplication& statusEffect = {}, DamageType damageType = DamageType::Physical,
+              const StatusEffectApplication& statusEffect = {}, DamageType damageType = DamageType::kPhysical,
               float gravity = 0.0f);
 
     const std::list<std::unique_ptr<Bullet>>& GetBullets() const { return bullets_; }
@@ -141,5 +141,5 @@ class BulletManager {
 #endif
 
     engine::Object3DCommon* common_ = nullptr;
-    CollisionManager* colManager_ = nullptr;
+    engine::CollisionManager* colManager_ = nullptr;
 };

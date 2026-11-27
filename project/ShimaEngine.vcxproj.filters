@@ -630,6 +630,9 @@
     <ClCompile Include="game\system\rules\GameRule.cpp">
       <Filter>Game\System\rules</Filter>
     </ClCompile>
+    <ClCompile Include="game\system\progress\GameDataManager.cpp">
+      <Filter>Game\System\progress</Filter>
+    </ClCompile>
     <ClCompile Include="game\system\progress\StageCatalog.cpp">
       <Filter>Game\System\progress</Filter>
     </ClCompile>
@@ -694,6 +697,9 @@
       <Filter>Engine\Editor\Core\commands</Filter>
     </ClCompile>
     <ClCompile Include="engine\editor\scene\SceneWorkspace.cpp">
+      <Filter>Engine\Editor\Scene</Filter>
+    </ClCompile>
+    <ClCompile Include="engine\editor\scene\DebugTeleportEditor.cpp">
       <Filter>Engine\Editor\Scene</Filter>
     </ClCompile>
     <ClCompile Include="engine\editor\core\playmode\PlayModeChangeTracker.cpp">
@@ -1443,6 +1449,9 @@
       <Filter>Engine\Editor\Core\commands</Filter>
     </ClInclude>
     <ClInclude Include="engine\editor\scene\SceneWorkspace.h">
+      <Filter>Engine\Editor\Scene</Filter>
+    </ClInclude>
+    <ClInclude Include="engine\editor\scene\DebugTeleportEditor.h">
       <Filter>Engine\Editor\Scene</Filter>
     </ClInclude>
     <ClInclude Include="engine\editor\core\playmode\PlayModeChangeTracker.h">
@@ -2451,6 +2460,9 @@
       <Filter>Engine\Graphics\3D\light</Filter>
     </ClInclude>
     <ClInclude Include="engine\graphics\3d\light\LightManager.h">
+      <Filter>Engine\Graphics\3D\light</Filter>
+    </ClInclude>
+    <ClInclude Include="engine\graphics\3d\light\SceneLighting.h">
       <Filter>Engine\Graphics\3D\light</Filter>
     </ClInclude>
     <ClInclude Include="engine\editor\vfx\ParticleEditor.h">

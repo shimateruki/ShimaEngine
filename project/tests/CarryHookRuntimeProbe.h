@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #ifdef USE_IMGUI
 #include "SceneManager.h"
 #include "Player.h"
@@ -13,17 +14,17 @@
 #include <stdexcept>
 
 // 専用起動で入力を再生し、運搬中の拒否と解除後のフック復帰を確認する。
-namespace CarryHookRuntimeProbe {
+namespace carryHookRuntimeProbe {
 inline bool Enabled() { return GetEnvironmentVariableA("CG2_CARRY_HOOK_TEST", nullptr, 0) > 0; }
 inline void Require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
 class ExitCounter final : public IAnimationState {
 public:
-    explicit ExitCounter(int& count) : count_(count) {}
+    explicit ExitCounter(std::int32_t& count) : count_(count) {}
     void Enter(Player*) override {}
     void Update(Player*, float) override {}
     void Exit(Player*) override { ++count_; }
 private:
-    int& count_;
+    std::int32_t& count_;
 };
 inline void Run(BaseScene* scene, std::ostream& log) {
     auto* input = engine::InputManager::GetInstance();
@@ -31,6 +32,7 @@ inline void Run(BaseScene* scene, std::ostream& log) {
     Require(camera != nullptr, "main camera missing");
     const auto savedInput = input->CaptureReplayState();
     auto* savedTarget = camera->GetFollowTarget();
+    /// <summary>検証終了時に保存した入力とカメラの追従先を戻し、照準抑制を解除する。</summary>
     struct Restore {
         engine::InputManager* input; engine::Camera* camera; engine::InputManager::ReplayState saved; engine::Object3D* target;
         ~Restore() { input->ApplyReplayState(saved); camera->SetFollowTarget(target); camera->SetAimCameraSuppressed(false); }
@@ -40,18 +42,19 @@ inline void Run(BaseScene* scene, std::ostream& log) {
     auto target = std::make_unique<engine::Object3D>();
     target->Initialize(scene->GetObject3DCommon());
     target->SetTranslate({0, 1000, 15}); target->SetScale({1, 1, 1});
-    engine::Object3D::ColliderConfig box; box.type = ColliderType::Aabb; box.size = {4, 4, 4};
-    target->SetColliderConfig(box); target->SetCollisionAttribute(CollisionCategories::Get("enemy"));
+    engine::Object3D::ColliderConfig box; box.type = engine::ColliderType::kAabb; box.size = {4, 4, 4};
+    target->SetColliderConfig(box); target->SetCollisionAttribute(engine::collisionCategories::Get("enemy"));
     target->SetCollisionMask(~0u); target->UpdateWorldMatrix(true);
-    CollisionManager::GetInstance()->AddObject(target.get());
-    struct Unregister { engine::Object3D* object; ~Unregister() { CollisionManager::GetInstance()->RemoveObject(object); } } unregister{target.get()};
+    engine::CollisionManager::GetInstance()->AddObject(target.get());
+    /// <summary>検証用フック対象の破棄前に、衝突管理から登録を解除する。</summary>
+    struct Unregister { engine::Object3D* object; ~Unregister() { engine::CollisionManager::GetInstance()->RemoveObject(object); } } unregister{target.get()};
     auto actor = std::make_unique<Player>();
     actor->Initialize(scene->GetObject3DCommon(), input, scene->GetParticleSystem(), scene->GetSpriteCommon());
     actor->SetCollisionAttribute(0); actor->SetCollisionMask(0);
     actor->SetTranslate({0, 1000, 0}); actor->UpdateWorldMatrix(true);
     actor->SetGravity(60); actor->SetMaxFallSpeed(100);
     camera->EndOverride(0); camera->SetFollowTarget(actor.get()); camera->SetInputEnabled(true);
-    camera->SetFollowMode(engine::Camera::FollowMode::Aimable); camera->ConfigAimable(12, 2, {0, 0, 0});
+    camera->SetFollowMode(engine::Camera::FollowMode::kAimable); camera->ConfigAimable(12, 2, {0, 0, 0});
     const auto* binding = KeyConfig::GetInstance()->GetBindData("SecondaryAction");
     Require(binding && binding->mouseButton >= 0 && binding->padCode, "secondary binding missing");
     auto replay = [&](bool pad, bool held, bool previous) {
@@ -69,7 +72,7 @@ inline void Run(BaseScene* scene, std::ostream& log) {
             actor->GetHookMarker()->SetIsVisible(true);
             enemy->SetCarried(true); actor->SetCarriedEnemy(enemy.get());
             Require(!actor->GetHookMarker()->GetIsVisible(), "capture retained stale marker");
-            for (int tick = 0; tick < 3; ++tick) {
+            for (std::int32_t tick = 0; tick < 3; ++tick) {
                 replay(pad, tick < 2, tick > 0);
                 actor->GetHookMarker()->SetIsVisible(true);
                 actor->SetVelocity({0, 0, 0}); actor->SetGrounded(false);
@@ -81,7 +84,7 @@ inline void Run(BaseScene* scene, std::ostream& log) {
             replay(pad, true, true); camera->Update(kFixedDeltaTime);
             const auto carryEye = camera->GetEye() - actor->GetWorldPosition();
             Require(std::abs(carryEye.z) > 5, "held input entered first-person camera");
-            int exits = 0;
+            std::int32_t exits = 0;
             actor->ChangeState(std::make_unique<ExitCounter>(exits));
             actor->ChangeState(std::make_unique<PlayerStatePullEnemy>(target.get(), target->GetWorldPosition()));
             actor->ChangeState(std::make_unique<PlayerStatePullObject>(target.get(), target->GetWorldPosition()));
@@ -110,17 +113,17 @@ inline void Run(BaseScene* scene, std::ostream& log) {
 }
 inline void AfterDraw(SceneManager* manager, const std::string& path) {
     static std::ofstream log(path, std::ios::trunc);
-    static int phase = 0, frames = 0;
-    static bool done = false;
-    if (done || !manager || manager->IsTransitioning()) return;
+    static std::int32_t sPhase = 0, sFrames = 0;
+    static bool sDone = false;
+    if (sDone || !manager || manager->IsTransitioning()) return;
     try {
-        if (phase == 0) { manager->ChangeScene("GAMEPLAY"); phase = 1; return; }
-        if (manager->GetCurrentSceneName() != "GAMEPLAY" || ++frames < 3) return;
+        if (sPhase == 0) { manager->ChangeScene("GAMEPLAY"); sPhase = 1; return; }
+        if (manager->GetCurrentSceneName() != "GAMEPLAY" || ++sFrames < 3) return;
         manager->SetIsPlaying(false);
         Run(manager->GetCurrentScene(), log);
         log << "PASS: carry hook blocked and released hook restored for mouse/gamepad" << std::endl;
     } catch (const std::exception& error) { log << "FAIL: " << error.what() << std::endl; }
-    done = true; WinApp::CloseNow();
+    sDone = true; WinApp::CloseNow();
 }
 }
 #endif

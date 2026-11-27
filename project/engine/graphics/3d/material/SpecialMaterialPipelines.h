@@ -47,24 +47,24 @@ private:
     using PipelineState = Microsoft::WRL::ComPtr<ID3D12PipelineState>;
     // 宣言順はロード時のPSO準備順。末尾のシルエットは初回描画で準備する。
     enum class PipelineKind : std::size_t {
-        Water,
-        Magma,
-        Ice,
-        Fire,
-        Laser,
-        SlimeGel,
-        Shockwave,
-        LiquidContact,
-        DamageCrack,
-        Updraft,
-        StunBind,
-        CrownUnlock,
-        PoisonSpore,
-        Cloud,
-        GatePortal,
-        WindOrb,
-        VisibilitySilhouette,
-        Count,
+        kWater,
+        kMagma,
+        kIce,
+        kFire,
+        kLaser,
+        kSlimeGel,
+        kShockwave,
+        kLiquidContact,
+        kDamageCrack,
+        kUpdraft,
+        kStunBind,
+        kCrownUnlock,
+        kPoisonSpore,
+        kCloud,
+        kGatePortal,
+        kWindOrb,
+        kVisibilitySilhouette,
+        kCount,
     };
 
     struct PipelineDescription;
@@ -85,7 +85,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12RootSignature> waterRootSignature_;
 
     // 添字はPipelineKindに対応。空のComPtrは未生成を表す。
-    std::array<PipelineState, static_cast<std::size_t>(PipelineKind::Count)> pipelines_;
+    std::array<PipelineState, static_cast<std::size_t>(PipelineKind::kCount)> pipelines_;
 
 };
 

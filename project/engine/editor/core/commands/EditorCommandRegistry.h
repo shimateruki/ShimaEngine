@@ -7,7 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
-// EditorCommandは、メニュー・ショートカット・将来のQuick Searchが共有する操作定義です。
+// メニュー・ショートカット・Quick Searchが共有するEditor操作の登録データ。
 // 関連：EditorCommandRegistry（この型を使う機能の本体）
 struct EditorCommand {
     std::string id;
@@ -67,33 +67,33 @@ private:
 };
 
 // 主要Command IDを共有し、文字列の打ち間違いを防ぎます。
-namespace EditorCommandId {
-inline constexpr const char* Play = "game.play";
-inline constexpr const char* Stop = "game.stop";
-inline constexpr const char* PauseResume = "game.pauseResume";
+namespace editorCommandId {
+inline constexpr const char* kPlay = "game.play";
+inline constexpr const char* kStop = "game.stop";
+inline constexpr const char* kPauseResume = "game.pauseResume";
 
-inline constexpr const char* SceneNew = "scene.new";
-inline constexpr const char* SceneSave = "scene.save";
+inline constexpr const char* kSceneNew = "scene.new";
+inline constexpr const char* kSceneSave = "scene.save";
 
-inline constexpr const char* EditUndo = "edit.undo";
-inline constexpr const char* EditRedo = "edit.redo";
-inline constexpr const char* EditDuplicate = "edit.duplicate";
-inline constexpr const char* EditDelete = "edit.delete";
+inline constexpr const char* kEditUndo = "edit.undo";
+inline constexpr const char* kEditRedo = "edit.redo";
+inline constexpr const char* kEditDuplicate = "edit.duplicate";
+inline constexpr const char* kEditDelete = "edit.delete";
 
-inline constexpr const char* ObjectDropToFloor = "object.dropToFloor";
+inline constexpr const char* kObjectDropToFloor = "object.dropToFloor";
 
-inline constexpr const char* ViewEditorPanels = "view.editorPanels";
-inline constexpr const char* ViewQuickSearch = "view.quickSearch";
-inline constexpr const char* ViewAssetReferences = "view.assetReferences";
-inline constexpr const char* ViewIsolateSelection = "view.isolateSelection";
-inline constexpr const char* ViewRestoreTemporaryVisibility = "view.restoreTemporaryVisibility";
-inline constexpr const char* ViewConsole = "view.console";
-inline constexpr const char* ViewStatus = "view.status";
-inline constexpr const char* ViewPortfolio = "view.portfolio";
+inline constexpr const char* kViewEditorPanels = "view.editorPanels";
+inline constexpr const char* kViewQuickSearch = "view.quickSearch";
+inline constexpr const char* kViewAssetReferences = "view.assetReferences";
+inline constexpr const char* kViewIsolateSelection = "view.isolateSelection";
+inline constexpr const char* kViewRestoreTemporaryVisibility = "view.restoreTemporaryVisibility";
+inline constexpr const char* kViewConsole = "view.console";
+inline constexpr const char* kViewStatus = "view.status";
+inline constexpr const char* kViewPortfolio = "view.portfolio";
 
-inline constexpr const char* WorkspaceVfx = "workspace.vfx";
-inline constexpr const char* WorkspaceAnimation = "workspace.animation";
+inline constexpr const char* kWorkspaceVfx = "workspace.vfx";
+inline constexpr const char* kWorkspaceAnimation = "workspace.animation";
 
-inline constexpr const char* HelpManual = "help.manual";
-inline constexpr const char* HelpProfiler = "help.profiler";
+inline constexpr const char* kHelpManual = "help.manual";
+inline constexpr const char* kHelpProfiler = "help.profiler";
 }

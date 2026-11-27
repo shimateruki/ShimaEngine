@@ -39,7 +39,6 @@ GameplayStatusManager::CharacterStatus MakeStatus(float maxHp, float attackPower
     return status;
 }
 
-// 設定JSONに数値項目がある場合だけ既存の値を更新します。
 void ReadFloat(const json& source, const char* key, float& value) {
     // 数値として読める項目だけを上書きし、欠落・型違いでは初期値を保つ。
     if (source.is_object() && source.contains(key) && source.at(key).is_number()) {
@@ -47,7 +46,6 @@ void ReadFloat(const json& source, const char* key, float& value) {
     }
 }
 
-// 設定JSONに真偽値項目がある場合だけ既存の値を更新します。
 void ReadBool(const json& source, const char* key, bool& value) {
     // Bool型が確認できた場合だけ既定値を変更する。
     if (source.is_object() && source.contains(key) && source.at(key).is_boolean()) {
@@ -56,31 +54,34 @@ void ReadBool(const json& source, const char* key, bool& value) {
 }
 
 void ReadString(const json& source, const char* key, std::string& value) {
-    // 空のモデル名で既定モデルを消さないよう、非空文字列だけ採用する。
+    // 指定キーが存在し、文字列型である場合だけ候補を取得する。
     if (source.is_object() && source.contains(key) && source.at(key).is_string()) {
         const std::string candidate = source.at(key).get<std::string>();
 
+        // 空文字列は上書きに使わず、呼出元が用意したモデル名を保持する。
         if (!candidate.empty()) {
             value = candidate;
         }
     }
 }
 
+// scaleの先頭3要素をXYZの倍率として読み込み、有効な指定だけを反映します。
 void ReadScale(const json& source, engine::Vector3& value) {
+    // scaleがないか配列型でなければ、既定の倍率を保つ。
     if (!source.is_object() || !source.contains("scale") || !source.at("scale").is_array()) {
         return;
     }
 
     const json& array = source.at("scale");
 
+    // 先頭3要素のどれかが欠けるか数値でなければ、倍率を一部だけ変更しない。
     if (array.size() < 3 || !array[0].is_number() || !array[1].is_number() || !array[2].is_number()) {
         return;
     }
 
     const engine::Vector3 candidate = {array[0].get<float>(), array[1].get<float>(), array[2].get<float>()};
 
-    // 旧設定の0スケールは「クラス側の値を維持」という意味だったため、
-    // 一元管理移行後はタイプ標準値を残します。
+    // 3軸すべてが正の場合だけ倍率を採用し、0以下の軸が一つでもあれば従来値を維持する。
     if (candidate.x > 0.0f && candidate.y > 0.0f && candidate.z > 0.0f) {
         value = candidate;
     }
@@ -100,6 +101,7 @@ void JsonToStatus(const json& source, GameplayStatusManager::CharacterStatus& st
     ReadBool(source, "morphLimited", status.morphLimited);
     ReadFloat(source, "morphDuration", status.morphDuration);
 
+    // 移動モーター用のオブジェクトがあれば、移動と接地の項目を個別に読み込む。
     if (source.contains("characterMotor") && source.at("characterMotor").is_object()) {
         const json& motor = source.at("characterMotor");
         ReadBool(motor, "continuousCollision", status.motorContinuousCollision);
@@ -133,31 +135,34 @@ json StatusToJson(const GameplayStatusManager::CharacterStatus& status) {
                   {"skinWidth", status.motorSkinWidth}}}};
 }
 
-// 専用ファイルがない環境では、共有JSONから読み込んだ値をそのまま使う。
+// 任意の敵専用JSONを読み込みます。未配置なら現状を保って成功扱いとし、配置済みファイルを読めなければfalseを返します。
 bool LoadEnemyParameters(const std::string& path, GameplayStatusManager::CharacterStatus& status) {
     try {
-        // 敵専用のファイルは任意。未配置なら、呼び元が用意した値をそのまま使う。
+        // 専用ファイルが未配置なら、既に用意した共有設定や標準値を使う。
         if (!fs::exists(path)) {
             return true;
         }
 
         std::ifstream file(path);
         json parameters;
+        // 開けない、解析できない、またはルートがオブジェクトでない場合は、呼び出し側の値を保持する。
         if (!file || !(file >> parameters) || !parameters.is_object()) {
             return false;
         }
 
-        // 読込み中の値はコピーに適用し、不正なファイルで現在値を途中まで置き換えない。
+        // 対象ファイルの値はコピーへ適用し、すべての読込が済んでから呼出元へ反映する。
         auto loaded = status;
         JsonToStatus(parameters, loaded);
         status = std::move(loaded);
         return true;
+    // ファイル操作やJSONの変換が例外になった場合も、失敗として呼び出し側へ返す。
     } catch (const std::exception&) {
         return false;
     }
 }
 
 // 保存中に失敗しても、すでに存在する設定ファイルを途中までの内容で上書きしない。
+// 設定を同じディレクトリの一時ファイルへ書き、保存先の置換まで成功した場合にtrueを返します。
 bool SaveStatusJson(const fs::path& path, const json& settings) {
     auto temporary = path;
     temporary += ".tmp." + std::to_string(GetCurrentProcessId());
@@ -166,6 +171,7 @@ bool SaveStatusJson(const fs::path& path, const json& settings) {
         std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
         file << settings.dump(4);
         file.close();
+        // 書き込みとクローズに成功したときだけ本ファイルの置換を試し、置換も成功すれば終了する。
         if (file && MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
             return true;
         }
@@ -173,12 +179,12 @@ bool SaveStatusJson(const fs::path& path, const json& settings) {
         // 書き込みに失敗した一時ファイルは下で片付ける。
     }
 
+    // 作成途中の一時ファイルが残っていれば削除し、保存失敗を返す。
     std::error_code error;
     fs::remove(temporary, error);
     return false;
 }
 
-// キャラクターの調整値を読み書きし、既存のHPを保つか初期化するかを呼び出し側へ委ねます。
 
 bool NearlyEqual(float lhs, float rhs) {
     // HPの全快判定では浮動小数点の微小誤差を許容する。
@@ -188,8 +194,8 @@ bool NearlyEqual(float lhs, float rhs) {
 
 GameplayStatusManager* GameplayStatusManager::GetInstance() {
     // 設定管理はシーンをまたいで同じ値を参照する単一実体とする。
-    static GameplayStatusManager instance;
-    return &instance;
+    static GameplayStatusManager sInstance;
+    return &sInstance;
 }
 
 GameplayStatusManager::~GameplayStatusManager() {
@@ -198,7 +204,7 @@ GameplayStatusManager::~GameplayStatusManager() {
 }
 
 void GameplayStatusManager::Initialize() {
-    // 新設定を優先し、正常に読み込めなければ旧ファイルで補う。
+    // 初期化済みなら、調整中の設定値を既定値やディスク内容へ戻さない。
     if (initialized_) {
         return;
     }
@@ -207,8 +213,9 @@ void GameplayStatusManager::Initialize() {
     dirty_ = false;
     bool migratedLegacySettings = false;
 
+    // 現在の共有ファイルを読めなかった場合に限り、旧形式のファイルを試す。
     if (!LoadFromFile(kSettingsPath)) {
-        // 旧ファイルが残る環境では一度だけ移行して、以降は新設定を使います。
+        // 旧ファイルを読み込めたら、個別設定の読み込み後に新形式を保存する候補とする。
         if (LoadFromFile(kLegacySettingsPath)) {
             migratedLegacySettings = true;
         }
@@ -237,6 +244,7 @@ bool GameplayStatusManager::Reload() {
     ResetToDefaults();
     dirty_ = false;
 
+    // 共有ファイルとすべての敵専用ファイルを処理できた場合だけ、読み直した設定を採用する。
     if (LoadFromFile(kSettingsPath) && LoadDedicatedEnemyParameters()) {
         dirtyEnemies_.clear();
         return true;
@@ -254,7 +262,9 @@ bool GameplayStatusManager::Save() {
     // 全件保存では、敵ファイルを先に確定してから共有JSONの旧敵データを外す。
     Initialize();
 
+    // 敵ファイルの置き換えは一件ごとに確定する。後続で失敗したときは保存済みの敵ファイルが残る。
     for (const auto& [enemyType, status] : enemyStatuses_) {
+        // 敵ファイルが一件でも保存できなければ中断し、共有ファイルの書き換えには進まない。
         if (!SaveStatusJson(GetSettingsPath(enemyType), StatusToJson(status))) {
             return false;
         }
@@ -269,6 +279,7 @@ bool GameplayStatusManager::Save() {
     root["player"]["locomotion"] = {{"accelerationTime", locomotion.accelerationTime},
                                     {"brakingTime", locomotion.brakingTime}, {"airControl", locomotion.airControl}};
 
+    // 共有設定の書き換えに失敗した場合は、再保存に必要な状態を残す。
     if (!SaveStatusJson(kSettingsPath, root)) {
         return false;
     }
@@ -282,10 +293,11 @@ bool GameplayStatusManager::Save() {
 void GameplayStatusManager::ResetToDefaults() {
     // JSONに項目が無い場合の基準値をタイプ別に用意し、再読込前の土台にする。
     playerStatus_ =
-        MakeStatus(5.0f, 1.0f, PlayerDefaults::kMoveSpeed, 50.0f, 60.0f, PlayerDefaults::kJumpPower, 20.0f,
+        MakeStatus(5.0f, 1.0f, playerDefaults::kMoveSpeed, 50.0f, 60.0f, playerDefaults::kJumpPower, 20.0f,
                    {2.0f, 2.0f, 2.0f}, "Characters/slime", false, 5.0f);
 
     playerLocomotion_ = {};
+    // プレイヤーの移動応答と敵タイプごとの既定値も作り直す。
     enemyStatuses_.clear();
     enemyStatuses_.emplace("Slime", MakeStatus(38.0f, 1.0f, 0.1f, 60.0f, 60.0f, 18.0f, 20.0f, engine::Vector3{2.0f, 2.0f, 2.0f},
                                                "Characters/slime_pink", false, 5.0f));
@@ -329,6 +341,7 @@ GameplayStatusManager::FindEnemyStatus(const std::string& enemyType) const {
     return it != enemyStatuses_.end() ? &it->second : nullptr;
 }
 
+// 設定に登録されている敵タイプ名を、不定な登録順の影響を受けないよう名前順で返します。
 std::vector<std::string> GameplayStatusManager::GetEnemyTypes() const {
     std::vector<std::string> types;
     for (const auto& [type, status] : enemyStatuses_) types.push_back(type);
@@ -336,24 +349,31 @@ std::vector<std::string> GameplayStatusManager::GetEnemyTypes() const {
     return types;
 }
 
+// 設定の保存が必要になったことを、全体または敵タイプ単位で記録します。
 void GameplayStatusManager::MarkDirty(const std::string& enemyType) {
+    // タイプを指定しない場合は、全体の再保存を要求する。
     if (enemyType.empty()) {
         MarkDirty();
+    // タイプの指定があり、そのタイプが登録されている場合だけ個別の保存対象に入れる。
     } else if (enemyStatuses_.contains(enemyType)) {
         dirtyEnemies_.insert(enemyType);
     }
 }
 
+// 変更された設定を保存します。途中で失敗した場合は未保存の対象を残し、falseを返します。
 bool GameplayStatusManager::SaveIfDirty() {
+    // 全体の保存要求がある場合は、敵ごとの差分保存に進まず一括保存を行う。
     if (dirty_) {
         return Save();
     }
 
     // 個別編集では、その敵のファイルだけを書き出す。失敗した敵は次回も保存対象に残る。
     for (auto it = dirtyEnemies_.begin(); it != dirtyEnemies_.end();) {
+        // 個別ファイルの保存に失敗したら、現在の敵と後続の未保存の敵を残して中断する。
         if (!SaveStatusJson(GetSettingsPath(*it), StatusToJson(enemyStatuses_.at(*it)))) {
             return false;
         }
+        // 保存できた敵だけを、再保存の対象から外す。
         it = dirtyEnemies_.erase(it);
     }
     return true;
@@ -377,12 +397,14 @@ bool GameplayStatusManager::ApplyEnemyStatus(engine::Object3D* object, bool rese
 
     std::string enemyType = object->GetEnemyType();
 
+    // 本体にタイプ名がない旧データでは、既存の汎用パラメーターから補う。
     if (enemyType.empty() && object->GetParameters().has_value()) {
         enemyType = object->GetParameters()->enemyType;
     }
 
     const CharacterStatus* status = FindEnemyStatus(enemyType);
 
+    // 対応する登録がなければ、別タイプの設定を当てずにfalseを返す。
     if (!status) {
         return false;
     }
@@ -390,6 +412,7 @@ bool GameplayStatusManager::ApplyEnemyStatus(engine::Object3D* object, bool rese
     ApplyStatus(object, *status, resetCurrentHp);
     object->SetEnemyType(enemyType);
 
+    // タイプ名を書き込む先がなければ、汎用パラメーターを用意する。
     if (!object->GetParameters().has_value()) {
         object->ResetParameters();
     }
@@ -399,15 +422,17 @@ bool GameplayStatusManager::ApplyEnemyStatus(engine::Object3D* object, bool rese
 }
 
 bool GameplayStatusManager::ApplyManagedStatus(engine::Object3D* object, bool resetCurrentHp) const {
-    // クラス名でプレイヤー・敵を振り分け、それ以外のシーン物体には値を適用しない。
+    // 対象が存在しなければ、設定を適用できないためfalseを返す。
     if (!object) {
         return false;
     }
 
+    // Playerには共通のプレイヤー設定を適用する。
     if (object->GetClassName() == "Player") {
         return ApplyPlayerStatus(object, resetCurrentHp);
     }
 
+    // Enemyにはタイプごとの敵設定を適用する。
     if (object->GetClassName() == "Enemy") {
         return ApplyEnemyStatus(object, resetCurrentHp);
     }
@@ -416,7 +441,7 @@ bool GameplayStatusManager::ApplyManagedStatus(engine::Object3D* object, bool re
 }
 
 bool GameplayStatusManager::IsManagedCharacter(const engine::Object3D* object) {
-    // 共通ステータス管理の対象はPlayerとEnemyに限定する。
+    // 対象が存在しなければ、管理対象外を示すfalseを返す。
     if (!object) {
         return false;
     }
@@ -424,8 +449,9 @@ bool GameplayStatusManager::IsManagedCharacter(const engine::Object3D* object) {
     return object->GetClassName() == "Player" || object->GetClassName() == "Enemy";
 }
 
+// 専用フォルダーを持つ敵はparameters.json、持たないタイプは共有設定のパスを返します。
 std::string GameplayStatusManager::GetSettingsPath(const std::string& enemyType) {
-    const std::string directory = EnemySettingsPaths::Directory(enemyType);
+    const std::string directory = enemySettingsPaths::Directory(enemyType);
     return directory.empty() ? kSettingsPath : directory + "parameters.json";
 }
 
@@ -433,6 +459,7 @@ bool GameplayStatusManager::LoadDedicatedEnemyParameters() {
     // 一件失敗しても他の敵の読込を続けます。各設定は専用ファイルの有無にかかわらず補正します。
     bool loadedAll = true;
     for (auto& [enemyType, status] : enemyStatuses_) {
+        // 専用ファイルが配置されていて読み込めなかった場合は、全件成功のフラグを下ろす。
         if (!LoadEnemyParameters(GetSettingsPath(enemyType), status)) {
             loadedAll = false;
         }
@@ -445,6 +472,7 @@ bool GameplayStatusManager::LoadFromFile(const std::string& path) {
     // 読み込んだ項目を既定値へ重ね、型違いや読込失敗では呼び出し側へ失敗を返す。
     std::ifstream file(path);
 
+    // 共有設定を開けなければ、JSONの解析には進まない。
     if (!file) {
         return false;
     }
@@ -453,15 +481,18 @@ bool GameplayStatusManager::LoadFromFile(const std::string& path) {
         json root;
         file >> root;
 
+        // ルートがオブジェクトでないファイルには、プレイヤーや敵の名前付き設定がないため終了する。
         if (!root.is_object()) {
             return false;
         }
 
         JsonToStatus(root.value("player", json::object()), playerStatus_);
-        // 旧JSONに項目がなければ、加速付きの標準値でそのまま開始する。
+        // 共有設定に移動応答の指定がなければ、呼出元で用意した値を使う。
         const auto player = root.find("player");
+        // playerがオブジェクトである場合だけ、プレイヤーの移動応答を探す。
         if (player != root.end() && player->is_object()) {
             const auto movement = player->find("locomotion");
+            // locomotionがオブジェクトなら、存在する数値だけを初期値に上書きする。
             if (movement != player->end() && movement->is_object()) {
                 ReadFloat(*movement, "accelerationTime", playerLocomotion_.accelerationTime);
                 ReadFloat(*movement, "brakingTime", playerLocomotion_.brakingTime);
@@ -470,14 +501,17 @@ bool GameplayStatusManager::LoadFromFile(const std::string& path) {
         }
         playerLocomotion_.Normalize();
 
+        // 旧形式のenemiesオブジェクトがあれば、登録済みタイプについて共有設定を読む。
         if (root.contains("enemies") && root["enemies"].is_object()) {
             for (auto& [enemyType, status] : enemyStatuses_) {
+                // このタイプのキーを持つ場合だけ、敵の初期値へ共有設定を重ねる。
                 if (root["enemies"].contains(enemyType)) {
                     JsonToStatus(root["enemies"].at(enemyType), status);
                 }
             }
         }
 
+        // 読込結果をゲームで使う範囲へ補正し、共有設定の再保存要求を解除する。
         Normalize(playerStatus_);
 
         for (auto& [enemyType, status] : enemyStatuses_) {
@@ -487,6 +521,7 @@ bool GameplayStatusManager::LoadFromFile(const std::string& path) {
 
         dirty_ = false;
         return true;
+    // JSONの解析や型変換に失敗した場合は成功を返さない。Reload()の呼び出しでは保存していた状態に復元する。
     } catch (...) {
         return false;
     }
@@ -512,7 +547,7 @@ void GameplayStatusManager::Normalize(CharacterStatus& status) {
 
 // 最大 HP の変更時は現在の残量比を保ち、全快中または明示的なリセット時だけ全快させます。
 void GameplayStatusManager::ApplyStatus(engine::Object3D* object, const CharacterStatus& source, bool resetCurrentHp) {
-    // HP以外の値は正規化済み設定へ揃え、HPだけは残量比または明示リセットを基準にする。
+    // 対象の実体がなければ、HPやオブジェクトの状態を読み書きできない。
     if (!object) {
         return;
     }
@@ -520,6 +555,7 @@ void GameplayStatusManager::ApplyStatus(engine::Object3D* object, const Characte
     CharacterStatus status = source;
     Normalize(status);
 
+    // 汎用パラメーターがない個体は、HPを読み取る前に既定の格納先を用意する。
     if (!object->GetParameters().has_value()) {
         object->ResetParameters();
     }
@@ -534,13 +570,15 @@ void GameplayStatusManager::ApplyStatus(engine::Object3D* object, const Characte
 
     param.maxHp = status.maxHp;
 
-    // 最大HPが変わっても、全快していた個体は全快のまま、被弾中の個体は残っていた割合を保つ。
+    // 明示的な回復指定があるか、変更前に全快していた場合は、新しい最大HPまで回復させる。
     if (resetCurrentHp || wasFullHp) {
         param.hp = param.maxHp;
+    // それ以外は、変更前の残量の割合を新しい最大HPへ掛ける。
     } else {
         param.hp = std::clamp(param.maxHp * healthRatio, 0.0f, param.maxHp);
     }
 
+    // HPを確定してから、攻撃・移動・変身・衝突の設定値をパラメーターへ反映する。
     param.attackPower = status.attackPower;
     param.speed = status.speed;
     param.gravity = status.gravity;
@@ -556,21 +594,22 @@ void GameplayStatusManager::ApplyStatus(engine::Object3D* object, const Characte
     param.motorGroundProbeDistance = status.motorGroundProbeDistance;
     param.motorSkinWidth = status.motorSkinWidth;
 
-    // パラメータを一括反映してから、モデルと表示スケールは異なる場合だけ差し替えます。
+    // パラメーター構造体を一括反映してから、モデルと表示倍率の差を確認する。
     object->SetParameters(param);
 
+    // モデル名の指定があり、現在と異なる場合だけ、モデルを差し替える。
     if (!status.modelName.empty() && object->GetModelName() != status.modelName) {
         object->SetModel(status.modelName);
     }
 
     const engine::Vector3 currentScale = object->GetScale();
+    // 3軸のいずれかが許容誤差を超えて変わった場合だけ、姿勢更新の基準倍率も差し替える。
     if (!NearlyEqual(currentScale.x, status.scale.x) || !NearlyEqual(currentScale.y, status.scale.y) ||
         !NearlyEqual(currentScale.z, status.scale.z)) {
-        // 表示倍率を直接変えず、固有の姿勢更新が基準として使う初期スケールにも反映する。
         object->ApplyManagedScale(status.scale);
     }
 
-    // 敵本体が参照する検知距離にも同じ調整値を適用し、行動側の値を揃えます。
+    // 実体がBaseEnemyなら、敵AIが直接使う検知距離にも同じ値を渡す。
     if (auto* enemy = dynamic_cast<BaseEnemy*>(object)) {
         enemy->SetDetectionRange(status.detectionRange);
     }

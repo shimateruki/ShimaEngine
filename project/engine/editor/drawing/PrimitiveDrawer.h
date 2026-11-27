@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <d3d12.h>
 #include <wrl.h>
 #include "engine/utility/math/Math.h"
@@ -41,17 +42,17 @@ public:
 
     // キューブの描画
     // 各 DrawWire 関数で使う instanceIndex は 0～8191。同一描画内で異なる表示には別のスロットを使う。
-    void DrawWireCube(ID3D12GraphicsCommandList* commandList, const engine::Matrix4x4& worldMatrix, const engine::Vector4& color, int instanceIndex);
+    void DrawWireCube(ID3D12GraphicsCommandList* commandList, const engine::Matrix4x4& worldMatrix, const engine::Vector4& color, std::int32_t instanceIndex);
 
     // 指定行列・色でワイヤー球を描く。instanceIndexは描画バッファの枠。
-    void DrawWireSphere(ID3D12GraphicsCommandList* commandList, const engine::Matrix4x4& worldMatrix, const engine::Vector4& color, int instanceIndex);
+    void DrawWireSphere(ID3D12GraphicsCommandList* commandList, const engine::Matrix4x4& worldMatrix, const engine::Vector4& color, std::int32_t instanceIndex);
 
     // 指定行列・色でワイヤー円柱を描く。instanceIndexは描画バッファの枠。
-    void DrawWireCylinder(ID3D12GraphicsCommandList* commandList, const engine::Matrix4x4& worldMatrix, const engine::Vector4& color, int instanceIndex);
+    void DrawWireCylinder(ID3D12GraphicsCommandList* commandList, const engine::Matrix4x4& worldMatrix, const engine::Vector4& color, std::int32_t instanceIndex);
 
 private:
     engine::DirectXCommon* dxCommon_ = nullptr;
-    static const int kMaxInstances = 8192;
+    static const std::int32_t kMaxInstances = 8192;
 
     // --- プリミティブ描画リソース ---
     Microsoft::WRL::ComPtr<ID3D12RootSignature> primitiveRootSignature_;

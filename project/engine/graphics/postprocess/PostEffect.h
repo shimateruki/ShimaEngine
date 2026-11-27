@@ -13,11 +13,11 @@ namespace engine { class DirectXCommon; }
 // 主な入口：Initialize / PreDrawScene / Update / Draw / ResizeRenderTextures
 class PostEffect {
 public:
-    static constexpr int kCameraPreviewTextureIndex = 6;
-    static constexpr int kCinematicCameraPreviewTextureIndex = 7;
+    static constexpr std::int32_t kCameraPreviewTextureIndex = 6;
+    static constexpr std::int32_t kCinematicCameraPreviewTextureIndex = 7;
 
     /// <summary>画面効果に使う全画面描画パイプラインの種類。</summary>
-    enum PipelineIndex : int {
+    enum PipelineIndex : std::int32_t {
         CopyPipeline = 0,
         CompositeHdrPipeline,
         ExtractPipeline,
@@ -29,15 +29,15 @@ public:
     // ブルームで生成する縮小テクスチャ段数です。
     // 高品質は従来と同じ4段、低品質ほど全画面パスを減らします。
     enum class BloomQuality : int32_t {
-        Low = 0,
-        Medium,
-        High,
+        kLow = 0,
+        kMedium,
+        kHigh,
     };
 
     /// <summary>共有のポストエフェクト管理インスタンスを返す。</summary>
     static PostEffect* GetInstance() {
-        static PostEffect instance;
-        return &instance;
+        static PostEffect sInstance;
+        return &sInstance;
     }
 
     /// <summary>ポストエフェクトシェーダーへ渡す定数バッファの配置。</summary>
@@ -123,34 +123,34 @@ public:
     void Update(float deltaTime);
 
     /// <summary>入力SRVを指定のパイプラインで全画面描画する。</summary>
-    void Draw(ID3D12GraphicsCommandList* commandList, uint32_t srvHandle, int psoIndex = 0);
+    void Draw(ID3D12GraphicsCommandList* commandList, uint32_t srvHandle, std::int32_t psoIndex = 0);
 
     /// <summary>シーンの描画先をポストエフェクト用テクスチャへ切り替える。</summary>
-    void PreDrawScene(ID3D12GraphicsCommandList* commandList, int targetTexIndex = 0, bool clear = true);
+    void PreDrawScene(ID3D12GraphicsCommandList* commandList, std::int32_t targetTexIndex = 0, bool clear = true);
 
     /// <summary>深度も含めてシーン描画先を切り替える。</summary>
-    void PreDrawSceneWithDepth(ID3D12GraphicsCommandList* commandList, int targetTexIndex = kCameraPreviewTextureIndex, bool clear = true);
+    void PreDrawSceneWithDepth(ID3D12GraphicsCommandList* commandList, std::int32_t targetTexIndex = kCameraPreviewTextureIndex, bool clear = true);
 
     /// <summary>Camera Preview内の特殊描画が自身の色と深度を参照できる状態へ切り替える。</summary>
-    bool BeginCameraPreviewSpecialPass(ID3D12GraphicsCommandList* commandList, int targetTexIndex);
+    bool BeginCameraPreviewSpecialPass(ID3D12GraphicsCommandList* commandList, std::int32_t targetTexIndex);
 
     /// <summary>Camera Previewの特殊描画を終了する。</summary>
-    void EndCameraPreviewSpecialPass(ID3D12GraphicsCommandList* commandList, int targetTexIndex);
+    void EndCameraPreviewSpecialPass(ID3D12GraphicsCommandList* commandList, std::int32_t targetTexIndex);
 
     // リソースバリア管理
-    void TransitionToSrv(ID3D12GraphicsCommandList* commandList, int texIndex);
+    void TransitionToSrv(ID3D12GraphicsCommandList* commandList, std::int32_t texIndex);
 
     // 指定描画テクスチャをレンダーターゲット状態へ遷移させる。
-    void TransitionToRtv(ID3D12GraphicsCommandList* commandList, int texIndex);
+    void TransitionToRtv(ID3D12GraphicsCommandList* commandList, std::int32_t texIndex);
 
     // アクセッサ
-    uint32_t GetSrvHandle(int texIndex = 0) const { return renderTextures_[texIndex].srvHandle; }
+    uint32_t GetSrvHandle(std::int32_t texIndex = 0) const { return renderTextures_[texIndex].srvHandle; }
 
-    ID3D12Resource* GetRenderTexture(int texIndex = 0) const { return renderTextures_[texIndex].resource.Get(); }
+    ID3D12Resource* GetRenderTexture(std::int32_t texIndex = 0) const { return renderTextures_[texIndex].resource.Get(); }
 
-    uint32_t GetDepthSrvHandle(int texIndex) const { return renderTextures_[texIndex].depthSrvHandle; }
+    uint32_t GetDepthSrvHandle(std::int32_t texIndex) const { return renderTextures_[texIndex].depthSrvHandle; }
 
-    uint32_t GetGrabSrvHandle(int texIndex) const { return renderTextures_[texIndex].grabSrvHandle; }
+    uint32_t GetGrabSrvHandle(std::int32_t texIndex) const { return renderTextures_[texIndex].grabSrvHandle; }
 
     // 初期化後のマップ済み領域を借用します。初期化前は nullptr です。
     Params* GetParams() { return paramsData_; }
@@ -168,16 +168,16 @@ public:
     bool IsBloomActive() const;
 
     /// <summary>現在の品質に対応するブルームの縮小段数を返す。</summary>
-    int GetBloomLevelCount() const;
+    std::int32_t GetBloomLevelCount() const;
 
     /// <summary>現在の設定から見込まれる全画面描画パス数を返す。</summary>
-    int GetExpectedPostEffectPassCount() const;
+    std::int32_t GetExpectedPostEffectPassCount() const;
 
     float GetCameraPreviewResolutionScale() const { return cameraPreviewResolutionScale_; }
 
-    int GetCameraPreviewWidth() const { return cameraPreviewWidth_; }
+    std::int32_t GetCameraPreviewWidth() const { return cameraPreviewWidth_; }
 
-    int GetCameraPreviewHeight() const { return cameraPreviewHeight_; }
+    std::int32_t GetCameraPreviewHeight() const { return cameraPreviewHeight_; }
 
     /// <summary>カメラプレビューの内部解像度倍率を設定する。</summary>
     void SetCameraPreviewResolutionScale(float scale);
@@ -195,7 +195,7 @@ public:
     void ResetToNeutral();
 
     /// <summary>描画先テクスチャを指定サイズに作り直す。</summary>
-    void ResizeRenderTextures(int width, int height);
+    void ResizeRenderTextures(std::int32_t width, std::int32_t height);
 
 private:
     // 旧矩形描画用の宣言。現在の全画面描画はシェーダーが三角形を生成します。
@@ -208,7 +208,7 @@ private:
     void CreatePipelineState();
 
     // 描画先テクスチャ、カメラプレビューと画面効果定数を準備・再生成する。
-    void CreateRenderTexture(int texIndex, int width, int height, DXGI_FORMAT format);
+    void CreateRenderTexture(std::int32_t texIndex, std::int32_t width, std::int32_t height, DXGI_FORMAT format);
 
     // 現在のプレビュー解像度に合わせて描画先を再作成する。
     void ResizeCameraPreviewTextures();
@@ -262,10 +262,10 @@ private:
     std::string lutTexturePath_ = "Resources/texture/lut/soft_adventure_lut.png";
     uint32_t noiseSrvHandle_ = 0;
     bool bloomEnabled_ = true;
-    BloomQuality bloomQuality_ = BloomQuality::High;
-    int renderWidth_ = 0;
-    int renderHeight_ = 0;
-    int cameraPreviewWidth_ = 0;
-    int cameraPreviewHeight_ = 0;
+    BloomQuality bloomQuality_ = BloomQuality::kHigh;
+    std::int32_t renderWidth_ = 0;
+    std::int32_t renderHeight_ = 0;
+    std::int32_t cameraPreviewWidth_ = 0;
+    std::int32_t cameraPreviewHeight_ = 0;
     float cameraPreviewResolutionScale_ = 0.5f;
 };

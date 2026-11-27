@@ -2,7 +2,7 @@
 #include "BaseGimmick.h"
 
 // 踏まれた床が揺れて落下し、次の床へ連鎖する足場です。
-// 関連：BaseGimmickの配置・衝突基盤を使い、固有の状態と表示をこのクラスで更新する。調整項目はInitializeでProperty登録する。
+// BaseGimmickの接触通知を受け、通知が届かない接地はCheckPlayerContactでも調べる。次の床にはBaseSceneのイベントを通じて知らせる。
 // 主な入口：Initialize / Update / OnCollision / OnTrigger
 class GimmickChainCollapseFloor : public BaseGimmick {
   public:
@@ -12,24 +12,24 @@ class GimmickChainCollapseFloor : public BaseGimmick {
 
     virtual ~GimmickChainCollapseFloor() = default;
 
-    /// 配置床の初期姿勢と連鎖先を準備する。
+    // 待機時の地面属性と、崩落・復帰を調整する項目を用意する。配置姿勢は待機中のUpdateで記録する。
     void Initialize(engine::Object3DCommon* common, const std::string& modelName) override;
 
     /// 連鎖待ち、揺れ、落下、再試行の状態を進める。
     void Update(float deltaTime) override;
 
-    /// プレイヤーが乗ったとき落下を開始する。
+    // 待機中にプレイヤーが上面へ接触すると揺れを開始する。戻り値は常にtrue。
     bool OnCollision(engine::Object3D* other) override;
 
     /// 前の床からの連鎖要求を受け取る。
     void OnTrigger() override;
 
-    /// 配置用の崩落床複製を作る。
+    // 初期化した新しい床へ配置とイベント接続を引き継ぐ。
     std::unique_ptr<engine::Object3D> Clone() const override;
 
   private:
     // 待機中の連鎖遅延と、実際の揺れ・落下を区別します。
-    enum class State { Idle, Pending, Shaking, Falling, Hidden };
+    enum class State { kIdle, kPending, kShaking, kFalling, kHidden };
 
     /// 揺れから落下する過程を開始する。
     void StartCollapse();
@@ -55,21 +55,28 @@ class GimmickChainCollapseFloor : public BaseGimmick {
     /// 衝突通知が届かない接地や高速通過を上面の足元軌跡から検出する。
     void CheckPlayerContact();
 
+    // 設定の揺れ時間を秒で返す。パラメーターがなければ0.45秒。
     float GetShakeDuration() const;
 
+    // 設定の落下時間を秒で返す。パラメーターがなければ1.4秒。
     float GetFallDuration() const;
 
+    // 連鎖通知から揺れ開始までの秒数。パラメーターがなければ0.18秒。
     float GetChainDelay() const;
 
+    // 下向きに加える落下加速度。パラメーターがなければ48ワールド単位/秒²。
     float GetGravity() const;
 
 
-    State state_ = State::Idle;
-    engine::Vector3 startPosition_ = engine::Vector3::ZERO;
-    engine::Vector3 startRotation_ = engine::Vector3::ZERO;
+    State state_ = State::kIdle;
+    engine::Vector3 startPosition_ = engine::Vector3::kZero;
+    engine::Vector3 startRotation_ = engine::Vector3::kZero;
+    // 現在の段階に入ってからの経過秒数。
     float timer_ = 0.0f;
+    // 前の床から通知を受け、揺れを開始するまでの残り秒数。
     float pendingTimer_ = 0.0f;
     float velocityY_ = 0.0f;
+    // 消失してから再出現までの経過秒数。
     float returnTimer_ = 0.0f;
     bool initializedStart_ = false;
     bool triggeredNext_ = false;

@@ -1,13 +1,13 @@
 ﻿#include "game/actor/enemy/boss/prism/EnemyPrismSlime.Internal.h"
 #include "game/actor/enemy/boss/core/MidbossEncounterEffects.h"
 
-using namespace EnemyPrismSlimeImplementation;
+using namespace enemyPrismSlimeImplementation;
 
-// 元の更新順序と判定を維持して、担当処理をまとめています。
+// 遭遇イベントで起動するプリズムスライムの、編集時・登場・戦闘開始までの状態を管理します。
 bool EnemyPrismSlime::UpdateEncounterState(float deltaTime) {
     // 配置が遭遇イベント制御を指定していなければ、通常の敵更新に処理を返します。
     if (!IsEncounterControlled()) {
-        encounterState_ = EncounterState::Normal;
+        encounterState_ = EncounterState::kNormal;
         encounterInitializedForPlay_ = false;
         return false;
     }
@@ -15,24 +15,27 @@ bool EnemyPrismSlime::UpdateEncounterState(float deltaTime) {
     SceneManager* sceneManager = SceneManager::GetInstance();
     const bool isPlaying = sceneManager && sceneManager->IsPlaying();
 
+    // シーンが再生中でなければ、編集状態へ戻し、このフレームの戦闘AIを止める。
     if (!isPlaying) {
         ResetEncounterStateForEditor();
         return true;
     }
 
+    // 今回のPlayで遭遇をまだ初期化していなければ、配置と起動イベントから開始状態を決める。
     if (!encounterInitializedForPlay_) {
         InitializeEncounterState();
     }
 
     // 起動待ちでは速度と攻撃表示を止めます。登場自体の更新は Appearing の間だけ実行します。
-    if (encounterState_ == EncounterState::Dormant) {
+    if (encounterState_ == EncounterState::kDormant) {
         SetVelocity({0.0f, 0.0f, 0.0f});
         ClearPrismAttackVisuals();
         HideAttackTelegraph();
         return true;
     }
 
-    if (encounterState_ != EncounterState::Appearing) {
+    // 休眠にも登場にも該当しない状態では、通常の敵更新に処理を返す。
+    if (encounterState_ != EncounterState::kAppearing) {
         return false;
     }
 
@@ -80,6 +83,7 @@ bool EnemyPrismSlime::UpdateEncounterState(float deltaTime) {
 }
 
 void EnemyPrismSlime::CaptureEncounterAuthoredState(bool refreshVisualTransform) {
+    // 配置値を保存済みで再取得の指定も無ければ、現在の演出姿勢で基準値を上書きしない。
     if (encounterAuthoredStateCaptured_ && !refreshVisualTransform) {
         return;
     }
@@ -93,16 +97,18 @@ void EnemyPrismSlime::CaptureEncounterAuthoredState(bool refreshVisualTransform)
     const uint32_t collisionAttribute = GetCollisionAttribute();
     const uint32_t collisionMask = GetCollisionMask();
 
-    // 待機状態を保存したシーンでは属性とマスクが0になっています。
-    // その値を「通常時の設定」として記憶すると、登場後も床をすり抜けるため既定値へ戻します。
+    // 有効な衝突属性は配置値として記録し、登場後に戻せるようにする。
     if (collisionAttribute != 0) {
         encounterCollisionAttribute_ = collisionAttribute;
+    // 属性が0で配置の初回取得なら、休眠保存の値を戦闘に持ち越さないよう既定値を用意する。
     } else if (!encounterAuthoredStateCaptured_) {
         encounterCollisionAttribute_ = kPrismActiveCollisionAttribute;
     }
 
+    // 衝突マスクが0以外のときは、戦闘開始後に現在のマスクを戻すため記録する。
     if (collisionMask != 0) {
         encounterCollisionMask_ = collisionMask;
+    // マスクが0で配置の初回取得なら、地面などと接触できる戦闘用の既定値を用意する。
     } else if (!encounterAuthoredStateCaptured_) {
         encounterCollisionMask_ = kPrismActiveCollisionMask;
     }
@@ -118,13 +124,14 @@ void EnemyPrismSlime::InitializeEncounterState() {
     CaptureEncounterAuthoredState();
     attackCycleCount_ = 0;
     attackCycleIndex_ = 0;
-    lastAutomaticAttack_ = AttackKind::None;
+    lastAutomaticAttack_ = AttackKind::kNone;
 
     const bool startActive = GetParameters().has_value() && GetParameters()->startActive;
 
     // 初回更新より先に起動イベントが届いていれば、配置時の開始フラグが無効でも登場します。
     if (startActive || encounterRequestedActive_) {
         BeginEncounterAppearance();
+    // 配置の開始フラグと起動要求のどちらも無ければ、イベントを待つ休眠状態にする。
     } else {
         ApplyDormantEncounterState();
     }
@@ -132,6 +139,7 @@ void EnemyPrismSlime::InitializeEncounterState() {
 
 void EnemyPrismSlime::ResetEncounterStateForEditor() {
     locomotion_.Reset();
+    // Play中に初期化していた場合だけ、演出で変えた姿勢や材質を配置時の値へ戻す。
     if (encounterInitializedForPlay_) {
         SetTranslate(encounterBasePosition_);
         SetScale(encounterBaseScale_);
@@ -143,13 +151,13 @@ void EnemyPrismSlime::ResetEncounterStateForEditor() {
 
     // 非再生中も配置値は更新できるよう保持しつつ、ゲーム画面には待機中ボスを出しません。
     CaptureEncounterAuthoredState(true);
-    encounterState_ = EncounterState::Dormant;
+    encounterState_ = EncounterState::kDormant;
     encounterTimer_ = 0.0f;
     encounterInitializedForPlay_ = false;
     encounterRequestedActive_ = false;
     attackCycleCount_ = 0;
     attackCycleIndex_ = 0;
-    lastAutomaticAttack_ = AttackKind::None;
+    lastAutomaticAttack_ = AttackKind::kNone;
     SetVelocity({0.0f, 0.0f, 0.0f});
     SetCollisionAttribute(0);
     SetCollisionMask(0);
@@ -161,7 +169,7 @@ void EnemyPrismSlime::ResetEncounterStateForEditor() {
 
 void EnemyPrismSlime::BeginEncounterAppearance() {
     locomotion_.Reset();
-    encounterState_ = EncounterState::Appearing;
+    encounterState_ = EncounterState::kAppearing;
     encounterTimer_ = 0.0f;
     attackCooldown_ = 1.0f;
     SetIsVisible(true);
@@ -181,7 +189,7 @@ void EnemyPrismSlime::BeginEncounterAppearance() {
 void EnemyPrismSlime::ApplyDormantEncounterState() {
     locomotion_.Reset();
     // 未登場中は配置姿勢を保ちながら表示と衝突を止め、攻撃の残像も消す。
-    encounterState_ = EncounterState::Dormant;
+    encounterState_ = EncounterState::kDormant;
     encounterTimer_ = 0.0f;
     SetTranslate(encounterBasePosition_);
     SetScale(encounterBaseScale_);
@@ -200,7 +208,7 @@ void EnemyPrismSlime::ApplyDormantEncounterState() {
 
 void EnemyPrismSlime::FinishEncounterAppearance() {
     // 登場演出中に抑えていた判定を配置時の値へ戻して戦闘を始める。
-    encounterState_ = EncounterState::Active;
+    encounterState_ = EncounterState::kActive;
     encounterTimer_ = 0.0f;
     SetTranslate(encounterBasePosition_);
     SetScale(encounterBaseScale_);
@@ -230,7 +238,7 @@ bool EnemyPrismSlime::IsEncounterHudActive() const {
         return false;
     }
 
-    return encounterState_ == EncounterState::Appearing || encounterState_ == EncounterState::Active;
+    return encounterState_ == EncounterState::kAppearing || encounterState_ == EncounterState::kActive;
 }
 
 float EnemyPrismSlime::GetEncounterCurrentHp() const {
@@ -245,11 +253,12 @@ float EnemyPrismSlime::GetEncounterMaximumHp() const {
 
 float EnemyPrismSlime::GetEncounterAppearanceProgress() const {
     // 休眠は0、戦闘中は1とし、登場中だけ演出タイマーから進行率を返す。
-    if (encounterState_ == EncounterState::Active) {
+    if (encounterState_ == EncounterState::kActive) {
         return 1.0f;
     }
 
-    if (encounterState_ != EncounterState::Appearing) {
+    // 戦闘開始前で登場中でもない場合は、登場の進行を0として返す。
+    if (encounterState_ != EncounterState::kAppearing) {
         return 0.0f;
     }
 
@@ -257,15 +266,16 @@ float EnemyPrismSlime::GetEncounterAppearanceProgress() const {
 }
 
 void EnemyPrismSlime::TriggerDebugDefeat() {
-    // デバッグ撃破はHPを0にした上で攻撃状態を片付け、共通撃破更新へ渡す。
+    // HP設定が無い場合や撃破済み、撃破演出中の場合は、デバッグ撃破の状態を作らない。
     if (!GetParameters().has_value() || IsDead() || IsDefeatEffectPlaying()) {
         return;
     }
 
+    // HPを0にしたら、移動と攻撃を片付けて通常の撃破更新へ引き継ぐ。
     SetParameter(&engine::EntityParameter::hp, 0.0f);
     locomotion_.Reset();
-    attackState_ = AttackState::Idle;
-    currentAttack_ = AttackKind::None;
+    attackState_ = AttackState::kIdle;
+    currentAttack_ = AttackKind::kNone;
     attackTimer_ = 0.0f;
     repositionTimer_ = 0.0f;
     repositionDuration_ = 0.0f;

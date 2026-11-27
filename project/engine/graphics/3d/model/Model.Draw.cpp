@@ -22,9 +22,6 @@ namespace engine {
 
 
 
-// ==========================================
-// 初期化: メッシュごとにバッファを作る
-// ==========================================
 
 // ========================================================================
 // Model 描画補助と動的メッシュ生成
@@ -34,26 +31,28 @@ namespace engine {
 // ========================================================================
 
 // シャドウマップ生成用に、マテリアル描画を省いた深度向けメッシュ描画を行う。
-void Model::DrawShadow(ID3D12Resource* wvpResource, int meshDrawIndex) {
+void Model::DrawShadow(ID3D12Resource* wvpResource, std::int32_t meshDrawIndex) {
     ID3D12GraphicsCommandList* commandList = common_->GetDxCommon()->GetCommandList();
     engine::RenderStats::GetInstance()->RecordObjectDraw();
 
     // [0] wvp
     commandList->SetGraphicsRootConstantBufferView(0, wvpResource->GetGPUVirtualAddress());
 
-    // [1] ボーン情報
+    // ボーンを持つモデルだけ、影の頂点変形で使うボーン行列のSRVを結び付ける。
     if (!modelData_.bones.empty()) {
-        SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 1, boneSrvIndex_);
+        engine::SrvManager::GetInstance()->SetGraphicsRootDescriptorTable(commandList, 1, boneSrvIndex_);
     }
 
     // 各メッシュの頂点を描画
     for (size_t meshIndex = 0; meshIndex < modelData_.meshes.size(); ++meshIndex) {
+        // 特定のメッシュ番号を指定された場合は、それ以外の影を描かない。
         if (meshDrawIndex >= 0 && meshIndex != static_cast<size_t>(meshDrawIndex)) {
             continue;
         }
 
         auto& mesh = modelData_.meshes[meshIndex];
 
+        // 頂点・インデックスのバッファが揃わないか面のインデックスが空なら、このメッシュの描画を飛ばす。
         if (!mesh.vertexResource || !mesh.indexResource || mesh.indices.empty()) {
             continue;
         }
@@ -67,18 +66,20 @@ void Model::DrawShadow(ID3D12Resource* wvpResource, int meshDrawIndex) {
 }
 
 // 既に外側で必要な描画状態を設定している前提で、メッシュ本体だけを描画する。
-void Model::DrawMeshOnly(int meshDrawIndex) {
+void Model::DrawMeshOnly(std::int32_t meshDrawIndex) {
     ID3D12GraphicsCommandList* commandList = common_->GetDxCommon()->GetCommandList();
     engine::RenderStats::GetInstance()->RecordObjectDraw();
 
-    // メッシュごとに頂点バッファだけをセットして描画
+    // 呼び出し元が用意したパイプラインへ、各メッシュの頂点とインデックスだけを渡す。
     for (size_t meshIndex = 0; meshIndex < modelData_.meshes.size(); ++meshIndex) {
+        // 特定のメッシュ番号を指定された場合は、そのメッシュだけを描く。
         if (meshDrawIndex >= 0 && meshIndex != static_cast<size_t>(meshDrawIndex)) {
             continue;
         }
 
         const auto& mesh = modelData_.meshes[meshIndex];
 
+        // 頂点とインデックスで描画できる状態のメッシュだけ、コマンドを記録する。
         if (!mesh.vertexResource || !mesh.indexResource || mesh.indices.empty()) {
             continue;
         }
@@ -99,6 +100,7 @@ void Model::CreateFromVertices(ModelCommon* common, const std::vector<VertexData
     computeSkinningDirty_ = true;
     computeSkinningOutputReady_ = false;
 
+    // 描画基盤か頂点・インデックスの入力が欠けていれば、前のメッシュを外して終了する。
     if (!common || vertices.empty() || indices.empty()) {
         modelData_.meshes.clear();
         return;
@@ -109,21 +111,23 @@ void Model::CreateFromVertices(ModelCommon* common, const std::vector<VertexData
     common_ = common;
     DirectXCommon* dxCommon = common_->GetDxCommon();
 
+    // 共通の描画基盤からDirectXを取得できなければ、GPUバッファを作れない。
     if (!dxCommon) {
-        DebugConsole::GetInstance()->AddLog(LogLevel::Error, "[Model] CreateFromVertices: DirectX device is null.");
+        DebugConsole::GetInstance()->AddLog(LogLevel::kError, "[Model] CreateFromVertices: DirectX device is null.");
         modelData_.meshes.clear();
         return;
     }
 
     ID3D12Device* device = dxCommon->GetDevice();
 
+    // DirectXのデバイスがない場合は、新しいメッシュを有効にできない。
     if (!device) {
-        DebugConsole::GetInstance()->AddLog(LogLevel::Error, "[Model] CreateFromVertices: DirectX device is null.");
+        DebugConsole::GetInstance()->AddLog(LogLevel::kError, "[Model] CreateFromVertices: DirectX device is null.");
         modelData_.meshes.clear();
         return;
     }
 
-    // 既存のメッシュデータがあればクリアする（エディタでのリアルタイム更新用）
+    // エディターから作り直す場合も旧メッシュが残らないよう、現在の一覧を先に空にする。
     modelData_.meshes.clear();
 
     // 動的生成用のメッシュを1つ追加
@@ -133,11 +137,8 @@ void Model::CreateFromVertices(ModelCommon* common, const std::vector<VertexData
     // 頂点とインデックスのデータを保持
     mesh.vertices = vertices;
     mesh.indices = indices;
-    mesh.materialIndex = 0; // ★マテリアルインデックスを初期化
+    mesh.materialIndex = 0;
 
-    // ==========================================
-    // 1. 頂点バッファ (Vertex Buffer) の作成
-    // ==========================================
     // 頂点数に1頂点のバイト数を掛け、CPUから直接書き込めるUpload Heapに確保します。
     UINT vbSize = static_cast<UINT>(sizeof(VertexData) * vertices.size());
 
@@ -153,7 +154,6 @@ void Model::CreateFromVertices(ModelCommon* common, const std::vector<VertexData
     vbDesc.SampleDesc.Count = 1;
     vbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
-    // ★ 修正: vertexResource に生成
     HRESULT hr = device->CreateCommittedResource(
         &uploadHeap,
         D3D12_HEAP_FLAG_NONE,
@@ -163,18 +163,20 @@ void Model::CreateFromVertices(ModelCommon* common, const std::vector<VertexData
         IID_PPV_ARGS(&mesh.vertexResource)
     );
 
+    // 頂点バッファの確保に失敗した場合は、不完全なメッシュを使用しない。
     if (FAILED(hr) || !mesh.vertexResource) {
-        DebugConsole::GetInstance()->AddLog(LogLevel::Error, "[Model] CreateFromVertices: failed to create vertex buffer.");
+        DebugConsole::GetInstance()->AddLog(LogLevel::kError, "[Model] CreateFromVertices: failed to create vertex buffer.");
         modelData_.meshes.clear();
         return;
     }
 
-    // ★ 修正: vertexResource に対してマップしてデータを流し込む
+    // 頂点配列を書き込むため、確保したバッファをCPUのアドレス空間へマップする。
     void* mappedVerts = nullptr;
     hr = mesh.vertexResource->Map(0, nullptr, &mappedVerts);
 
+    // CPUから書き込める頂点アドレスを取得できない場合は、頂点を転送せず終了する。
     if (FAILED(hr) || !mappedVerts) {
-        DebugConsole::GetInstance()->AddLog(LogLevel::Error, "[Model] CreateFromVertices: failed to map vertex buffer.");
+        DebugConsole::GetInstance()->AddLog(LogLevel::kError, "[Model] CreateFromVertices: failed to map vertex buffer.");
         modelData_.meshes.clear();
         return;
     }
@@ -183,21 +185,17 @@ void Model::CreateFromVertices(ModelCommon* common, const std::vector<VertexData
     memcpy(mappedVerts, vertices.data(), vbSize);
     mesh.vertexResource->Unmap(0, nullptr);
 
-    // ★ 修正: vertexResource からGPUアドレスを取得
     mesh.vertexBufferView.BufferLocation = mesh.vertexResource->GetGPUVirtualAddress();
     mesh.vertexBufferView.SizeInBytes = vbSize;
     mesh.vertexBufferView.StrideInBytes = sizeof(VertexData);
 
-    // ==========================================
-    // 2. インデックスバッファ (Index Buffer) の作成
-    // ==========================================
     // インデックスは32ビット値です。この配列で頂点を共有しながら三角形の組み合わせを指定します。
     UINT ibSize = static_cast<UINT>(sizeof(uint32_t) * indices.size());
 
     D3D12_RESOURCE_DESC ibDesc = vbDesc;
     ibDesc.Width = ibSize;
 
-    // ★ 修正: indexResource に生成
+    // 頂点と同様に、インデックスを書き込めるバッファを確保する。
     hr = device->CreateCommittedResource(
         &uploadHeap,
         D3D12_HEAP_FLAG_NONE,
@@ -207,18 +205,20 @@ void Model::CreateFromVertices(ModelCommon* common, const std::vector<VertexData
         IID_PPV_ARGS(&mesh.indexResource)
     );
 
+    // インデックスバッファを確保できなければ、頂点だけの未完成メッシュを破棄する。
     if (FAILED(hr) || !mesh.indexResource) {
-        DebugConsole::GetInstance()->AddLog(LogLevel::Error, "[Model] CreateFromVertices: failed to create index buffer.");
+        DebugConsole::GetInstance()->AddLog(LogLevel::kError, "[Model] CreateFromVertices: failed to create index buffer.");
         modelData_.meshes.clear();
         return;
     }
 
-    // ★ 修正: indexResource に対してマップしてデータを流し込む
+    // 32ビットのインデックス配列を書き込むため、バッファをCPUへマップする。
     void* mappedIndices = nullptr;
     hr = mesh.indexResource->Map(0, nullptr, &mappedIndices);
 
+    // インデックスの書き込み先を取得できなければ、そのメッシュを描画に渡さない。
     if (FAILED(hr) || !mappedIndices) {
-        DebugConsole::GetInstance()->AddLog(LogLevel::Error, "[Model] CreateFromVertices: failed to map index buffer.");
+        DebugConsole::GetInstance()->AddLog(LogLevel::kError, "[Model] CreateFromVertices: failed to map index buffer.");
         modelData_.meshes.clear();
         return;
     }
@@ -227,14 +227,10 @@ void Model::CreateFromVertices(ModelCommon* common, const std::vector<VertexData
     memcpy(mappedIndices, indices.data(), ibSize);
     mesh.indexResource->Unmap(0, nullptr);
 
-    // ★ 修正: indexResource からGPUアドレスを取得
     mesh.indexBufferView.BufferLocation = mesh.indexResource->GetGPUVirtualAddress();
     mesh.indexBufferView.SizeInBytes = ibSize;
     mesh.indexBufferView.Format = DXGI_FORMAT_R32_UINT;
 }
 
-// ==========================================
-// Skeleton & Joint の実装 (深さ優先探索)
-// ==========================================
 
 } // namespace engine

@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include "BaseEnemy.h"
 #include "game/actor/combat/AttackSequence.h"
 #include "game/actor/enemy/combat/EnemyAttackAction.h"
@@ -154,14 +155,14 @@ class EnemyFireSlime : public BaseEnemy, public ISequencePreviewEnemy {
     float pendingFireballDistance_ = 0.0f; // 予告の照準固定時に確定した、速度計算用の水平距離。
     engine::Vector3 pendingFireballDirection_ = {0.0f, 0.0f, 1.0f}; // 予告の照準固定時に確定した水平方向。
 
-    engine::Vector3 smoothedFlameVelocity_ = engine::Vector3::ZERO; // 頭の炎を移動に追従させるために平滑化した速度。
+    engine::Vector3 smoothedFlameVelocity_ = engine::Vector3::kZero; // 頭の炎を移動に追従させるために平滑化した速度。
     engine::Vector3 baseScale_ = {1.0f, 1.0f, 1.0f};
 
     engine::Object3D* headFlameVisual_ = nullptr;
     engine::Object3D* breathFlameVisuals_[7] = {};
 
-    int breathParticleCursor_ = 0; // 粒子を扇形の発生点へ順に割り当てる番号。
-    int headFlameParticleCursor_ = 0;
+    std::int32_t breathParticleCursor_ = 0; // 粒子を扇形の発生点へ順に割り当てる番号。
+    std::int32_t headFlameParticleCursor_ = 0;
 
     bool hasBaseScale_ = false;
     bool breathDamageDone_ = false;

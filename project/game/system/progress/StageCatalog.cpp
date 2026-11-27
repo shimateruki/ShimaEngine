@@ -12,6 +12,7 @@ bool StageCatalog::LoadFromJson(const std::string& path, std::vector<StageData>&
     // 壊れた要素を除いてから一括反映し、失敗時は既存の一覧を維持します。
     std::ifstream file(path);
 
+    // 一覧ファイルを開けない場合は、新しいステージ一覧を作れない。
     if (!file.is_open()) {
         return false;
     }
@@ -24,6 +25,7 @@ bool StageCatalog::LoadFromJson(const std::string& path, std::vector<StageData>&
         return false;
     }
 
+    // ルートがオブジェクトで、stagesを配列として読める形式だけ受け付ける。
     if (!root.is_object() || !root.contains("stages") || !root["stages"].is_array()) {
         return false;
     }
@@ -33,7 +35,8 @@ bool StageCatalog::LoadFromJson(const std::string& path, std::vector<StageData>&
         return value.contains(key) && value[key].is_string() ? value[key].get<std::string>() : fallback;
     };
 
-    auto readInt = [](const nlohmann::json& value, const char* key, int fallback) {
+    auto readInt = [](const nlohmann::json& value, const char* key, std::int32_t fallback) {
+        // キーが無いか整数として読めない値は、指定された既定値に戻す。
         if (!value.contains(key) || !value[key].is_number_integer()) {
             return fallback;
         }
@@ -43,13 +46,13 @@ bool StageCatalog::LoadFromJson(const std::string& path, std::vector<StageData>&
         // JSON整数はintより広いため、符号別に範囲を確認してからステージ索引へ変換する。
         if (field.is_number_unsigned()) {
             const uint64_t number = field.get<uint64_t>();
-            return number <= static_cast<uint64_t>((std::numeric_limits<int>::max)()) ? static_cast<int>(number)
+            return number <= static_cast<uint64_t>((std::numeric_limits<std::int32_t>::max)()) ? static_cast<std::int32_t>(number)
                                                                                 : fallback;
         }
 
         const int64_t number = field.get<int64_t>();
-        return number >= (std::numeric_limits<int>::min)() && number <= (std::numeric_limits<int>::max)()
-                   ? static_cast<int>(number)
+        return number >= (std::numeric_limits<std::int32_t>::min)() && number <= (std::numeric_limits<std::int32_t>::max)()
+                   ? static_cast<std::int32_t>(number)
                    : fallback;
     };
 
@@ -62,6 +65,7 @@ bool StageCatalog::LoadFromJson(const std::string& path, std::vector<StageData>&
 
     // 配置元やIDが欠けた行と重複IDを除き、残った一覧だけを最後にまとめて反映する。
     for (const auto& stageJson : root["stages"]) {
+        // 配列の中でオブジェクト以外の要素は、ステージの設定として解釈しない。
         if (!stageJson.is_object()) {
             continue;
         }
@@ -81,6 +85,7 @@ bool StageCatalog::LoadFromJson(const std::string& path, std::vector<StageData>&
         data.hasStarCoins = readBool(stageJson, "hasStarCoins", data.id != "stage3");
         data.cameraPath = readString(stageJson, "cameraPath", "");
 
+        // IDか配置先が空の行と、すでに採用したIDが出てきた行を飛ばす。
         if (data.id.empty() || data.levelPath.empty() || !usedIds.insert(data.id).second) {
             continue;
         }

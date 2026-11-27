@@ -34,15 +34,41 @@
 #include <utility>
 
 // 命中・演出の共通処理。能力の状態は保持せず、各セッションが管理します。
-namespace CopyAbilityDetail {
+namespace copyAbilityDetail {
 constexpr float kPi = std::numbers::pi_v<float>;
 
-using CombatMath::NormalizePlanar;
+using combatMath::NormalizePlanar;
 
-inline float SmoothStep(float value) { return CombatMath::SmoothStep01(value); }
+// コピー用の設定を取得する。旧プロフィールに技がなければ従来の移動を維持する。
+inline PlayerAttackMovement CopyAttackMovement(const EnemyAttackProfile& profile, const char* id) {
+    const auto* attack = profile.FindAttack(id);
+    return attack ? attack->playerMovement : PlayerAttackMovement{};
+}
+
+// 能力の反動区間だけを保持する。発動条件と被弾・解除時の処理は各セッションが決める。
+class CopyAttackRecovery {
+public:
+    void Start(PlayerAttackMovement movement, bool blocksMovementActions = true) {
+        movement.blocksMovementActions = movement.enabled && blocksMovementActions;
+        movement_ = movement;
+        remaining_ = movement.enabled ? movement.duration : 0.0f;
+    }
+
+    void Update(float deltaTime) { remaining_ = std::max(0.0f, remaining_ - deltaTime); }
+    void Clear() { remaining_ = 0.0f; }
+    bool Active() const { return remaining_ > 0.0f; }
+    PlayerAttackMovement Movement() const { return Active() ? movement_ : PlayerAttackMovement{}; }
+
+private:
+    PlayerAttackMovement movement_;
+    float remaining_ = 0.0f; // 発射や着地から反動が終わるまでの残り秒。
+};
+
+inline float SmoothStep(float value) { return combatMath::SmoothStep01(value); }
 
 inline void SpawnEffect(const char* path, const engine::Vector3& position, const engine::Vector3& rotation = {},
                         const engine::Vector3& scale = {1.0f, 1.0f, 1.0f}) {
+    // エフェクト管理が利用できる場合に限り、開始した再生のIDを受け取る。
     if (MeshEffectManager* effects = MeshEffectManager::GetInstance()) {
         effects->SpawnEffectAt(path, position, rotation, scale);
     }
@@ -50,6 +76,7 @@ inline void SpawnEffect(const char* path, const engine::Vector3& position, const
 
 inline void SpawnScopedEffect(MeshEffectManager::EffectScopeId scopeId, const char* path, const engine::Vector3& position,
                               const engine::Vector3& rotation = {}, const engine::Vector3& scale = {1.0f, 1.0f, 1.0f}) {
+    // 管理側が利用できる場合は、後で一括停止するために再生をこのコピー能力の管理範囲へ登録する。
     if (MeshEffectManager* effects = MeshEffectManager::GetInstance()) {
         effects->SpawnEffectAtScoped(scopeId, path, position, rotation, scale);
     }
@@ -58,6 +85,7 @@ inline void SpawnScopedEffect(MeshEffectManager::EffectScopeId scopeId, const ch
 inline void EmitPreset(const char* preset, const engine::Vector3& position) {
     // 初期化前に能力演出が要求されても GPU エミッタへは渡さない。
     GpuParticleManager* particles = GpuParticleManager::GetInstance();
+    // 管理側が利用できる場合に限り、登録していた再生を停止する。
     if (particles && particles->IsInitialized()) {
         particles->Emit(preset, position);
     }
@@ -66,6 +94,7 @@ inline void EmitPreset(const char* preset, const engine::Vector3& position) {
 inline void EmitDirectedPreset(const char* preset, const engine::Vector3& position, const engine::Vector3& direction,
                                float scale = 1.0f) {
     GpuParticleManager* particles = GpuParticleManager::GetInstance();
+    // 管理側が存在し、初期化も済んでいる場合だけ、エフェクトの生成を依頼する。
     if (particles && particles->IsInitialized()) {
         particles->EmitDirected(preset, position, direction, scale);
     }
@@ -76,6 +105,7 @@ inline void SpawnDebrisOnGround(const char* presetName, const engine::Vector3& p
     const engine::Vector3 groundPosition = HitEffectDirector::ResolveGroundEffectPosition(position);
     engine::Vector3 effectPosition = groundPosition;
     effectPosition.y += lift;
+    // 破片エフェクトの管理側を取得できた場合に限り、地面から浮かせた位置へ生成する。
     if (DebrisEffectManager* debris = DebrisEffectManager::GetInstance()) {
         debris->SpawnOnGround(presetName, effectPosition, groundPosition.y);
     }
@@ -84,6 +114,7 @@ inline void SpawnDebrisOnGround(const char* presetName, const engine::Vector3& p
 inline engine::Object3D* FindEnemyRoot(engine::Object3D* object) {
     // 当たった子オブジェクトから親をたどり、ダメージを受ける敵本体を返す。
     for (engine::Object3D* current = object; current; current = current->GetParent()) {
+        // 親方向にたどり、最初に見つかった敵本体を衝突先として扱う。
         if (dynamic_cast<BaseEnemy*>(current)) {
             return current;
         }
@@ -93,9 +124,11 @@ inline engine::Object3D* FindEnemyRoot(engine::Object3D* object) {
 
 inline void DamageEnemy(Player& player, engine::Object3D* target, float damage, DamageType type, const engine::Vector3& knockback,
                         const StatusEffectApplication& status = {}) {
+    // 敵本体が見つからない場合は、ダメージ通知を送らない。
     if (!target) {
         return;
     }
+    // 送信元と攻撃情報を組み立て、その場でダメージを通知する。
     DamageEvent event;
     event.target = target;
     event.attacker = &player;
@@ -110,12 +143,13 @@ inline void DamageEnemy(Player& player, engine::Object3D* target, float damage, 
 inline void DamageSphere(Player& player, const engine::Vector3& center, float radius, float damage, DamageType type,
                          float horizontalKnockback, float verticalKnockback) {
     // 敵カテゴリに対象を絞り、子Colliderの重複は本体ごとに除く。
-    PhysicsQueryFilter filter;
-    filter.mask = CollisionCategories::Get("enemy");
+    engine::PhysicsQueryFilter filter;
+    filter.mask = engine::collisionCategories::Get("enemy");
     filter.ignoredObject = &player;
     std::unordered_set<engine::Object3D*> damaged;
-    for (const PhysicsOverlapHit& hit : CollisionManager::GetInstance()->OverlapSphere(center, radius, filter)) {
+    for (const engine::PhysicsOverlapHit& hit : engine::CollisionManager::GetInstance()->OverlapSphere(center, radius, filter)) {
         engine::Object3D* target = FindEnemyRoot(hit.object);
+        // 敵本体が見つからない衝突と、同じ敵の別コライダーへの重複命中を飛ばす。
         if (!target || !damaged.insert(target).second) {
             continue;
         }
@@ -129,14 +163,16 @@ inline void DamageSphere(Player& player, const engine::Vector3& center, float ra
 inline const EnemyAttackDefinition& FindAttackOrFallback(const EnemyAttackProfile& profile, const char* id,
                                                          const EnemyAttackDefinition& fallback) {
     const EnemyAttackDefinition* attack = profile.FindAttack(id);
+    // 指定された攻撃データを使用し、省略された場合は呼び出し元の既定値を使用する。
     return attack ? *attack : fallback;
 }
 
 inline StatusEffectApplication MakeBurnStatus(const EnemyAttackDefinition& attack) {
-    // 攻撃定義の継続ダメージ設定をコピーし、燃焼指定時だけ状態異常の種類を立てる。
+    // 継続時間、ダメージ間隔、一回分のダメージ、表示プリセットは攻撃定義から引き継ぐ。
     StatusEffectApplication status;
+    // 燃焼指定がある場合だけ、状態異常の種類を燃焼に設定する。
     if (attack.statusEffectType == "burning") {
-        status.type = StatusEffectType::Burning;
+        status.type = StatusEffectType::kBurning;
     }
     status.duration = attack.statusDuration;
     status.tickInterval = attack.statusTickInterval;
@@ -168,4 +204,4 @@ inline BulletVisualConfig MakeFireVisual() {
     return visual;
 }
 
-} // namespace CopyAbilityDetail
+} // namespace copyAbilityDetail
